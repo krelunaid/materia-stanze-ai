@@ -61,9 +61,7 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .demo-button { display:block; margin:9px auto 0; padding:7px 11px; border:0; background:transparent; color:var(--accent); font-size:10px; font-weight:750; text-decoration:underline; cursor:pointer; }
 .draw-button { min-height:34px; padding:0 11px; background:#fff; border:1px solid #cfd7d3; }
 .easy-draw-button { background:var(--accent); color:#fff; border-color:var(--accent); }
-.advanced-draw-button { min-height:32px; padding:0 8px; border:0; border-radius:8px; background:transparent; color:#68736f; font-size:9px; font-weight:700; text-decoration:underline; cursor:pointer; }
-.advanced-draw-button.is-selected { background:#e7ebe8; color:var(--ink); }
-.advanced-draw-button:disabled { opacity:.4; cursor:not-allowed; }
+.auto-fit-button { background:#e8f4f0; color:var(--accent); }
 .history-button { border-color:#d5dad6; background:#fff; font-size:16px; }
 .history-button:disabled { opacity:.35; }
 .draw-button.is-selected { border-color:var(--accent); background:var(--accent); color:#fff; }
@@ -79,13 +77,13 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .editor-media { overflow:hidden; background:#26302e; }
 .editor-media>img { display:block; object-fit:fill; }
 .editor-media>img { object-fit:contain; }
-.surface-overlay { z-index:2; overflow:visible; }
+.surface-overlay { z-index:2; overflow:visible; touch-action:none; }
 .surface-overlay polygon { cursor:pointer; transition:fill .16s ease,stroke .16s ease; }
 .surface-overlay.is-drawing { cursor:crosshair; }
 .surface-overlay.is-drawing polygon { pointer-events:none; }
 .surface-overlay .is-frozen polygon { cursor:not-allowed; stroke-dasharray:8 6; }
 .surface-vertex,.draft-vertex { fill:var(--accent); stroke:#fff; stroke-width:4; vector-effect:non-scaling-stroke; }
-.surface-vertex { cursor:grab; }
+.surface-vertex { cursor:grab; touch-action:none; filter:drop-shadow(0 2px 3px rgba(15,37,32,.3)); }
 .is-frozen .surface-vertex { fill:#293633; cursor:not-allowed; }
 .draft-vertex { fill:var(--lime); }
 .import-status { z-index:4; pointer-events:none; }
@@ -197,7 +195,6 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
   .editor-toolbar { align-items:flex-start; gap:8px; padding:9px; min-height:55px; overflow-x:auto; }
   .tool-group { flex-wrap:wrap; }
   .easy-draw-button { order:4; }
-  .advanced-draw-button { order:5; }
   .kind-select { order:6; }
   .mode-label { display:none; }
   .drawing-actions { margin-left:auto; }
@@ -223,7 +220,7 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 }
 
 /* Percorso semplice guidato */
-.mode-switch { min-height:36px; padding:0 12px; border:1px solid var(--line); border-radius:10px; background:#fff; color:var(--accent); font-size:10px; font-weight:750; cursor:pointer; }
+.simple-badge { display:inline-flex; align-items:center; min-height:36px; padding:0 12px; border:1px solid var(--line); border-radius:10px; background:#fff; color:var(--accent); font-size:10px; font-weight:750; }
 .simple-steps { display:grid; grid-template-columns:repeat(4,minmax(90px,150px)); justify-content:center; gap:7px; padding:10px 18px; border-bottom:1px solid var(--line); background:#fff; }
 .simple-steps button { display:flex; align-items:center; gap:8px; min-height:42px; padding:5px 9px; border:1px solid #dce2de; border-radius:11px; background:#f7f9f7; color:#75807b; font-size:10px; cursor:pointer; }
 .simple-steps button>span { display:grid; place-items:center; width:26px; height:26px; flex:0 0 auto; border-radius:8px; background:#e7ebe8; font-size:10px; font-weight:800; }

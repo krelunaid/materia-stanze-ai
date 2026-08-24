@@ -15,7 +15,6 @@ import {
 import { AcceptedRoomFile, validateRoomFile } from '../lib/file-validation';
 import {
   isValidPolygon,
-  moveVertex,
   nextSurfaceName,
   Point,
   pointsToSvg,
@@ -35,7 +34,7 @@ type StudioMaterial = {
   pattern?: 'wood' | 'stone' | 'tile';
   previewUrl?: string;
 };
-type DragVertex = { surfaceId: string; vertexIndex: number; pointerId: number };
+type DragVertex = { surfaceId: string; vertexIndex: number; pointerId: number; origin: Point };
 
 const catalogMaterials: StudioMaterial[] = [
   { id: 'oak-natural', name: 'Rovere naturale', category: 'Pavimenti', description: 'Doghe grandi · effetto legno', color: '#b88d5f', pattern: 'wood' },
@@ -62,7 +61,6 @@ const furnitureCatalog = [
   { name: 'Quadri', description: 'Decorazione parete' },
 ];
 
-const kinds: SurfaceKind[] = ['wall', 'floor', 'ceiling', 'door', 'window', 'other'];
 const kindColors: Record<SurfaceKind, string> = {
   wall: '#4f8f84', floor: '#bf8d58', ceiling: '#8ab8c2', door: '#8b6d9c', window: '#5d93b4', other: '#7f8985',
 };
@@ -74,8 +72,58 @@ const guidedPresets: Array<Omit<Surface, 'id'>> = [
   { name: 'Pavimento', kind: 'floor', frozen: false, points: [{ x: .25, y: .68 }, { x: .75, y: .68 }, { x: .97, y: .95 }, { x: .03, y: .95 }] },
 ];
 
-function createGuidedSurfaces() {
-  return guidedPresets.map((surface, index) => ({ ...surface, id: `guided-${Date.now()}-${index}` }));
+function createGuidedSurfaces(bounds?: { left: number; right: number; top: number; floor: number }) {
+  if (!bounds) return guidedPresets.map((surface, index) => ({ ...surface, id: `guided-${Date.now()}-${index}` }));
+  const { left, right, top, floor } = bounds;
+  const outerTop = Math.max(.025, top - .16);
+  const bottom = .965;
+  const presets: Array<Omit<Surface, 'id'>> = [
+    { name: 'Muro 1', kind: 'wall', frozen: false, points: [{ x: left, y: top }, { x: right, y: top }, { x: right, y: floor }, { x: left, y: floor }] },
+    { name: 'Muro 2', kind: 'wall', frozen: false, points: [{ x: .02, y: outerTop }, { x: left, y: top }, { x: left, y: floor }, { x: .02, y: bottom }] },
+    { name: 'Muro 3', kind: 'wall', frozen: false, points: [{ x: right, y: top }, { x: .98, y: outerTop }, { x: .98, y: bottom }, { x: right, y: floor }] },
+    { name: 'Pavimento', kind: 'floor', frozen: false, points: [{ x: left, y: floor }, { x: right, y: floor }, { x: .98, y: bottom }, { x: .02, y: bottom }] },
+  ];
+  return presets.map((surface, index) => ({ ...surface, id: `guided-${Date.now()}-${index}` }));
+}
+
+function strongestEdge(scores: number[], start: number, end: number, fallback: number) {
+  let bestIndex = Math.round(scores.length * fallback);
+  let bestScore = -1;
+  const from = Math.max(1, Math.round(scores.length * start));
+  const to = Math.min(scores.length - 2, Math.round(scores.length * end));
+  for (let index = from; index <= to; index += 1) {
+    const score = (scores[index - 1] + scores[index] * 2 + scores[index + 1]) / 4;
+    if (score > bestScore) { bestScore = score; bestIndex = index; }
+  }
+  return bestIndex / scores.length;
+}
+
+function detectRoomBounds(image: HTMLImageElement) {
+  const width = 240;
+  const height = Math.max(150, Math.round(width * image.naturalHeight / image.naturalWidth));
+  const canvas = document.createElement('canvas');
+  canvas.width = width; canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) throw new Error('canvas');
+  context.drawImage(image, 0, 0, width, height);
+  const pixels = context.getImageData(0, 0, width, height).data;
+  const luminance = (x: number, y: number) => {
+    const offset = (y * width + x) * 4;
+    return pixels[offset] * .299 + pixels[offset + 1] * .587 + pixels[offset + 2] * .114;
+  };
+  const verticalScores = Array(width).fill(0) as number[];
+  const horizontalScores = Array(height).fill(0) as number[];
+  for (let x = 1; x < width - 1; x += 1) {
+    for (let y = Math.round(height * .12); y < height * .9; y += 2) verticalScores[x] += Math.abs(luminance(x + 1, y) - luminance(x - 1, y));
+  }
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = Math.round(width * .05); x < width * .95; x += 2) horizontalScores[y] += Math.abs(luminance(x, y + 1) - luminance(x, y - 1));
+  }
+  const left = strongestEdge(verticalScores, .12, .46, .25);
+  const right = strongestEdge(verticalScores, Math.max(.54, left + .2), .9, .75);
+  const top = strongestEdge(horizontalScores, .12, .48, .2);
+  const floor = strongestEdge(horizontalScores, Math.max(.52, top + .2), .86, .68);
+  return { left, right, top, floor };
 }
 
 function createFloorplanOutline(): Surface[] {
@@ -155,12 +203,12 @@ export function RoomStudio() {
   const [customRequests, setCustomRequests] = useState<string[]>([]);
   const [customColor, setCustomColor] = useState('#c8b9a6');
   const [renderSummaryOpen, setRenderSummaryOpen] = useState(false);
-  const [simpleMode, setSimpleMode] = useState(true);
   const [activeStep, setActiveStep] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [isImportingRoom, setIsImportingRoom] = useState(false);
+  const [isAutoFitting, setIsAutoFitting] = useState(false);
   const [dragVertex, setDragVertex] = useState<DragVertex | null>(null);
   const roomInputRef = useRef<HTMLInputElement>(null);
   const floorplanInputRef = useRef<HTMLInputElement>(null);
@@ -169,6 +217,7 @@ export function RoomStudio() {
   const roomBlobRef = useRef<string | null>(null);
   const materialBlobRef = useRef<string | null>(null);
   const dragStartRef = useRef<Surface[] | null>(null);
+  const roomImageRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
     shellRef.current?.setAttribute('data-hydrated', 'true');
@@ -289,11 +338,6 @@ export function RoomStudio() {
     else setDraft(next);
   }
 
-  function finishSurface() {
-    if (!drawKind) return;
-    completeSurface(draft, drawKind);
-  }
-
   function completeSurface(points: Point[], kind: SurfaceKind) {
     if (!isValidPolygon(points)) {
       setError('Servono almeno tre punti non allineati per chiudere la superficie.'); return;
@@ -311,13 +355,21 @@ export function RoomStudio() {
     if (!surface || surface.frozen) return;
     event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId);
     dragStartRef.current = surfaces;
-    setDragVertex({ surfaceId, vertexIndex, pointerId: event.pointerId });
+    setDragVertex({ surfaceId, vertexIndex, pointerId: event.pointerId, origin: surface.points[vertexIndex] });
   }
 
   function moveDraggedVertex(event: ReactPointerEvent<SVGSVGElement>) {
     if (!dragVertex || event.pointerId !== dragVertex.pointerId) return;
     const point = eventPoint(event);
-    setSurfaces((current) => current.map((surface) => surface.id === dragVertex.surfaceId ? moveVertex(surface, dragVertex.vertexIndex, point) : surface));
+    setSurfaces((current) => current.map((surface) => {
+      if (surface.frozen) return surface;
+      const linkedPoints = surface.points.map((candidate, index) => {
+        const isDragged = surface.id === dragVertex.surfaceId && index === dragVertex.vertexIndex;
+        const isShared = Math.abs(candidate.x - dragVertex.origin.x) < .004 && Math.abs(candidate.y - dragVertex.origin.y) < .004;
+        return isDragged || isShared ? point : candidate;
+      });
+      return { ...surface, points: linkedPoints };
+    }));
   }
 
   function endVertexDrag(event: ReactPointerEvent<SVGSVGElement>) {
@@ -413,6 +465,30 @@ export function RoomStudio() {
     setNotice('Tracciatura guidata inserita. Adatta ogni vertice alla fotografia trascinandolo.');
   }
 
+  async function autoFitSurfaces() {
+    if (!room || room.sourceType !== 'photo' || !roomImageRef.current) return;
+    setIsAutoFitting(true); setError(null);
+    await new Promise((resolve) => window.setTimeout(resolve, 80));
+    try {
+      const detected = createGuidedSurfaces(detectRoomBounds(roomImageRef.current));
+      const byName = new Map(detected.map((surface) => [surface.name, surface]));
+      const existingNames = new Set(surfaces.map((surface) => surface.name));
+      const adjusted = surfaces.length
+        ? surfaces.map((surface) => surface.frozen ? surface : byName.has(surface.name) ? { ...surface, points: byName.get(surface.name)!.points } : surface)
+        : detected;
+      const missing = detected.filter((surface) => !existingNames.has(surface.name));
+      commitSurfaces([...adjusted, ...(surfaces.length ? missing : [])]);
+      const first = adjusted[0] ?? detected[0];
+      setSelectedId(first?.id ?? null); setRenameDraft(first?.name ?? '');
+      setNotice('Allineamento automatico completato. Se serve, trascina un pallino: gli angoli collegati resteranno uniti.');
+    } catch {
+      if (surfaces.length === 0) seedGuidedSurfaces();
+      setNotice('Ho inserito una base modificabile. Trascina i pallini sui bordi della stanza.');
+    } finally {
+      setIsAutoFitting(false);
+    }
+  }
+
   function loadDemoRoom() {
     const file = new File(['demo'], 'stanza-esempio.png', { type: 'image/png' });
     const created = createGuidedSurfaces();
@@ -433,40 +509,40 @@ export function RoomStudio() {
   }
 
   return (
-    <main ref={shellRef} className={`app-shell ${simpleMode ? `simple-mode step-${activeStep}` : 'advanced-mode'}`}>
+    <main ref={shellRef} className={`app-shell simple-mode step-${activeStep}`}>
       <header className="topbar">
         <a href="/projects" className="brand-lockup" aria-label="Vai ai progetti"><div className="brand-mark" aria-hidden="true"><span /><span /></div><div><p className="eyebrow">Studio materiali</p><p className="brand-name">Materia</p></div></a>
         <div className="project-heading"><span className="status-dot" /><div><p>{projectName}</p><span>{room ? `${room.sourceType === 'floorplan' ? 'Planimetria' : 'Foto'} · originale protetto` : 'Nuovo progetto locale'}</span></div></div>
-        <div className="top-actions"><button className="mode-switch" type="button" onClick={() => setSimpleMode((current) => !current)}>{simpleMode ? 'Strumenti avanzati' : 'Modalità semplice'}</button><button className="avatar" type="button" aria-label="Profilo locale">AG</button></div>
+        <div className="top-actions"><span className="simple-badge">Modalità semplice</span><button className="avatar" type="button" aria-label="Profilo locale">AG</button></div>
       </header>
 
-      {simpleMode && <nav className="simple-steps" aria-label="Passaggi del progetto">{[
+      <nav className="simple-steps" aria-label="Passaggi del progetto">{[
         ['1', 'Foto'], ['2', 'Superfici'], ['3', 'Cerca'], ['4', 'Render'],
-      ].map(([number, label], index) => <button type="button" key={number} className={activeStep === index + 1 ? 'is-active' : activeStep > index + 1 ? 'is-done' : ''} onClick={() => goToStep(index + 1)} disabled={(index > 0 && !room) || (index > 1 && surfaces.length === 0)}><span>{activeStep > index + 1 ? '✓' : number}</span><strong>{label}</strong></button>)}</nav>}
+      ].map(([number, label], index) => <button type="button" key={number} className={activeStep === index + 1 ? 'is-active' : activeStep > index + 1 ? 'is-done' : ''} onClick={() => goToStep(index + 1)} disabled={(index > 0 && !room) || (index > 1 && surfaces.length === 0)}><span>{activeStep > index + 1 ? '✓' : number}</span><strong>{label}</strong></button>)}</nav>
 
       <div className="workspace">
         <aside className="surface-panel" aria-label="Superfici della stanza">
           <div className="panel-heading"><div><p className="eyebrow">Geometria reale</p><h2>Superfici</h2></div><span className="count-badge">{surfaces.length}</span></div>
-          <button className="detect-button" type="button" disabled><span className="spark">✦</span>Riconoscimento AI<span className="soon">Più avanti</span></button>
+          <button className="detect-button" type="button" onClick={() => void autoFitSurfaces()} disabled={!room || room.sourceType !== 'photo' || isAutoFitting}><span className="spark">✦</span>{isAutoFitting ? 'Sto adattando…' : 'Adatta automaticamente'}<span className="soon">Foto</span></button>
           {surfaces.length ? <div className="surface-list">{surfaces.map((surface) => <button className={`surface-item ${surface.id === selectedId ? 'is-active' : ''}`} key={surface.id} type="button" onClick={() => { setSelectedId(surface.id); setRenameDraft(surface.name); setDrawKind(null); setQuickDraw(false); setDraft([]); }}><span className="surface-swatch" style={{ background: kindColors[surface.kind] }} /><span className="surface-copy"><strong>{surface.name}</strong><small>{surface.points.length} vertici · {surface.materialId ? 'materiale applicato' : 'senza materiale'}</small></span><span className="lock-state" aria-label={surface.frozen ? 'Bloccata' : 'Modificabile'}>{surface.frozen ? '◆' : '◇'}</span></button>)}</div> : <div className="surface-empty"><span>◇</span><strong>Partenza semplice</strong><p>Crea automaticamente i contorni base e sposta soltanto i pallini.</p></div>}
-          <div className="panel-note"><span>i</span><p>Il riconoscimento automatico non è ancora collegato. Tutti i contorni sono modificabili manualmente.</p></div>
+          <div className="panel-note"><span>i</span><p>Automatico per iniziare, manuale per rifinire: trascina i pallini direttamente sui bordi della foto.</p></div>
         </aside>
 
         <section className="stage" aria-labelledby="editor-title">
           <div className="editor-toolbar">
-            <div className="tool-group"><button className={`tool-button ${!drawKind ? 'is-selected' : ''}`} type="button" onClick={cancelDrawing} aria-label="Seleziona">↖</button><button className="tool-button history-button" type="button" onClick={undo} disabled={!pastSurfaces.length} aria-label="Annulla ultima modifica">↶</button><button className="tool-button history-button" type="button" onClick={redo} disabled={!futureSurfaces.length} aria-label="Ripristina modifica">↷</button>{room?.sourceType === 'floorplan' ? <button className={`draw-button easy-draw-button ${lineWallDraw ? 'is-selected' : ''}`} type="button" onClick={startFloorplanWall}>＋ Parete con 2 tocchi</button> : <button className={`draw-button easy-draw-button ${quickDraw ? 'is-selected' : ''}`} type="button" onClick={() => startDrawing('wall', true)} disabled={!room}>＋ Aggiungi muro facile</button>}<button className={`advanced-draw-button ${drawKind && !quickDraw && !lineWallDraw ? 'is-selected' : ''}`} type="button" aria-label="Avanzato" onClick={() => startDrawing('wall', false)} disabled={!room}>Disegno libero</button>{drawKind && !quickDraw && !lineWallDraw && <select className="kind-select" aria-label="Tipo superficie" value={drawKind} onChange={(event) => { setDrawKind(event.target.value as SurfaceKind); setDraft([]); }}>{kinds.map((kind) => <option value={kind} key={kind}>{surfaceLabels[kind]}</option>)}</select>}</div>
-            {drawKind ? <div className="drawing-actions"><span>{lineWallDraw ? `${draft.length}/2 punti` : quickDraw ? `${draft.length}/4 angoli` : `${draft.length} punti`}</span><button type="button" onClick={cancelDrawing}>Annulla</button>{!quickDraw && !lineWallDraw && <button className="finish-button" type="button" onClick={finishSurface} disabled={draft.length < 3}>Chiudi superficie</button>}</div> : <span className="mode-label">{selected ? `Selezionata: ${selected.name}` : room?.sourceType === 'floorplan' ? 'Tocca “Parete con 2 tocchi” per ricalcare i divisori' : room ? 'Scegli “muro facile” o la creazione automatica' : 'Carica una foto o una planimetria per iniziare'}</span>}
+            <div className="tool-group"><button className={`tool-button ${!drawKind ? 'is-selected' : ''}`} type="button" onClick={cancelDrawing} aria-label="Seleziona">↖</button><button className="tool-button history-button" type="button" onClick={undo} disabled={!pastSurfaces.length} aria-label="Annulla ultima modifica">↶</button><button className="tool-button history-button" type="button" onClick={redo} disabled={!futureSurfaces.length} aria-label="Ripristina modifica">↷</button>{room?.sourceType === 'photo' && <button className="draw-button auto-fit-button" type="button" onClick={() => void autoFitSurfaces()} disabled={!room || isAutoFitting}>✦ {isAutoFitting ? 'Adatto…' : 'Adatta alla foto'}</button>}{room?.sourceType === 'floorplan' ? <button className={`draw-button easy-draw-button ${lineWallDraw ? 'is-selected' : ''}`} type="button" onClick={startFloorplanWall}>＋ Parete con 2 tocchi</button> : <button className={`draw-button easy-draw-button ${quickDraw ? 'is-selected' : ''}`} type="button" onClick={() => startDrawing('wall', true)} disabled={!room}>＋ Aggiungi muro</button>}</div>
+            {drawKind ? <div className="drawing-actions"><span>{lineWallDraw ? `${draft.length}/2 punti` : `${draft.length}/4 angoli`}</span><button type="button" onClick={cancelDrawing}>Annulla</button></div> : <span className="mode-label">{selected ? `Trascina i pallini di ${selected.name}` : room?.sourceType === 'floorplan' ? 'Aggiungi le pareti interne con due tocchi' : room ? 'Adatta automaticamente o trascina i pallini a mano' : 'Carica una foto o una planimetria per iniziare'}</span>}
           </div>
 
           <div className="canvas-wrap"><div className={`canvas ${isDraggingFile ? 'is-dragging' : ''}`} id="editor-title" style={room ? { aspectRatio: roomRatio } : undefined} onDragEnter={() => setIsDraggingFile(true)} onDragLeave={() => setIsDraggingFile(false)} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
             {room?.previewUrl ? <div className="editor-media">
-              <img src={room.previewUrl} alt={`Originale importato: ${room.file.name}`} onLoad={(event) => setRoomRatio(event.currentTarget.naturalWidth / event.currentTarget.naturalHeight)} />
+              <img ref={roomImageRef} src={room.previewUrl} alt={`Originale importato: ${room.file.name}`} onLoad={(event) => setRoomRatio(event.currentTarget.naturalWidth / event.currentTarget.naturalHeight)} />
               <svg className={`surface-overlay ${drawKind ? 'is-drawing' : ''}`} viewBox="0 0 1000 625" preserveAspectRatio="none" onPointerDown={addDraftPoint} onPointerMove={moveDraggedVertex} onPointerUp={endVertexDrag} onPointerCancel={endVertexDrag}>
                 <defs>
                   {catalogMaterials.filter((item) => item.pattern).map((item) => <pattern id={`catalog-material-${item.id}`} key={item.id} width={item.pattern === 'wood' ? 180 : 120} height={item.pattern === 'wood' ? 42 : 120} patternUnits="userSpaceOnUse"><rect width="100%" height="100%" fill={item.color} /><path d={item.pattern === 'wood' ? 'M0 2H180 M0 40H180 M45 2V40 M135 2V40' : 'M0 1H120 M1 0V120'} stroke="rgba(67,55,43,.22)" strokeWidth="3" /><path d={item.pattern === 'stone' ? 'M8 38 C38 17 64 55 110 25 M14 92 C45 68 77 106 116 74' : ''} fill="none" stroke="rgba(255,255,255,.24)" strokeWidth="5" /></pattern>)}
                   {material?.previewUrl && <pattern id={`uploaded-material-${material.id}`} width="140" height="140" patternUnits="userSpaceOnUse"><image href={material.previewUrl} width="140" height="140" preserveAspectRatio="xMidYMid slice" /></pattern>}
                 </defs>
-                {surfaces.map((surface) => <g key={surface.id} className={surface.frozen ? 'is-frozen' : ''}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{surface.id === selectedId && surface.points.map((point, index) => <circle key={`${surface.id}-${index}`} cx={point.x * 1000} cy={point.y * 625} r="10" className="surface-vertex" onPointerDown={(event) => beginVertexDrag(event, surface.id, index)} />)}</g>)}
+                {surfaces.map((surface) => <g key={surface.id} className={surface.frozen ? 'is-frozen' : ''}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{surface.id === selectedId && surface.points.map((point, index) => <circle key={`${surface.id}-${index}`} cx={point.x * 1000} cy={point.y * 625} r="14" className="surface-vertex" onPointerDown={(event) => beginVertexDrag(event, surface.id, index)} />)}</g>)}
                 {draft.length > 0 && <><polyline points={pointsToSvg(draft)} fill="none" stroke="#d7f05c" strokeWidth="5" vectorEffect="non-scaling-stroke" />{draft.map((point, index) => <circle key={index} cx={point.x * 1000} cy={point.y * 625} r="9" className="draft-vertex" />)}</>}
               </svg><div className="import-status"><span className="status-dot" /><div><strong>Originale intatto</strong><small>{importedCaption}</small></div></div>
             </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Inizia da ciò che hai</p><h1>Cosa vuoi caricare?</h1><p>Scegli una foto della stanza oppure una planimetria. L’originale resterà sempre intatto.</p><div className="source-actions"><label className="source-card is-primary" htmlFor="room-file"><span>▣</span><strong>Foto stanza</strong><small>Apri direttamente Foto su iPhone e iPad</small></label><label className="source-card" htmlFor="floorplan-file"><span>⌗</span><strong>Planimetria</strong><small>Ricalca perimetro e pareti interne</small></label></div><button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>JPG, PNG o HEIC · massimo 20 MB</small></div></>}
@@ -474,7 +550,7 @@ export function RoomStudio() {
             {isImportingRoom && <div className="processing-overlay" role="status"><span className="processing-spinner" /><strong>Preparo la foto…</strong><small>Le immagini grandi vengono ottimizzate per evitare blocchi.</small></div>}
           </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
           <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" onChange={onMaterialInput} />
-          <div className="status-bar"><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'L’originale resta sotto i contorni e non viene modificato.'}</p>{room?.sourceType === 'photo' && surfaces.length === 0 && <button className="guided-start-button" type="button" aria-label="Crea 3 muri + pavimento" onClick={seedGuidedSurfaces}>Crea superfici automaticamente</button>}{room?.sourceType === 'floorplan' && simpleMode && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && (!simpleMode || activeStep === 4) && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{simpleMode && activeStep === 2 && surfaces.length > 0 && <button type="button" onClick={() => goToStep(3)}>Continua: cerca materiali</button>}{simpleMode && activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
+          <div className="status-bar"><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Automatico per iniziare, pallini per correggere a mano.'}</p>{room?.sourceType === 'photo' && activeStep === 2 && <button className="guided-start-button" type="button" aria-label="Adatta superfici alla foto" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting}>{isAutoFitting ? 'Sto adattando…' : surfaces.length ? '✦ Adatta di nuovo' : '✦ Adatta automaticamente'}</button>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && <button type="button" onClick={() => goToStep(3)}>Continua: cerca materiali</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
         </section>
 
         <aside className="properties-panel" aria-label="Proprietà">

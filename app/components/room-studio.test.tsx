@@ -45,9 +45,7 @@ describe('RoomStudio', () => {
 
   it('creates guided surfaces and freezes the selected wall', () => {
     render(<RoomStudio />);
-    const input = document.querySelector('#room-file') as HTMLInputElement;
-    fireEvent.change(input, { target: { files: [new File(['room'], 'studio.png', { type: 'image/png' })] } });
-    fireEvent.click(screen.getByRole('button', { name: 'Crea 3 muri + pavimento' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
     expect(screen.getAllByText('Muro 1').length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: 'Freeze superficie' }));
     expect(screen.getByText('Frozen')).toBeInTheDocument();
@@ -56,32 +54,23 @@ describe('RoomStudio', () => {
 
   it('loads a local material and applies it to one surface', () => {
     render(<RoomStudio />);
-    fireEvent.change(document.querySelector('#room-file') as HTMLInputElement, { target: { files: [new File(['room'], 'studio.png', { type: 'image/png' })] } });
-    fireEvent.click(screen.getByRole('button', { name: 'Crea 3 muri + pavimento' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
     fireEvent.change(document.querySelector('#material-file') as HTMLInputElement, { target: { files: [new File(['tile'], 'travertino.png', { type: 'image/png' })] } });
     fireEvent.click(screen.getByRole('button', { name: 'Applica a Muro 1' }));
     expect(screen.getByText(/travertino applicato a Muro 1/i)).toBeInTheDocument();
   });
 
-  it('records pointer coordinates before closing a manually drawn surface', () => {
+  it('removes the problematic advanced drawing mode', () => {
     render(<RoomStudio />);
-    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Avanzato' }));
-    const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
-    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
-    fireEvent.pointerDown(overlay, { clientX: 300, clientY: 200 });
-    fireEvent.pointerDown(overlay, { clientX: 700, clientY: 200 });
-    fireEvent.pointerDown(overlay, { clientX: 700, clientY: 500 });
-    fireEvent.pointerDown(overlay, { clientX: 300, clientY: 500 });
-    expect(screen.getByRole('button', { name: 'Chiudi superficie' })).toBeEnabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Chiudi superficie' }));
-    expect(screen.getAllByText('Muro 4').length).toBeGreaterThan(0);
+    expect(screen.getByText('Modalità semplice')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Avanzato' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Strumenti avanzati' })).not.toBeInTheDocument();
   });
 
   it('closes an easy wall automatically after four taps', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
-    fireEvent.click(screen.getByRole('button', { name: /Aggiungi muro facile/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Aggiungi muro/ }));
     const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
     vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
     fireEvent.pointerDown(overlay, { clientX: 300, clientY: 200 });
@@ -140,10 +129,11 @@ describe('RoomStudio', () => {
     expect(screen.getByText('pianoforte nero a coda', { selector: '.selected-assets button' })).toBeInTheDocument();
   });
 
-  it('starts with a four-step simple workflow and keeps advanced tools optional', () => {
+  it('starts with a four-step workflow and only exposes the simple mode', () => {
     render(<RoomStudio />);
     expect(screen.getByRole('navigation', { name: 'Passaggi del progetto' })).toHaveTextContent('1Foto2Superfici3Cerca4Render');
-    expect(screen.getByRole('button', { name: 'Strumenti avanzati' })).toBeInTheDocument();
+    expect(screen.getByText('Modalità semplice')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Strumenti avanzati' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Superfici/ })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
     expect(screen.getByRole('button', { name: /Superfici/ })).toBeEnabled();
