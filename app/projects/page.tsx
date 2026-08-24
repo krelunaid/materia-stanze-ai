@@ -22,7 +22,7 @@ export default function ProjectsPage() {
         <div>
           <p className="eyebrow">I tuoi spazi</p>
           <h1>Progetti</h1>
-          <p>Ogni stanza parte da un originale intatto. In questa prima fase i progetti vivono soltanto nella sessione del browser.</p>
+          <p>Ogni stanza parte da un originale intatto. Disegna le superfici, blocca quelle da proteggere e prova un materiale locale.</p>
         </div>
         <a className="primary-button" href="/">Crea nuovo progetto</a>
       </section>
@@ -40,17 +40,17 @@ export default function ProjectsPage() {
             <span className="roadmap-wall one" /><span className="roadmap-wall two" /><span className="roadmap-floor" />
           </div>
           <div className="roadmap-copy">
-            <span className="phase-pill">Fase 1</span>
-            <h2>Demo dell’editor</h2>
-            <p>Interfaccia, selezione dimostrativa e importazione locale controllata.</p>
+            <span className="phase-pill">Versione 0.1</span>
+            <h2>Editor manuale attivo</h2>
+            <p>Caricamento, tracciatura guidata o libera, correzione dei vertici, Freeze e campioni locali.</p>
             <a href="/">Continua <span aria-hidden="true">→</span></a>
           </div>
         </article>
       </section>
 
       <footer className="projects-footer">
-        <p><strong>Privacy prima di tutto.</strong> Nessuna immagine viene inviata a servizi esterni in questa fase.</p>
-        <span>Materia · Baseline prodotto 01</span>
+        <p><strong>Privacy prima di tutto.</strong> Nessuna immagine viene inviata a servizi esterni.</p>
+        <span>Materia · Versione operativa 0.1</span>
       </footer>
     </main>
   );

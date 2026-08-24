@@ -11,8 +11,13 @@ test('opens the editor and imports a local image', async ({ page }) => {
   });
 
   await expect(page.getByText('Stanza demo')).toBeVisible();
-  await expect(page.getByText('Originale importato')).toBeVisible();
-  await expect(page.getByText('Nessuna superficie')).toBeVisible();
+  await expect(page.getByText('Originale intatto')).toBeVisible();
+  await expect(page.getByText('Disegna la prima superficie')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Inserisci tracciatura guidata' }).click();
+  await expect(page.getByRole('button', { name: 'Freeze superficie' })).toBeVisible();
+  await page.getByRole('button', { name: 'Freeze superficie' }).click();
+  await expect(page.getByText('Frozen')).toBeVisible();
 });
 
 test('exposes the projects route', async ({ page }) => {
