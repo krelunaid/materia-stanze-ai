@@ -28,7 +28,8 @@ describe('RoomStudio', () => {
     expect(screen.getByText('Soggiorno verde')).toBeInTheDocument();
     expect(screen.getByText('Originale intatto')).toBeInTheDocument();
     expect(screen.getByText('Riconoscimento automatico')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '⌂ Svuota la stanza' })).toBeInTheDocument();
+    expect(screen.getByText('Svuota con IA')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Svuota/ })).not.toBeInTheDocument();
   });
 
   it('imports a floorplan, creates its perimeter and offers two-tap internal walls', () => {
@@ -52,6 +53,17 @@ describe('RoomStudio', () => {
     expect(screen.getByText('Frozen')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Consenti modifiche a Muro 1' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Elimina superficie' })).toBeDisabled();
+  });
+
+  it('keeps correction handles hidden until the user asks to edit the borders', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    expect(document.querySelector('.surface-vertex-hit')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Correggi i bordi' }));
+    expect(document.querySelectorAll('.surface-vertex-hit')).toHaveLength(4);
+    expect(screen.getByRole('button', { name: '✓ Fine correzione' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '✓ Fine correzione' }));
+    expect(document.querySelector('.surface-vertex-hit')).not.toBeInTheDocument();
   });
 
   it('loads a local material and applies it to one surface', () => {
@@ -107,7 +119,7 @@ describe('RoomStudio', () => {
   it('searches demo materials and prepares an honest render summary', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Cerca i prodotti' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
     const search = screen.getByLabelText('Cerca materiali, colori o mobili');
     fireEvent.change(search, { target: { value: 'salvia' } });
     fireEvent.click(screen.getByRole('button', { name: /Verde salvia/ }));

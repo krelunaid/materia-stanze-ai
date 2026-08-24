@@ -156,7 +156,10 @@ function wallFromLine(start: Point, end: Point): Point[] {
 
 function eventPoint(event: ReactPointerEvent<SVGSVGElement>): Point {
   const rect = event.currentTarget.getBoundingClientRect();
-  return { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height };
+  return {
+    x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+    y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
+  };
 }
 
 function optimizedPreviewUrl(file: File): string | Promise<string> {
@@ -247,6 +250,7 @@ export function RoomStudio() {
   const [processedLabel, setProcessedLabel] = useState('Stanza vuota');
   const [showProcessedPreview, setShowProcessedPreview] = useState(false);
   const [dragVertex, setDragVertex] = useState<DragVertex | null>(null);
+  const [isCorrectingEdges, setIsCorrectingEdges] = useState(false);
   const roomInputRef = useRef<HTMLInputElement>(null);
   const floorplanInputRef = useRef<HTMLInputElement>(null);
   const materialInputRef = useRef<HTMLInputElement>(null);
@@ -344,6 +348,7 @@ export function RoomStudio() {
       setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]);
       autoFitPreviewRef.current = null;
       setSurfaces(initialSurfaces); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(initialSurfaces[0]?.id ?? null); setRenameDraft(initialSurfaces[0]?.name ?? ''); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setError(null);
+      setIsCorrectingEdges(false);
       setNotice(sourceType === 'floorplan'
         ? 'Planimetria riprodotta. Adatta il perimetro con i pallini e aggiungi le pareti interne con due tocchi.'
         : 'Foto pronta. Sto riconoscendo pavimento e muri: potrai correggere i pallini solo se serve.');
@@ -376,7 +381,7 @@ export function RoomStudio() {
   function removeRoom() {
     if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
     roomBlobRef.current = null;
-    setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]); setNotice(null);
+    setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]); setNotice(null); setIsCorrectingEdges(false);
   }
 
   function startDrawing(kind: SurfaceKind = 'wall', quick = false) {
@@ -414,14 +419,16 @@ export function RoomStudio() {
 
   function beginVertexDrag(event: ReactPointerEvent<SVGCircleElement>, surfaceId: string, vertexIndex: number) {
     const surface = surfaces.find((item) => item.id === surfaceId);
-    if (!surface || surface.frozen) return;
-    event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId);
+    if (!surface || surface.frozen || !isCorrectingEdges) return;
+    event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId);
+    shellRef.current?.classList.add('is-moving-vertex');
     dragStartRef.current = surfaces;
     setDragVertex({ surfaceId, vertexIndex, pointerId: event.pointerId, origin: surface.points[vertexIndex] });
   }
 
   function moveDraggedVertex(event: ReactPointerEvent<SVGSVGElement>) {
     if (!dragVertex || event.pointerId !== dragVertex.pointerId) return;
+    event.preventDefault();
     const point = eventPoint(event);
     setSurfaces((current) => current.map((surface) => {
       if (surface.frozen) return surface;
@@ -442,7 +449,19 @@ export function RoomStudio() {
       }
       dragStartRef.current = null;
       setDragVertex(null);
+      shellRef.current?.classList.remove('is-moving-vertex');
     }
+  }
+
+  function toggleEdgeCorrection() {
+    if (isCorrectingEdges) {
+      setIsCorrectingEdges(false);
+      shellRef.current?.classList.remove('is-moving-vertex');
+      setNotice('Bordi salvati. Ora puoi continuare ai prodotti.');
+      return;
+    }
+    setIsCorrectingEdges(true);
+    setNotice('Correzione attiva: trascina solo i pallini. La pagina resterà ferma finché tieni premuto.');
   }
 
   function toggleFreeze() {
@@ -677,10 +696,12 @@ export function RoomStudio() {
       commitSurfaces([...adjusted, ...(surfaces.length ? missing : [])]);
       const first = adjusted[0] ?? detected[0];
       setSelectedId(first?.id ?? null); setRenameDraft(first?.name ?? '');
-      setNotice('Allineamento automatico completato. Se serve, trascina un pallino: gli angoli collegati resteranno uniti.');
+      setIsCorrectingEdges(false);
+      setNotice('Allineamento automatico completato. Se la foto ti sembra giusta, continua. Correggi i bordi solo se serve.');
     } catch {
       if (surfaces.length === 0) seedGuidedSurfaces();
-      setNotice('Ho inserito una base modificabile. Trascina i pallini sui bordi della stanza.');
+      setIsCorrectingEdges(false);
+      setNotice('Ho inserito una base automatica. Puoi continuare oppure correggere i bordi solo se serve.');
     } finally {
       setIsAutoFitting(false);
     }
@@ -728,7 +749,8 @@ export function RoomStudio() {
     const created = createGuidedSurfaces();
     setRoom({ file, kind: 'image', canPreview: true, displaySize: 'esempio incluso', projectName: 'Stanza esempio', previewUrl: '/og.png', sourceType: 'photo' });
     setRoomRatio(16 / 9); setSurfaces(created); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(created[0].id); setRenameDraft(created[0].name); setError(null);
-    setNotice('Esempio pronto. Prova a spostare i vertici, bloccare un muro o caricare un campione.');
+    setIsCorrectingEdges(false);
+    setNotice('Esempio pronto. L’allineamento è automatico: correggi i bordi solo se serve.');
     setActiveStep(2);
   }
 
@@ -737,6 +759,10 @@ export function RoomStudio() {
     if (step > 2 && surfaces.length === 0) {
       setNotice('Prima crea o disegna almeno una superficie.');
       return;
+    }
+    if (step !== 2) {
+      setIsCorrectingEdges(false);
+      shellRef.current?.classList.remove('is-moving-vertex');
     }
     setActiveStep(step);
     if (step === 4) setRenderSummaryOpen(true);
@@ -772,12 +798,12 @@ export function RoomStudio() {
           <div className="canvas-wrap"><div className={`canvas ${isDraggingFile ? 'is-dragging' : ''}`} id="editor-title" style={room ? { aspectRatio: roomRatio } : undefined} onDragEnter={() => setIsDraggingFile(true)} onDragLeave={() => setIsDraggingFile(false)} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
             {room?.previewUrl ? <div className="editor-media">
               <img ref={roomImageRef} src={showProcessedPreview && processedPreview ? processedPreview : room.previewUrl} alt={showProcessedPreview ? `Anteprima elaborata: ${processedLabel}` : `Originale importato: ${room.file.name}`} onLoad={(event) => onRoomImageLoad(event.currentTarget)} />
-              <svg className={`surface-overlay ${drawKind ? 'is-drawing' : ''}`} viewBox="0 0 1000 625" preserveAspectRatio="none" onPointerDown={addDraftPoint} onPointerMove={moveDraggedVertex} onPointerUp={endVertexDrag} onPointerCancel={endVertexDrag}>
+              <svg className={`surface-overlay ${drawKind ? 'is-drawing' : ''} ${isCorrectingEdges ? 'is-correcting' : ''}`} viewBox="0 0 1000 625" preserveAspectRatio="none" onPointerDown={addDraftPoint} onPointerMove={moveDraggedVertex} onPointerUp={endVertexDrag} onPointerCancel={endVertexDrag}>
                 <defs>
                   {catalogMaterials.filter((item) => item.pattern).map((item) => <pattern id={`catalog-material-${item.id}`} key={item.id} width={item.pattern === 'wood' ? 180 : 120} height={item.pattern === 'wood' ? 42 : 120} patternUnits="userSpaceOnUse"><rect width="100%" height="100%" fill={item.color} /><path d={item.pattern === 'wood' ? 'M0 2H180 M0 40H180 M45 2V40 M135 2V40' : 'M0 1H120 M1 0V120'} stroke="rgba(67,55,43,.22)" strokeWidth="3" /><path d={item.pattern === 'stone' ? 'M8 38 C38 17 64 55 110 25 M14 92 C45 68 77 106 116 74' : ''} fill="none" stroke="rgba(255,255,255,.24)" strokeWidth="5" /></pattern>)}
                   {material?.previewUrl && <pattern id={`uploaded-material-${material.id}`} width="140" height="140" patternUnits="userSpaceOnUse"><image href={material.previewUrl} width="140" height="140" preserveAspectRatio="xMidYMid slice" /></pattern>}
                 </defs>
-                {surfaces.map((surface) => <g key={surface.id} className={surface.frozen ? 'is-frozen' : ''}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{surface.id === selectedId && surface.points.map((point, index) => <circle key={`${surface.id}-${index}`} cx={point.x * 1000} cy={point.y * 625} r="14" className="surface-vertex" onPointerDown={(event) => beginVertexDrag(event, surface.id, index)} />)}</g>)}
+                {surfaces.map((surface) => <g key={surface.id} className={`${surface.frozen ? 'is-frozen ' : ''}${surface.id === selectedId ? 'is-selected-surface' : ''}`}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{isCorrectingEdges && !surface.frozen && surface.id === selectedId && surface.points.map((point, index) => <g key={`${surface.id}-${index}`}><circle cx={point.x * 1000} cy={point.y * 625} r="32" className="surface-vertex-hit" onPointerDown={(event) => beginVertexDrag(event, surface.id, index)} /><circle cx={point.x * 1000} cy={point.y * 625} r="14" className="surface-vertex" aria-hidden="true" /></g>)}</g>)}
                 {draft.length > 0 && <><polyline points={pointsToSvg(draft)} fill="none" stroke="#d7f05c" strokeWidth="5" vectorEffect="non-scaling-stroke" />{draft.map((point, index) => <circle key={index} cx={point.x * 1000} cy={point.y * 625} r="9" className="draft-vertex" />)}</>}
               </svg><div className="import-status"><span className="status-dot" /><div><strong>{showProcessedPreview ? processedLabel : 'Originale intatto'}</strong><small>{showProcessedPreview ? 'Elaborazione IA · originale sempre disponibile' : importedCaption}</small></div></div>
               {processedPreview && <div className="before-after-toggle" aria-label="Confronta originale e risultato"><button type="button" className={!showProcessedPreview ? 'is-active' : ''} onClick={() => setShowProcessedPreview(false)}>Originale</button><button type="button" className={showProcessedPreview ? 'is-active' : ''} onClick={() => setShowProcessedPreview(true)}>{processedLabel}</button></div>}
@@ -786,7 +812,7 @@ export function RoomStudio() {
             {isImportingRoom && <div className="processing-overlay" role="status"><span className="processing-spinner" /><strong>Preparo la foto…</strong><small>Le immagini grandi vengono ottimizzate per evitare blocchi.</small></div>}
           </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
           <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" onChange={onMaterialInput} />
-          <div className="status-bar"><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.'}</p>{room?.sourceType === 'photo' && activeStep === 2 && <button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && <button type="button" onClick={() => goToStep(3)}>Cerca i prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
+          <div className={`status-bar ${activeStep === 2 ? 'prepare-status' : ''}`}><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.'}</p>{room && activeStep === 2 && <button className={`edge-edit-button ${isCorrectingEdges ? 'is-active' : ''}`} type="button" onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine correzione' : room.sourceType === 'floorplan' ? 'Correggi il perimetro' : 'Correggi i bordi'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && aiStatus === 'ready' && <button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota con IA'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && aiStatus !== 'ready' && <div className="empty-room-unavailable" role="status"><strong>Svuota con IA</strong><span>Da attivare: senza collegamento IA non può rimuovere davvero i mobili.</span></div>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && <button className="continue-products-button" type="button" onClick={() => goToStep(3)}>Continua ai prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
         </section>
 
         <aside className="properties-panel" aria-label="Proprietà">
