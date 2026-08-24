@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vinext dev",
     "build": "vinext build",
+    "build:ios": "vite build --config vite.native.config.ts && cap sync ios",
     "start": "vinext start",
     "lint": "eslint app e2e capacitor.config.ts next.config.ts eslint.config.mjs vitest.setup.ts vitest.config.ts vite.config.ts playwright.config.ts public/sw.js",
     "typecheck": "tsc --noEmit",
