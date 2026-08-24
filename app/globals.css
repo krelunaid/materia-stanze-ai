@@ -280,6 +280,7 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .simple-mode.step-3 .surface-panel { display:none; }
 .simple-mode.step-3 .properties-panel { display:block; grid-column:auto; border-top:0; border-left:1px solid var(--line); }
 .simple-mode.step-3 .properties-panel>.panel-heading,.simple-mode.step-3 .asset-card,.simple-mode.step-3 .properties-panel>div:nth-child(3),.simple-mode.step-3 .properties-panel>div:nth-child(4),.simple-mode.step-3 .metrics,.simple-mode.step-3 .remove-button,.simple-mode.step-3 .remove-room-button,.simple-mode.step-3 .phase-card { display:none; }
+.simple-mode.step-4 .surface-overlay { display:none; }
 .simple-mode .canvas-wrap { padding:18px; }
 
 @media (max-width:760px) {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getAiProvider, searchMaterials } from './ai-provider';
+import { detectRoomSurfaces, getAiProvider, searchMaterials } from './ai-provider';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -58,5 +58,33 @@ describe('getAiProvider', () => {
       reasoning: { effort: 'low' },
       tools: [{ type: 'web_search' }],
     });
+  });
+
+  it('asks Grok vision for normalized architectural polygons', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({
+        surfaces: [
+          { name: 'back', kind: 'wall', confidence: .94, points: [{ x: .24, y: .18 }, { x: .76, y: .18 }, { x: .76, y: .62 }, { x: .24, y: .62 }] },
+          { name: 'left', kind: 'wall', confidence: .89, points: [{ x: 0, y: 0 }, { x: .24, y: .18 }, { x: .24, y: .62 }, { x: 0, y: 1 }] },
+          { name: 'floor', kind: 'floor', confidence: .97, points: [{ x: .24, y: .62 }, { x: .76, y: .62 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+        ],
+      }) }] }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    const result = await detectRoomSurfaces(
+      { id: 'grok', label: 'Grok', apiKey: 'xai-test' },
+      new File(['room'], 'room.jpg', { type: 'image/jpeg' }),
+    );
+
+    expect(result.map((surface) => surface.name)).toEqual(['Muro 1', 'Muro 2', 'Pavimento']);
+    expect(result.at(-1)?.points).toEqual(expect.arrayContaining([{ x: 1, y: 1 }, { x: 0, y: 1 }]));
+    const request = fetchMock.mock.calls[0]?.[1];
+    const payload = JSON.parse(String(request?.body));
+    expect(payload).toMatchObject({
+      model: 'grok-4.6',
+      reasoning: { effort: 'medium' },
+      text: { format: { type: 'json_schema', name: 'room_surface_geometry', strict: true } },
+    });
+    expect(payload.input[0].content[0]).toMatchObject({ type: 'input_image', detail: 'high' });
   });
 });

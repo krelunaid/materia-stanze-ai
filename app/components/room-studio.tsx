@@ -305,6 +305,13 @@ export function RoomStudio() {
     shellRef.current?.scrollTo?.({ top: 0, left: 0, behavior: 'auto' });
   }, [activeStep]);
 
+  useEffect(() => {
+    if (!dragVertex) return;
+    const preventTouchScroll = (event: TouchEvent) => event.preventDefault();
+    document.addEventListener('touchmove', preventTouchScroll, { passive: false });
+    return () => document.removeEventListener('touchmove', preventTouchScroll);
+  }, [dragVertex]);
+
   const selected = surfaces.find((surface) => surface.id === selectedId) ?? null;
   const projectName = room?.projectName ?? 'Progetto senza titolo';
   const importedCaption = useMemo(() => room ? `Immagine · ${room.displaySize}` : null, [room]);
@@ -767,20 +774,54 @@ export function RoomStudio() {
   async function autoFitSurfaces() {
     if (!room || room.sourceType !== 'photo' || !roomImageRef.current) return;
     setIsAutoFitting(true); setError(null);
-    await new Promise((resolve) => window.setTimeout(resolve, 80));
+    setNotice(aiStatus === 'ready' || aiStatus === 'checking'
+      ? 'Grok sta leggendo gli angoli reali, il pavimento, le pareti e il soffitto…'
+      : 'Sto preparando una tracciatura locale della stanza…');
     try {
-      const detected = createGuidedSurfaces(detectRoomBounds(roomImageRef.current));
-      const byName = new Map(detected.map((surface) => [surface.name, surface]));
-      const existingNames = new Set(surfaces.map((surface) => surface.name));
-      const adjusted = surfaces.length
-        ? surfaces.map((surface) => surface.frozen ? surface : byName.has(surface.name) ? { ...surface, points: byName.get(surface.name)!.points } : surface)
-        : detected;
-      const missing = detected.filter((surface) => !existingNames.has(surface.name));
-      commitSurfaces([...adjusted, ...(surfaces.length ? missing : [])]);
-      const first = adjusted[0] ?? detected[0];
+      let detected: Surface[] | null = null;
+      let usedGrok = false;
+      let grokError: Error | null = null;
+
+      if (aiStatus === 'ready' || aiStatus === 'checking') {
+        try {
+          const { inputImage } = await createMaskedInput({ sourceUrl: room.previewUrl });
+          const form = new FormData();
+          form.append('image', inputImage, room.file.name.replace(/\.(heic|heif)$/i, '.png'));
+          const { response, result } = await requestJson<{
+            surfaces?: Array<{ name: string; kind: SurfaceKind; points: Point[]; confidence: number }>;
+            message?: string;
+          }>(endpoint('/api/detect-surfaces'), { method: 'POST', body: form }, 150000);
+          if (!response.ok || !result.surfaces?.length) throw new Error(result.message ?? 'Grok non ha trovato superfici affidabili.');
+          detected = result.surfaces.filter((surface) => isValidPolygon(surface.points)).map((surface, index) => ({
+            id: `grok-${Date.now()}-${index}`,
+            name: surface.name,
+            kind: surface.kind,
+            points: surface.points,
+            frozen: false,
+          }));
+          usedGrok = detected.length > 0;
+        } catch (caught) {
+          grokError = caught instanceof Error ? caught : new Error('Grok non ha completato il riconoscimento.');
+        }
+      }
+
+      if (!detected?.length) detected = createGuidedSurfaces(detectRoomBounds(roomImageRef.current));
+
+      const frozenSurfaces = surfaces.filter((surface) => surface.frozen);
+      const frozenKeys = new Set(frozenSurfaces.map((surface) => `${surface.kind}:${surface.name.toLocaleLowerCase('it')}`));
+      const editableByKey = new Map(surfaces.filter((surface) => !surface.frozen).map((surface) => [`${surface.kind}:${surface.name.toLocaleLowerCase('it')}`, surface]));
+      const adjusted = detected.filter((surface) => !frozenKeys.has(`${surface.kind}:${surface.name.toLocaleLowerCase('it')}`)).map((surface) => {
+        const previous = editableByKey.get(`${surface.kind}:${surface.name.toLocaleLowerCase('it')}`);
+        return previous ? { ...surface, id: previous.id, materialId: previous.materialId } : surface;
+      });
+      const nextSurfaces = [...adjusted, ...frozenSurfaces];
+      commitSurfaces(nextSurfaces);
+      const first = adjusted[0] ?? frozenSurfaces[0] ?? null;
       setSelectedId(first?.id ?? null); setRenameDraft(first?.name ?? '');
       setIsCorrectingEdges(false);
-      setNotice('Allineamento automatico completato. Se la foto ti sembra giusta, continua. Correggi i bordi solo se serve.');
+      setNotice(usedGrok
+        ? `Grok ha riconosciuto ${nextSurfaces.length} superfici e adattato gli angoli alla foto. Correggi i bordi solo se serve.`
+        : `${grokError ? 'Grok non ha risposto: ' : ''}ho inserito una base locale. Puoi riprovare l’analisi IA o correggere i bordi.`);
     } catch {
       if (surfaces.length === 0) seedGuidedSurfaces();
       setIsCorrectingEdges(false);

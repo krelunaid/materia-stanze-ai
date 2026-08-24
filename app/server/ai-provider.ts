@@ -23,6 +23,13 @@ export type MaterialProduct = {
   correction: string;
 };
 
+export type DetectedRoomSurface = {
+  name: string;
+  kind: 'wall' | 'floor' | 'ceiling' | 'door' | 'window' | 'other';
+  points: Array<{ x: number; y: number }>;
+  confidence: number;
+};
+
 type ResponsesPayload = {
   output_text?: string;
   output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
@@ -65,6 +72,43 @@ const productSchema = {
     },
   },
   required: ['products'],
+} as const;
+
+const roomGeometrySchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    surfaces: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 16,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string' },
+          kind: { type: 'string', enum: ['wall', 'floor', 'ceiling', 'door', 'window', 'other'] },
+          points: {
+            type: 'array',
+            minItems: 3,
+            maxItems: 12,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                x: { type: 'number', minimum: 0, maximum: 1 },
+                y: { type: 'number', minimum: 0, maximum: 1 },
+              },
+              required: ['x', 'y'],
+            },
+          },
+          confidence: { type: 'number', minimum: 0, maximum: 1 },
+        },
+        required: ['name', 'kind', 'points', 'confidence'],
+      },
+    },
+  },
+  required: ['surfaces'],
 } as const;
 
 export function getAiProvider(environment: Record<string, string | undefined> = process.env): AiProvider | null {
@@ -161,6 +205,80 @@ function bytesToBase64(bytes: Uint8Array) {
 
 async function fileToDataUri(file: File) {
   return `data:${file.type || 'image/png'};base64,${bytesToBase64(new Uint8Array(await file.arrayBuffer()))}`;
+}
+
+function polygonArea(points: Array<{ x: number; y: number }>) {
+  return Math.abs(points.reduce((sum, point, index) => {
+    const next = points[(index + 1) % points.length];
+    return sum + point.x * next.y - next.x * point.y;
+  }, 0) / 2);
+}
+
+function normalizeRoomSurfaces(surfaces: DetectedRoomSurface[]) {
+  const validKinds = new Set<DetectedRoomSurface['kind']>(['wall', 'floor', 'ceiling', 'door', 'window', 'other']);
+  const cleaned = surfaces.slice(0, 16).map((surface) => ({
+    ...surface,
+    name: String(surface.name ?? '').trim().slice(0, 80),
+    confidence: Math.min(1, Math.max(0, Number(surface.confidence) || 0)),
+    points: (surface.points ?? []).slice(0, 12).map((point) => ({
+      x: Math.min(1, Math.max(0, Number(point.x))),
+      y: Math.min(1, Math.max(0, Number(point.y))),
+    })),
+  })).filter((surface) => validKinds.has(surface.kind) && surface.confidence >= .45 && surface.points.length >= 3 && polygonArea(surface.points) > .001);
+
+  const kindOrder: Record<DetectedRoomSurface['kind'], number> = { wall: 0, floor: 1, ceiling: 2, door: 3, window: 4, other: 5 };
+  cleaned.sort((a, b) => kindOrder[a.kind] - kindOrder[b.kind]);
+  const counters: Partial<Record<DetectedRoomSurface['kind'], number>> = {};
+  return cleaned.map((surface) => {
+    counters[surface.kind] = (counters[surface.kind] ?? 0) + 1;
+    const count = counters[surface.kind] as number;
+    const base = surface.kind === 'wall' ? 'Muro'
+      : surface.kind === 'floor' ? 'Pavimento'
+        : surface.kind === 'ceiling' ? 'Soffitto'
+          : surface.kind === 'door' ? 'Porta'
+            : surface.kind === 'window' ? 'Finestra'
+              : 'Superficie';
+    const repeatedKind = cleaned.filter((candidate) => candidate.kind === surface.kind).length > 1;
+    return { ...surface, name: repeatedKind || surface.kind === 'wall' ? `${base} ${count}` : base };
+  });
+}
+
+export async function detectRoomSurfaces(provider: AiProvider, image: File) {
+  const prompt = [
+    'Act as a precise architectural image-plane segmentation engine for an interior-design application.',
+    'Trace every visible structural planar surface: the complete floor, each distinct wall plane, the ceiling when visible, and visible doors or windows as separate surfaces.',
+    'Return polygon vertices as normalized image coordinates where x=0 is the left edge, x=1 the right edge, y=0 the top edge and y=1 the bottom edge.',
+    'Follow the real wall-wall, wall-floor and wall-ceiling junctions. Do not use furniture edges, window frames, shadows, tile joints, rugs or decorations as room corners.',
+    'Infer each architectural plane continuously behind furniture and other movable objects. A floor polygon must cover the entire floor plane all the way to the bottom and lateral image edges wherever the floor leaves the frame, not only a central trapezoid.',
+    'Use the image-edge coordinate 0 or 1 when a surface continues outside the crop. Keep points in clockwise boundary order, with no self-intersections and only the vertices needed to follow the real outline.',
+    'Do not invent a plane that is not visible. Confidence measures the geometric accuracy of each polygon, not object-recognition confidence.',
+    'Names may be short Italian labels; they will be normalized by the application.',
+  ].join('\n');
+  const input = [{
+    role: 'user',
+    content: [
+      { type: 'input_image', image_url: await fileToDataUri(image), detail: 'high' },
+      { type: 'input_text', text: prompt },
+    ],
+  }];
+  const response = await fetch(provider.id === 'grok' ? 'https://api.x.ai/v1/responses' : 'https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: provider.id === 'grok' ? 'grok-4.6' : 'gpt-5.4-mini',
+      input,
+      max_output_tokens: 3200,
+      reasoning: { effort: 'medium' },
+      text: { format: { type: 'json_schema', name: 'room_surface_geometry', schema: roomGeometrySchema, strict: true } },
+      store: false,
+    }),
+  });
+  const payload = await response.json() as ResponsesPayload;
+  if (!response.ok) throw new Error(payload.error?.message ?? 'Riconoscimento della stanza non disponibile.');
+  const parsed = JSON.parse(responseText(payload).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) as { surfaces?: DetectedRoomSurface[] };
+  const surfaces = normalizeRoomSurfaces(parsed.surfaces ?? []);
+  if (!surfaces.length) throw new Error('Non ho riconosciuto superfici affidabili in questa foto.');
+  return surfaces;
 }
 
 async function remoteImageToDataUri(value: string) {
