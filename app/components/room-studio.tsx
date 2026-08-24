@@ -4,6 +4,7 @@
 
 import {
   ChangeEvent,
+  CSSProperties,
   DragEvent,
   PointerEvent as ReactPointerEvent,
   useEffect,
@@ -24,8 +25,28 @@ import {
 } from '../domain/editor';
 
 type ImportedRoom = AcceptedRoomFile & { previewUrl?: string };
-type LocalMaterial = { id: string; name: string; previewUrl: string };
+type StudioMaterial = {
+  id: string;
+  name: string;
+  category: 'Pavimenti' | 'Rivestimenti' | 'Colori';
+  description: string;
+  color?: string;
+  pattern?: 'wood' | 'stone' | 'tile';
+  previewUrl?: string;
+};
 type DragVertex = { surfaceId: string; vertexIndex: number; pointerId: number };
+
+const catalogMaterials: StudioMaterial[] = [
+  { id: 'oak-natural', name: 'Rovere naturale', category: 'Pavimenti', description: 'Doghe grandi · effetto legno', color: '#b88d5f', pattern: 'wood' },
+  { id: 'oak-light', name: 'Rovere chiaro', category: 'Pavimenti', description: '20 × 120 cm · poco giallo', color: '#d4b98f', pattern: 'wood' },
+  { id: 'travertine', name: 'Travertino beige', category: 'Rivestimenti', description: '60 × 120 cm · opaco', color: '#d8c6aa', pattern: 'stone' },
+  { id: 'concrete', name: 'Cemento grigio', category: 'Rivestimenti', description: '90 × 90 cm · materico', color: '#aaa9a3', pattern: 'tile' },
+  { id: 'wall-sage', name: 'Verde salvia', category: 'Colori', description: 'Pittura murale opaca', color: '#9eab96' },
+  { id: 'wall-linen', name: 'Bianco lino', category: 'Colori', description: 'Pittura murale calda', color: '#e9e2d4' },
+  { id: 'wall-clay', name: 'Terra rosata', category: 'Colori', description: 'Pittura minerale', color: '#c9957f' },
+];
+
+const furnitureCatalog = ['Divano chiaro', 'Poltrona', 'Tavolo da pranzo', 'Sedie', 'Mobile TV', 'Lampada', 'Tappeto', 'Letto'];
 
 const kinds: SurfaceKind[] = ['wall', 'floor', 'ceiling', 'door', 'window', 'other'];
 const kindColors: Record<SurfaceKind, string> = {
@@ -59,7 +80,10 @@ export function RoomStudio() {
   const [drawKind, setDrawKind] = useState<SurfaceKind | null>(null);
   const [quickDraw, setQuickDraw] = useState(false);
   const [draft, setDraft] = useState<Point[]>([]);
-  const [material, setMaterial] = useState<LocalMaterial | null>(null);
+  const [material, setMaterial] = useState<StudioMaterial | null>(null);
+  const [materialQuery, setMaterialQuery] = useState('');
+  const [furniture, setFurniture] = useState<string[]>([]);
+  const [renderSummaryOpen, setRenderSummaryOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
@@ -82,6 +106,11 @@ export function RoomStudio() {
   const selected = surfaces.find((surface) => surface.id === selectedId) ?? null;
   const projectName = room?.projectName ?? 'Progetto senza titolo';
   const importedCaption = useMemo(() => room ? `Immagine · ${room.displaySize}` : null, [room]);
+  const filteredMaterials = useMemo(() => {
+    const query = materialQuery.trim().toLocaleLowerCase('it');
+    return catalogMaterials.filter((item) => !query || `${item.name} ${item.category} ${item.description}`.toLocaleLowerCase('it').includes(query));
+  }, [materialQuery]);
+  const materialMap = useMemo(() => new Map(catalogMaterials.concat(material ? [material] : []).map((item) => [item.id, item])), [material]);
 
   function commitSurfaces(next: Surface[]) {
     setPastSurfaces((history) => [...history, surfaces].slice(-40));
@@ -229,7 +258,7 @@ export function RoomStudio() {
     if (materialBlobRef.current) URL.revokeObjectURL(materialBlobRef.current);
     const previewUrl = URL.createObjectURL(file);
     materialBlobRef.current = previewUrl;
-    const next = { id: `material-${Date.now()}`, name: file.name.replace(/\.[^.]+$/, ''), previewUrl };
+    const next: StudioMaterial = { id: `material-${Date.now()}`, name: file.name.replace(/\.[^.]+$/, ''), category: 'Rivestimenti', description: 'Campione fotografico personale', previewUrl };
     setMaterial(next); setError(null); setNotice(`Campione “${next.name}” pronto. Seleziona una superficie e applicalo.`);
   }
 
@@ -241,6 +270,24 @@ export function RoomStudio() {
     if (!selected || !material || selected.frozen) return;
     commitSurfaces(surfaces.map((surface) => surface.id === selected.id ? { ...surface, materialId: material.id } : surface));
     setNotice(`${material.name} applicato a ${selected.name}. L’originale resta visibile fuori dal contorno.`);
+  }
+
+  function chooseMaterial(next: StudioMaterial) {
+    setMaterial(next);
+    setNotice(`${next.name} selezionato. Ora applicalo alla superficie scelta.`);
+  }
+
+  function toggleFurniture(item: string) {
+    setFurniture((current) => current.includes(item) ? current.filter((name) => name !== item) : [...current, item]);
+  }
+
+  function materialFill(surface: Surface) {
+    if (!surface.materialId) return `${kindColors[surface.kind]}44`;
+    const assigned = materialMap.get(surface.materialId);
+    if (!assigned) return `${kindColors[surface.kind]}44`;
+    if (assigned.previewUrl) return `url(#uploaded-material-${assigned.id})`;
+    if (assigned.pattern) return `url(#catalog-material-${assigned.id})`;
+    return assigned.color ?? `${kindColors[surface.kind]}44`;
   }
 
   function seedGuidedSurfaces() {
@@ -284,27 +331,32 @@ export function RoomStudio() {
             {room?.previewUrl ? <div className="editor-media">
               <img src={room.previewUrl} alt={`Originale importato: ${room.file.name}`} onLoad={(event) => setRoomRatio(event.currentTarget.naturalWidth / event.currentTarget.naturalHeight)} />
               <svg className={`surface-overlay ${drawKind ? 'is-drawing' : ''}`} viewBox="0 0 1000 625" preserveAspectRatio="none" onPointerDown={addDraftPoint} onPointerMove={moveDraggedVertex} onPointerUp={endVertexDrag} onPointerCancel={endVertexDrag}>
-                <defs>{material && <pattern id="active-material" width="140" height="140" patternUnits="userSpaceOnUse"><image href={material.previewUrl} width="140" height="140" preserveAspectRatio="xMidYMid slice" /></pattern>}</defs>
-                {surfaces.map((surface) => <g key={surface.id} className={surface.frozen ? 'is-frozen' : ''}><polygon points={pointsToSvg(surface.points)} fill={surface.materialId && material?.id === surface.materialId ? 'url(#active-material)' : `${kindColors[surface.kind]}44`} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{surface.id === selectedId && surface.points.map((point, index) => <circle key={`${surface.id}-${index}`} cx={point.x * 1000} cy={point.y * 625} r="10" className="surface-vertex" onPointerDown={(event) => beginVertexDrag(event, surface.id, index)} />)}</g>)}
+                <defs>
+                  {catalogMaterials.filter((item) => item.pattern).map((item) => <pattern id={`catalog-material-${item.id}`} key={item.id} width={item.pattern === 'wood' ? 180 : 120} height={item.pattern === 'wood' ? 42 : 120} patternUnits="userSpaceOnUse"><rect width="100%" height="100%" fill={item.color} /><path d={item.pattern === 'wood' ? 'M0 2H180 M0 40H180 M45 2V40 M135 2V40' : 'M0 1H120 M1 0V120'} stroke="rgba(67,55,43,.22)" strokeWidth="3" /><path d={item.pattern === 'stone' ? 'M8 38 C38 17 64 55 110 25 M14 92 C45 68 77 106 116 74' : ''} fill="none" stroke="rgba(255,255,255,.24)" strokeWidth="5" /></pattern>)}
+                  {material?.previewUrl && <pattern id={`uploaded-material-${material.id}`} width="140" height="140" patternUnits="userSpaceOnUse"><image href={material.previewUrl} width="140" height="140" preserveAspectRatio="xMidYMid slice" /></pattern>}
+                </defs>
+                {surfaces.map((surface) => <g key={surface.id} className={surface.frozen ? 'is-frozen' : ''}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{surface.id === selectedId && surface.points.map((point, index) => <circle key={`${surface.id}-${index}`} cx={point.x * 1000} cy={point.y * 625} r="10" className="surface-vertex" onPointerDown={(event) => beginVertexDrag(event, surface.id, index)} />)}</g>)}
                 {draft.length > 0 && <><polyline points={pointsToSvg(draft)} fill="none" stroke="#d7f05c" strokeWidth="5" vectorEffect="non-scaling-stroke" />{draft.map((point, index) => <circle key={index} cx={point.x * 1000} cy={point.y * 625} r="9" className="draft-vertex" />)}</>}
               </svg><div className="import-status"><span className="status-dot" /><div><strong>Originale intatto</strong><small>{importedCaption}</small></div></div>
             </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Versione operativa</p><h1>Carica la stanza</h1><p>Usa una foto JPG o PNG. Poi disegna o adatta i contorni delle superfici.</p><label className="primary-button" htmlFor="room-file">Scegli una fotografia</label><button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>oppure trascina il file qui</small><small>JPG o PNG · massimo 20 MB</small></div></>}
             {isDraggingFile && <div className="drop-overlay"><strong>Rilascia per importare</strong><span>La foto resterà nel browser.</span></div>}
           </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
           <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" onChange={onRoomInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" onChange={onMaterialInput} />
-          <div className="status-bar"><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'La foto originale resta sotto le superfici e non viene modificata.'}</p>{room && surfaces.length === 0 && <button className="guided-start-button" type="button" onClick={seedGuidedSurfaces}>Crea 3 muri + pavimento</button>}</div>
+          <div className="status-bar"><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'La foto originale resta sotto le superfici e non viene modificata.'}</p>{room && surfaces.length === 0 && <button className="guided-start-button" type="button" onClick={seedGuidedSurfaces}>Crea 3 muri + pavimento</button>}{room && surfaces.length > 0 && <button className="render-flow-button" type="button" onClick={() => setRenderSummaryOpen(true)}>Prova flusso render</button>}</div>
         </section>
 
         <aside className="properties-panel" aria-label="Proprietà">
           <div className="panel-heading"><div><p className="eyebrow">Controlli</p><h2>{selected?.name ?? (room ? 'Nessuna selezione' : 'Importa una stanza')}</h2></div>{selected && <span className="type-badge">{surfaceLabels[selected.kind]}</span>}</div>
           {room && <div className="asset-card"><span>IMG</span><div><strong>{room.file.name}</strong><small>{importedCaption}</small></div><button type="button" onClick={() => roomInputRef.current?.click()}>Sostituisci</button></div>}
           {selected ? <><div className="property-section"><div className="property-title"><span>Nome superficie</span><span className="editable-badge">Personalizzabile</span></div><div className="rename-control"><input aria-label="Nome superficie" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} /><button type="button" onClick={renameSelected} disabled={!renameDraft.trim() || renameDraft.trim() === selected.name}>Salva</button></div></div><div className="property-section"><div className="property-title"><span>Protezione superficie</span><span className={`editable-badge ${selected.frozen ? 'frozen' : ''}`}>{selected.frozen ? 'Frozen' : 'Modificabile'}</span></div><button className={`freeze-button ${selected.frozen ? 'is-active' : ''}`} type="button" aria-label={selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'} onClick={toggleFreeze}><span>{selected.frozen ? '◆' : '◇'}</span>{selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'}<small>{selected.frozen ? 'Protetta' : 'Attivo subito'}</small></button><button className="freeze-others-button" type="button" onClick={freezeAllExceptSelected}>Blocca tutto tranne {selected.name}</button></div>
-            <div className="property-section"><div className="property-title"><span>Materiale locale</span><button type="button" onClick={() => materialInputRef.current?.click()}>Carica campione</button></div>{material ? <div className="loaded-material"><img src={material.previewUrl} alt="Campione materiale" /><div><strong>{material.name}</strong><small>JPG/PNG locale</small></div></div> : <div className="material-empty"><div className="material-sample" /><div><strong>Nessun campione</strong><p>Carica la foto ravvicinata di una finitura.</p></div></div>}<button className="apply-button" type="button" onClick={applyMaterial} disabled={!material || selected.frozen}>Applica a {selected.name}</button><p className="material-search-note">Ricerca per nome e cataloghi online: prevista dopo il database materiali.</p></div>
+            <div className="property-section"><div className="property-title"><span>Cerca materiali e colori</span><button type="button" onClick={() => materialInputRef.current?.click()}>Carica foto</button></div><input className="material-search" aria-label="Cerca materiali" value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} placeholder="es. rovere chiaro, travertino, salvia" /><div className="material-results">{filteredMaterials.map((item) => <button type="button" key={item.id} className={`material-result ${material?.id === item.id ? 'is-selected' : ''}`} onClick={() => chooseMaterial(item)}><span className={`catalog-swatch ${item.pattern ?? 'color'}`} style={{ '--swatch-color': item.color } as CSSProperties} /><span><strong>{item.name}</strong><small>{item.category} · {item.description}</small></span></button>)}{filteredMaterials.length === 0 && <p className="no-results">Nessun prodotto demo. Puoi caricare la foto del materiale.</p>}</div>{material?.previewUrl && <div className="loaded-material"><img src={material.previewUrl} alt="Campione materiale" /><div><strong>{material.name}</strong><small>{material.description}</small></div></div>}<button className="apply-button" type="button" onClick={applyMaterial} disabled={!material || selected.frozen}>Applica a {selected.name}</button><p className="material-search-note">Questi sono prodotti dimostrativi locali. Il catalogo internet reale verrà collegato separatamente.</p></div>
+            <div className="property-section"><div className="property-title"><span>Mobili per il render</span><span className="editable-badge">{furniture.length} scelti</span></div><div className="furniture-grid">{furnitureCatalog.map((item) => <button type="button" key={item} className={furniture.includes(item) ? 'is-selected' : ''} onClick={() => toggleFurniture(item)}>{furniture.includes(item) ? '✓ ' : '+ '}{item}</button>)}</div><p className="material-search-note">Nella prova scegli cosa inserire. Con il motore AI potrai anche caricare la foto esatta del mobile e indicarne la posizione.</p></div>
             <div className="property-section metrics"><div><span>Vertici</span><strong>{selected.points.length}</strong></div><div><span>Stato</span><strong>{selected.frozen ? 'Lock' : 'Edit'}</strong></div><div><span>Texture</span><strong>{selected.materialId ? 'Sì' : 'No'}</strong></div></div><button className="remove-button" type="button" onClick={deleteSelected} disabled={selected.frozen}>Elimina superficie</button></> : room ? <div className="empty-properties"><strong>Seleziona un contorno</strong><p>Tocca una superficie sulla foto o sceglila dall’elenco. Puoi anche disegnarne una nuova.</p></div> : null}
           {room && <button className="remove-room-button" type="button" onClick={removeRoom}>Chiudi progetto</button>}
-          <div className="phase-card"><span className="phase-index">0.1</span><div><p className="eyebrow">Versione di prova</p><strong>Editor manuale funzionante</strong><p>Disegno, correzione, Freeze e materiali locali. AI e ricerca online non ancora attive.</p></div></div>
+          <div className="phase-card"><span className="phase-index">0.2</span><div><p className="eyebrow">Modalità prova</p><strong>Progetto render configurabile</strong><p>Materiali, colori, mobili e Freeze funzionano. La generazione fotografica richiederà la chiave AI.</p></div></div>
         </aside>
       </div>
+      {renderSummaryOpen && <div className="render-modal" role="dialog" aria-modal="true" aria-labelledby="render-summary-title"><div className="render-modal-card"><button className="modal-close" type="button" onClick={() => setRenderSummaryOpen(false)} aria-label="Chiudi riepilogo">×</button><p className="eyebrow">Richiesta pronta</p><h2 id="render-summary-title">Prima del render reale</h2><div className="render-checks"><div><span>Superfici con materiale</span><strong>{surfaces.filter((surface) => surface.materialId).length}</strong></div><div><span>Zone protette</span><strong>{surfaces.filter((surface) => surface.frozen).length}</strong></div><div><span>Mobili richiesti</span><strong>{furniture.length}</strong></div></div><div className="render-list"><strong>Il motore riceverà:</strong><p>{surfaces.filter((surface) => surface.materialId).map((surface) => `${surface.name}: ${materialMap.get(surface.materialId!)?.name ?? 'materiale'}`).join(' · ') || 'Nessun materiale ancora applicato'}</p><p>{furniture.length ? `Arredi: ${furniture.join(', ')}` : 'Nessun arredo aggiunto'}</p></div><div className="engine-warning"><span>AI</span><p><strong>Render fotografico non ancora collegato</strong>Questa schermata prepara una richiesta reale, ma non inventa un’immagine. Dopo la chiave, lo stesso pulsante genererà il risultato.</p></div><button className="modal-primary" type="button" onClick={() => setRenderSummaryOpen(false)}>Continua a configurare</button></div></div>}
     </main>
   );
 }

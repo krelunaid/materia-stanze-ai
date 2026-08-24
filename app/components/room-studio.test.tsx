@@ -98,4 +98,17 @@ describe('RoomStudio', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Muro 2/ }));
     expect(screen.getByText('Frozen')).toBeInTheDocument();
   });
+
+  it('searches demo materials and prepares an honest render summary', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.change(screen.getByLabelText('Cerca materiali'), { target: { value: 'salvia' } });
+    fireEvent.click(screen.getByRole('button', { name: /Verde salvia/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Applica a Muro 1' }));
+    fireEvent.click(screen.getByRole('button', { name: /Divano chiaro/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prova flusso render' }));
+    expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Muro 1: Verde salvia');
+    expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Arredi: Divano chiaro');
+    expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Render fotografico non ancora collegato');
+  });
 });
