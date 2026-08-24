@@ -1,5 +1,6 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
+import { ServiceWorkerRegister } from './components/service-worker-register';
 import './globals.css';
 
 const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] });
@@ -9,6 +10,14 @@ export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'),
   title: 'Materia — Configuratore stanze',
   description: 'Editor tecnico per riconoscere superfici e provare materiali mantenendo intatta la stanza originale.',
+  manifest: '/manifest.webmanifest',
+  applicationName: 'Materia',
+  appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'Materia' },
+  formatDetection: { telephone: false },
+  icons: {
+    icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }, { url: '/icon-192.png', sizes: '192x192', type: 'image/png' }],
+    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
+  },
   openGraph: {
     title: 'Materia — Configuratore stanze',
     description: 'Configura la stanza. Proteggi l’originale.',
@@ -22,6 +31,13 @@ export const metadata: Metadata = {
   },
 };
 
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+  themeColor: '#17201f',
+};
+
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="it"><body className={`${geistSans.variable} ${geistMono.variable}`}>{children}</body></html>;
+  return <html lang="it"><head><meta name="apple-mobile-web-app-capable" content="yes" /><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" /><meta name="apple-mobile-web-app-title" content="Materia" /><link rel="apple-touch-icon" href="/apple-touch-icon.png" /></head><body className={`${geistSans.variable} ${geistMono.variable}`}><ServiceWorkerRegister />{children}</body></html>;
 }

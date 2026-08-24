@@ -49,7 +49,7 @@ export default function ProjectsPage() {
       </section>
 
       <footer className="projects-footer">
-        <p><strong>Privacy prima di tutto.</strong> Nessuna immagine viene inviata a servizi esterni.</p>
+        <p><strong>Su iPhone e iPad:</strong> apri in Safari, tocca Condividi e scegli “Aggiungi alla schermata Home”.</p>
         <span>Materia · Versione operativa 0.1</span>
       </footer>
     </main>
