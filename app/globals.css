@@ -53,6 +53,8 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .draw-button,.finish-button,.drawing-actions button,.status-bar button,.apply-button,.asset-card button { border:0; border-radius:9px; font-size:10px; font-weight:750; cursor:pointer; }
 .demo-button { display:block; margin:9px auto 0; padding:7px 11px; border:0; background:transparent; color:var(--accent); font-size:10px; font-weight:750; text-decoration:underline; cursor:pointer; }
 .draw-button { min-height:34px; padding:0 11px; background:#fff; border:1px solid #cfd7d3; }
+.history-button { border-color:#d5dad6; background:#fff; font-size:16px; }
+.history-button:disabled { opacity:.35; }
 .draw-button.is-selected { border-color:var(--accent); background:var(--accent); color:#fff; }
 .draw-button:disabled { opacity:.45; cursor:not-allowed; }
 .kind-select { height:34px; padding:0 27px 0 9px; border:1px solid #cfd7d3; border-radius:9px; background:#fff; color:var(--ink); font-size:10px; font-weight:650; }
@@ -84,6 +86,12 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .editable-badge.frozen { background:#ece9f0; color:#684e78; }
 .freeze-button { opacity:1; cursor:pointer; }
 .freeze-button.is-active { border-color:#9a85a6; background:#f2eef4; color:#60486d; }
+.freeze-others-button { width:100%; margin-top:8px; padding:8px 9px; border:0; background:transparent; color:var(--accent); font-size:9px; font-weight:750; text-decoration:underline; cursor:pointer; }
+.rename-control { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; }
+.rename-control input { min-width:0; height:38px; padding:0 10px; border:1px solid #d8dfdb; border-radius:9px; outline:none; font-size:10px; }
+.rename-control input:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+.rename-control button { padding:0 11px; border:0; border-radius:9px; background:var(--accent); color:#fff; font-size:9px; font-weight:750; cursor:pointer; }
+.rename-control button:disabled { opacity:.4; cursor:not-allowed; }
 .loaded-material { display:flex; align-items:center; gap:10px; }
 .loaded-material img { width:48px; height:48px; object-fit:cover; border:1px solid #d8dfdb; border-radius:10px; }
 .loaded-material strong,.loaded-material small { display:block; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

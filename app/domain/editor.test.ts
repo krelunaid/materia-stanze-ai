@@ -21,6 +21,8 @@ describe('editor geometry', () => {
 
   it('numbers walls deterministically', () => {
     expect(nextSurfaceName('wall', [wall])).toBe('Muro 2');
+    expect(nextSurfaceName('wall', [wall, { ...wall, id: 'wall-3', name: 'Muro 3' }])).toBe('Muro 4');
+    expect(nextSurfaceName('wall', [{ ...wall, name: 'Parete TV' }])).toBe('Muro 1');
     expect(nextSurfaceName('floor', [])).toBe('Pavimento');
   });
 

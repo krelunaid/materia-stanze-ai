@@ -39,9 +39,14 @@ export function isValidPolygon(points: Point[]) {
 export function nextSurfaceName(kind: SurfaceKind, surfaces: Surface[]) {
   const base = surfaceLabels[kind];
   const siblings = surfaces.filter((surface) => surface.kind === kind);
-  return kind === 'wall' || kind === 'door' || kind === 'window' || kind === 'other'
-    ? `${base} ${siblings.length + 1}`
-    : siblings.length === 0 ? base : `${base} ${siblings.length + 1}`;
+  if (kind === 'wall' || kind === 'door' || kind === 'window' || kind === 'other') {
+    const highestNumber = siblings.reduce((highest, surface) => {
+      const match = surface.name.match(new RegExp(`^${base}\\s+(\\d+)$`, 'i'));
+      return match ? Math.max(highest, Number(match[1])) : highest;
+    }, 0);
+    return `${base} ${highestNumber + 1}`;
+  }
+  return siblings.length === 0 ? base : `${base} ${siblings.length + 1}`;
 }
 
 export function moveVertex(surface: Surface, vertexIndex: number, point: Point): Surface {

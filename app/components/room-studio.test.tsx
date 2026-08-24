@@ -64,4 +64,24 @@ describe('RoomStudio', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Chiudi superficie' }));
     expect(screen.getAllByText('Muro 4').length).toBeGreaterThan(0);
   });
+
+  it('renames an internal wall and supports undo and redo', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.change(screen.getByLabelText('Nome superficie'), { target: { value: 'Divisorio cucina' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Salva' }));
+    expect(screen.getAllByText('Divisorio cucina').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Annulla ultima modifica' }));
+    expect(screen.getAllByText('Muro 1').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Ripristina modifica' }));
+    expect(screen.getAllByText('Divisorio cucina').length).toBeGreaterThan(0);
+  });
+
+  it('freezes every surface except the selected wall', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Blocca tutto tranne Muro 1' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Muro 2/ }));
+    expect(screen.getByText('Frozen')).toBeInTheDocument();
+  });
 });
