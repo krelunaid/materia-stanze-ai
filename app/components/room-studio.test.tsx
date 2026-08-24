@@ -32,8 +32,7 @@ describe('RoomStudio', () => {
 
   it('imports a floorplan, creates its perimeter and offers two-tap internal walls', () => {
     render(<RoomStudio />);
-    fireEvent.click(screen.getByRole('button', { name: /Planimetria/ }));
-    fireEvent.change(document.querySelector('#room-file') as HTMLInputElement, { target: { files: [new File(['plan'], 'casa.png', { type: 'image/png' })] } });
+    fireEvent.change(document.querySelector('#floorplan-file') as HTMLInputElement, { target: { files: [new File(['plan'], 'casa.png', { type: 'image/png' })] } });
     expect(screen.getAllByText('Perimetro planimetria').length).toBeGreaterThan(0);
     expect(screen.getByText(/Planimetria riprodotta/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Aggiungi parete interna' }));

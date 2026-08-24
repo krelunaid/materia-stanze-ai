@@ -17,7 +17,7 @@ describe('validateRoomFile', () => {
   it('accepts HEIC by extension when the browser omits MIME', () => {
     const result = validateRoomFile(new File(['room'], 'camera.heic'));
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value.canPreview).toBe(false);
+    if (result.ok) expect(result.value.canPreview).toBe(true);
   });
 
   it('rejects unsupported, empty and oversized files', () => {

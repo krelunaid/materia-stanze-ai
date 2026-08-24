@@ -94,7 +94,7 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .status-icon { display:grid; place-items:center; width:22px; height:22px; flex:0 0 auto; border-radius:7px; background:var(--accent-soft); color:var(--accent); font-size:10px; font-weight:800; }
 .status-bar button { min-height:30px; padding:0 10px; background:var(--ink); color:white; white-space:nowrap; }
 .type-badge { padding:5px 7px; border-radius:7px; background:#eef1ee; color:#66716d; font-size:9px; font-weight:750; }
-.asset-card button { margin-left:auto; padding:7px 8px; background:#e5eeeb; color:var(--accent); }
+.asset-card button,.asset-card label { margin-left:auto; padding:7px 8px; border:0; border-radius:9px; background:#e5eeeb; color:var(--accent); font-size:9px; font-weight:750; cursor:pointer; }
 .editable-badge.frozen { background:#ece9f0; color:#684e78; }
 .freeze-button { opacity:1; cursor:pointer; }
 .freeze-button.is-active { border-color:#9a85a6; background:#f2eef4; color:#60486d; }
@@ -148,6 +148,11 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .furniture-grid button.is-selected { border-color:#8dbbb0; background:var(--accent-soft); color:var(--accent); }
 .render-flow-button { background:var(--accent)!important; color:#fff!important; }
 .render-modal { position:fixed; z-index:100; inset:0; display:grid; place-items:center; padding:20px; background:rgba(13,23,21,.66); backdrop-filter:blur(9px); }
+.processing-overlay { position:absolute; z-index:25; inset:0; display:grid; place-content:center; justify-items:center; gap:8px; padding:24px; background:rgba(240,246,243,.94); color:var(--ink); text-align:center; }
+.processing-overlay strong { font-size:16px; }
+.processing-overlay small { max-width:270px; color:#68736f; font-size:10px; line-height:1.45; }
+.processing-spinner { width:34px; height:34px; border:3px solid #c9ddd7; border-top-color:var(--accent); border-radius:50%; animation:processing-spin .8s linear infinite; }
+@keyframes processing-spin { to { transform:rotate(360deg); } }
 .render-modal-card { position:relative; width:min(540px,100%); padding:29px; border-radius:20px; background:#fff; box-shadow:0 28px 80px rgba(0,0,0,.28); }
 .render-modal-card h2 { margin:5px 0 20px; font-size:27px; letter-spacing:-.04em; }
 .modal-close { position:absolute; top:13px; right:14px; width:34px; height:34px; border:0; border-radius:50%; background:#eff2ef; font-size:20px; cursor:pointer; }

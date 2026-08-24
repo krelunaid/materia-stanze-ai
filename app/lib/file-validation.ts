@@ -47,7 +47,7 @@ export function validateRoomFile(file: File): RoomFileValidation {
   }
 
   const isPdf = file.type === 'application/pdf' || extension === 'pdf';
-  const canPreview = !isPdf && !['heic', 'heif'].includes(extension) && !['image/heic', 'image/heif'].includes(file.type);
+  const canPreview = !isPdf;
 
   return {
     ok: true,
