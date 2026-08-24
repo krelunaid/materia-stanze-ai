@@ -197,3 +197,37 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
     .topbar { padding-left:max(15px,env(safe-area-inset-left)); padding-right:max(15px,env(safe-area-inset-right)); }
   }
 }
+
+/* Percorso semplice guidato */
+.mode-switch { min-height:36px; padding:0 12px; border:1px solid var(--line); border-radius:10px; background:#fff; color:var(--accent); font-size:10px; font-weight:750; cursor:pointer; }
+.simple-steps { display:grid; grid-template-columns:repeat(4,minmax(90px,150px)); justify-content:center; gap:7px; padding:10px 18px; border-bottom:1px solid var(--line); background:#fff; }
+.simple-steps button { display:flex; align-items:center; gap:8px; min-height:42px; padding:5px 9px; border:1px solid #dce2de; border-radius:11px; background:#f7f9f7; color:#75807b; font-size:10px; cursor:pointer; }
+.simple-steps button>span { display:grid; place-items:center; width:26px; height:26px; flex:0 0 auto; border-radius:8px; background:#e7ebe8; font-size:10px; font-weight:800; }
+.simple-steps button.is-active { border-color:#89b8ad; background:#edf7f4; color:var(--accent); box-shadow:inset 0 -3px var(--accent); }
+.simple-steps button.is-active>span { background:var(--accent); color:#fff; }
+.simple-steps button.is-done>span { background:#dceddf; color:#46725a; }
+.simple-steps button:disabled { opacity:.42; cursor:not-allowed; }
+.simple-mode .editor-toolbar { display:none; }
+.simple-mode .stage { grid-template-rows:minmax(420px,1fr) 74px; }
+.simple-mode.step-1 .workspace,.simple-mode.step-4 .workspace { grid-template-columns:minmax(0,1fr); }
+.simple-mode.step-1 .surface-panel,.simple-mode.step-1 .properties-panel,.simple-mode.step-4 .surface-panel,.simple-mode.step-4 .properties-panel { display:none; }
+.simple-mode.step-2 .workspace { grid-template-columns:260px minmax(0,1fr); }
+.simple-mode.step-2 .properties-panel { display:none; }
+.simple-mode.step-2 .detect-button,.simple-mode.step-2 .panel-note { display:none; }
+.simple-mode.step-3 .workspace { grid-template-columns:minmax(0,1fr) 340px; }
+.simple-mode.step-3 .surface-panel { display:none; }
+.simple-mode.step-3 .properties-panel { display:block; grid-column:auto; border-top:0; border-left:1px solid var(--line); }
+.simple-mode.step-3 .properties-panel>.panel-heading,.simple-mode.step-3 .asset-card,.simple-mode.step-3 .properties-panel>div:nth-child(3),.simple-mode.step-3 .properties-panel>div:nth-child(4),.simple-mode.step-3 .metrics,.simple-mode.step-3 .remove-button,.simple-mode.step-3 .remove-room-button,.simple-mode.step-3 .phase-card { display:none; }
+.simple-mode .canvas-wrap { padding:18px; }
+
+@media (max-width:760px) {
+  .mode-switch { min-height:32px; padding:0 8px; font-size:9px; }
+  .simple-steps { position:sticky; z-index:9; top:64px; grid-template-columns:repeat(4,1fr); gap:4px; padding:7px; }
+  .simple-steps button { justify-content:center; min-width:0; min-height:38px; padding:4px; }
+  .simple-steps button>span { width:25px; height:25px; }
+  .simple-steps button>strong { display:none; }
+  .simple-mode.step-2 .workspace,.simple-mode.step-3 .workspace { display:flex; }
+  .simple-mode.step-2 .surface-panel { display:block; order:2; }
+  .simple-mode.step-3 .properties-panel { order:2; border-left:0; }
+  .simple-mode .stage { order:1; }
+}

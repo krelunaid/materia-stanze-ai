@@ -99,6 +99,8 @@ export function RoomStudio() {
   const [customRequests, setCustomRequests] = useState<string[]>([]);
   const [customColor, setCustomColor] = useState('#c8b9a6');
   const [renderSummaryOpen, setRenderSummaryOpen] = useState(false);
+  const [simpleMode, setSimpleMode] = useState(true);
+  const [activeStep, setActiveStep] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
@@ -173,6 +175,7 @@ export function RoomStudio() {
     setRoom({ ...result.value, previewUrl });
     setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setError(null);
     setNotice('Foto pronta. Usa “Crea 3 muri + pavimento” oppure aggiungi un muro con quattro tocchi.');
+    setActiveStep(2);
   }
 
   function onRoomInput(event: ChangeEvent<HTMLInputElement>) {
@@ -333,15 +336,30 @@ export function RoomStudio() {
     setRoom({ file, kind: 'image', canPreview: true, displaySize: 'esempio incluso', projectName: 'Stanza esempio', previewUrl: '/og.png' });
     setRoomRatio(16 / 9); setSurfaces(created); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(created[0].id); setRenameDraft(created[0].name); setError(null);
     setNotice('Esempio pronto. Prova a spostare i vertici, bloccare un muro o caricare un campione.');
+    setActiveStep(2);
+  }
+
+  function goToStep(step: number) {
+    if (step > 1 && !room) return;
+    if (step > 2 && surfaces.length === 0) {
+      setNotice('Prima crea o disegna almeno una superficie.');
+      return;
+    }
+    setActiveStep(step);
+    if (step === 4) setRenderSummaryOpen(true);
   }
 
   return (
-    <main ref={shellRef} className="app-shell">
+    <main ref={shellRef} className={`app-shell ${simpleMode ? `simple-mode step-${activeStep}` : 'advanced-mode'}`}>
       <header className="topbar">
         <a href="/projects" className="brand-lockup" aria-label="Vai ai progetti"><div className="brand-mark" aria-hidden="true"><span /><span /></div><div><p className="eyebrow">Studio materiali</p><p className="brand-name">Materia</p></div></a>
         <div className="project-heading"><span className="status-dot" /><div><p>{projectName}</p><span>{room ? 'Editor manuale attivo · originale protetto' : 'Nuovo progetto locale'}</span></div></div>
-        <div className="top-actions"><a className="ghost-button" href="/projects">Tutti i progetti</a><button className="avatar" type="button" aria-label="Profilo locale">AG</button></div>
+        <div className="top-actions"><button className="mode-switch" type="button" onClick={() => setSimpleMode((current) => !current)}>{simpleMode ? 'Strumenti avanzati' : 'Modalità semplice'}</button><button className="avatar" type="button" aria-label="Profilo locale">AG</button></div>
       </header>
+
+      {simpleMode && <nav className="simple-steps" aria-label="Passaggi del progetto">{[
+        ['1', 'Foto'], ['2', 'Superfici'], ['3', 'Cerca'], ['4', 'Render'],
+      ].map(([number, label], index) => <button type="button" key={number} className={activeStep === index + 1 ? 'is-active' : activeStep > index + 1 ? 'is-done' : ''} onClick={() => goToStep(index + 1)} disabled={(index > 0 && !room) || (index > 1 && surfaces.length === 0)}><span>{activeStep > index + 1 ? '✓' : number}</span><strong>{label}</strong></button>)}</nav>}
 
       <div className="workspace">
         <aside className="surface-panel" aria-label="Superfici della stanza">
@@ -372,7 +390,7 @@ export function RoomStudio() {
             {isDraggingFile && <div className="drop-overlay"><strong>Rilascia per importare</strong><span>La foto resterà nel browser.</span></div>}
           </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
           <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" onChange={onRoomInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" onChange={onMaterialInput} />
-          <div className="status-bar"><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'La foto originale resta sotto le superfici e non viene modificata.'}</p>{room && surfaces.length === 0 && <button className="guided-start-button" type="button" onClick={seedGuidedSurfaces}>Crea 3 muri + pavimento</button>}{room && surfaces.length > 0 && <button className="render-flow-button" type="button" onClick={() => setRenderSummaryOpen(true)}>Prova flusso render</button>}</div>
+          <div className="status-bar"><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'La foto originale resta sotto le superfici e non viene modificata.'}</p>{room && surfaces.length === 0 && <button className="guided-start-button" type="button" aria-label="Crea 3 muri + pavimento" onClick={seedGuidedSurfaces}>Crea superfici automaticamente</button>}{room && surfaces.length > 0 && (!simpleMode || activeStep === 4) && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{simpleMode && activeStep === 2 && surfaces.length > 0 && <button type="button" onClick={() => goToStep(3)}>Continua: cerca materiali</button>}{simpleMode && activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
         </section>
 
         <aside className="properties-panel" aria-label="Proprietà">

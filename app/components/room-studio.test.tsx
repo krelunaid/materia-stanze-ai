@@ -102,6 +102,7 @@ describe('RoomStudio', () => {
   it('searches demo materials and prepares an honest render summary', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua: cerca materiali' }));
     const search = screen.getByLabelText('Cerca materiali, colori o mobili');
     fireEvent.change(search, { target: { value: 'salvia' } });
     fireEvent.click(screen.getByRole('button', { name: /Verde salvia/ }));
@@ -124,5 +125,14 @@ describe('RoomStudio', () => {
     fireEvent.change(search, { target: { value: 'pianoforte nero a coda' } });
     fireEvent.click(screen.getByRole('button', { name: /Aggiungi “pianoforte nero a coda” al render/ }));
     expect(screen.getByText('pianoforte nero a coda', { selector: '.selected-assets button' })).toBeInTheDocument();
+  });
+
+  it('starts with a four-step simple workflow and keeps advanced tools optional', () => {
+    render(<RoomStudio />);
+    expect(screen.getByRole('navigation', { name: 'Passaggi del progetto' })).toHaveTextContent('1Foto2Superfici3Cerca4Render');
+    expect(screen.getByRole('button', { name: 'Strumenti avanzati' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Superfici/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    expect(screen.getByRole('button', { name: /Superfici/ })).toBeEnabled();
   });
 });
