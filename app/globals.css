@@ -109,6 +109,9 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .remove-room-button { width:100%; min-height:38px; margin-top:10px; border:0; background:transparent; color:#7c8582; font-size:9px; text-decoration:underline; cursor:pointer; }
 .material-search { width:100%; height:39px; padding:0 11px; border:1px solid #d4dcd8; border-radius:10px; outline:none; color:var(--ink); font-size:10px; }
 .material-search:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+.search-scope { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
+.search-scope span { padding:4px 6px; border-radius:6px; background:#edf4f1; color:var(--accent); font-size:8px; font-weight:700; }
+.search-scope .internet-pending { background:#f2efe8; color:#8b7249; }
 .material-results { display:grid; gap:6px; max-height:220px; margin:9px 0 11px; overflow-y:auto; }
 .material-result { display:flex; align-items:center; gap:9px; width:100%; padding:7px; border:1px solid #e0e5e2; border-radius:11px; background:#fff; text-align:left; cursor:pointer; }
 .material-result.is-selected { border-color:var(--accent); background:#eef7f4; box-shadow:inset 3px 0 var(--accent); }
@@ -116,11 +119,22 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .material-result strong,.material-result small { display:block; }
 .material-result strong { font-size:10px; }
 .material-result small { margin-top:3px; color:#77817d; font-size:8px; line-height:1.35; }
+.furniture-icon { display:grid; place-items:center; width:42px; height:42px; flex:0 0 auto; border-radius:9px; background:#e9efec; color:var(--accent); font-size:18px; font-weight:500; }
+.furniture-result.is-selected .furniture-icon { background:var(--accent); color:#fff; }
 .catalog-swatch { --swatch-color:#ddd; display:block; width:42px; height:42px; flex:0 0 auto; border:1px solid rgba(23,32,31,.12); border-radius:9px; background:var(--swatch-color); }
 .catalog-swatch.wood { background:repeating-linear-gradient(0deg,transparent 0 10px,rgba(70,48,30,.2) 11px 12px),repeating-linear-gradient(90deg,transparent 0 28px,rgba(255,255,255,.15) 29px 30px),var(--swatch-color); }
 .catalog-swatch.tile { background:linear-gradient(90deg,transparent 48%,rgba(50,50,45,.2) 49% 51%,transparent 52%),linear-gradient(transparent 48%,rgba(50,50,45,.2) 49% 51%,transparent 52%),var(--swatch-color); }
 .catalog-swatch.stone { background:radial-gradient(ellipse at 20% 30%,rgba(255,255,255,.38),transparent 38%),radial-gradient(ellipse at 78% 70%,rgba(92,75,55,.15),transparent 42%),var(--swatch-color); }
 .no-results { margin:4px; color:#77817d; font-size:9px; line-height:1.45; }
+.custom-search-result { padding:11px; border:1px dashed #c7cfcb; border-radius:10px; background:#fafbfa; }
+.custom-search-result p { margin:0 0 8px; color:#6f7975; font-size:9px; }
+.custom-search-result button { width:100%; min-height:32px; border:0; border-radius:8px; background:var(--ink); color:#fff; font-size:9px; font-weight:700; cursor:pointer; }
+.custom-color { display:flex; gap:7px; margin:0 0 10px; }
+.custom-color input { width:44px; height:36px; padding:3px; border:1px solid #d6deda; border-radius:8px; background:#fff; cursor:pointer; }
+.custom-color button { flex:1; border:1px solid #d6deda; border-radius:8px; background:#f7f9f7; font-size:9px; font-weight:700; cursor:pointer; }
+.selected-assets { display:flex; flex-wrap:wrap; gap:6px; }
+.selected-assets button { display:flex; align-items:center; gap:7px; padding:7px 8px; border:1px solid #bfd5cf; border-radius:8px; background:#eef7f4; color:var(--accent); font-size:9px; font-weight:700; cursor:pointer; }
+.selected-assets span { font-size:13px; line-height:1; }
 .furniture-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
 .furniture-grid button { min-height:34px; padding:6px 8px; border:1px solid #dbe1dd; border-radius:9px; background:#f8faf8; font-size:9px; font-weight:650; text-align:left; cursor:pointer; }
 .furniture-grid button.is-selected { border-color:#8dbbb0; background:var(--accent-soft); color:var(--accent); }

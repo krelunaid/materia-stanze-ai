@@ -46,7 +46,20 @@ const catalogMaterials: StudioMaterial[] = [
   { id: 'wall-clay', name: 'Terra rosata', category: 'Colori', description: 'Pittura minerale', color: '#c9957f' },
 ];
 
-const furnitureCatalog = ['Divano chiaro', 'Poltrona', 'Tavolo da pranzo', 'Sedie', 'Mobile TV', 'Lampada', 'Tappeto', 'Letto'];
+const furnitureCatalog = [
+  { name: 'Divano chiaro', description: 'Soggiorno · tessuto' },
+  { name: 'Poltrona', description: 'Soggiorno · relax' },
+  { name: 'Tavolo da pranzo', description: 'Zona pranzo · legno' },
+  { name: 'Sedie', description: 'Zona pranzo · set coordinato' },
+  { name: 'Mobile TV', description: 'Soggiorno · contenitore basso' },
+  { name: 'Lampada', description: 'Illuminazione · terra o sospensione' },
+  { name: 'Tappeto', description: 'Tessile · soggiorno o camera' },
+  { name: 'Letto', description: 'Camera · matrimoniale' },
+  { name: 'Cucina', description: 'Cucina · composizione completa' },
+  { name: 'Armadio', description: 'Camera · contenitore' },
+  { name: 'Tende', description: 'Finestre · tessuto' },
+  { name: 'Quadri', description: 'Decorazione parete' },
+];
 
 const kinds: SurfaceKind[] = ['wall', 'floor', 'ceiling', 'door', 'window', 'other'];
 const kindColors: Record<SurfaceKind, string> = {
@@ -83,6 +96,8 @@ export function RoomStudio() {
   const [material, setMaterial] = useState<StudioMaterial | null>(null);
   const [materialQuery, setMaterialQuery] = useState('');
   const [furniture, setFurniture] = useState<string[]>([]);
+  const [customRequests, setCustomRequests] = useState<string[]>([]);
+  const [customColor, setCustomColor] = useState('#c8b9a6');
   const [renderSummaryOpen, setRenderSummaryOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -109,6 +124,10 @@ export function RoomStudio() {
   const filteredMaterials = useMemo(() => {
     const query = materialQuery.trim().toLocaleLowerCase('it');
     return catalogMaterials.filter((item) => !query || `${item.name} ${item.category} ${item.description}`.toLocaleLowerCase('it').includes(query));
+  }, [materialQuery]);
+  const filteredFurniture = useMemo(() => {
+    const query = materialQuery.trim().toLocaleLowerCase('it');
+    return furnitureCatalog.filter((item) => !query || `${item.name} ${item.description}`.toLocaleLowerCase('it').includes(query));
   }, [materialQuery]);
   const materialMap = useMemo(() => new Map(catalogMaterials.concat(material ? [material] : []).map((item) => [item.id, item])), [material]);
 
@@ -281,6 +300,17 @@ export function RoomStudio() {
     setFurniture((current) => current.includes(item) ? current.filter((name) => name !== item) : [...current, item]);
   }
 
+  function chooseCustomColor() {
+    chooseMaterial({ id: `color-${customColor.slice(1)}`, name: `Colore ${customColor.toUpperCase()}`, category: 'Colori', description: 'Colore personalizzato', color: customColor });
+  }
+
+  function addCustomRequest() {
+    const request = materialQuery.trim();
+    if (!request || customRequests.includes(request)) return;
+    setCustomRequests((current) => [...current, request]);
+    setNotice(`“${request}” aggiunto alla richiesta del render.`);
+  }
+
   function materialFill(surface: Surface) {
     if (!surface.materialId) return `${kindColors[surface.kind]}44`;
     const assigned = materialMap.get(surface.materialId);
@@ -349,14 +379,14 @@ export function RoomStudio() {
           <div className="panel-heading"><div><p className="eyebrow">Controlli</p><h2>{selected?.name ?? (room ? 'Nessuna selezione' : 'Importa una stanza')}</h2></div>{selected && <span className="type-badge">{surfaceLabels[selected.kind]}</span>}</div>
           {room && <div className="asset-card"><span>IMG</span><div><strong>{room.file.name}</strong><small>{importedCaption}</small></div><button type="button" onClick={() => roomInputRef.current?.click()}>Sostituisci</button></div>}
           {selected ? <><div className="property-section"><div className="property-title"><span>Nome superficie</span><span className="editable-badge">Personalizzabile</span></div><div className="rename-control"><input aria-label="Nome superficie" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} /><button type="button" onClick={renameSelected} disabled={!renameDraft.trim() || renameDraft.trim() === selected.name}>Salva</button></div></div><div className="property-section"><div className="property-title"><span>Protezione superficie</span><span className={`editable-badge ${selected.frozen ? 'frozen' : ''}`}>{selected.frozen ? 'Frozen' : 'Modificabile'}</span></div><button className={`freeze-button ${selected.frozen ? 'is-active' : ''}`} type="button" aria-label={selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'} onClick={toggleFreeze}><span>{selected.frozen ? '◆' : '◇'}</span>{selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'}<small>{selected.frozen ? 'Protetta' : 'Attivo subito'}</small></button><button className="freeze-others-button" type="button" onClick={freezeAllExceptSelected}>Blocca tutto tranne {selected.name}</button></div>
-            <div className="property-section"><div className="property-title"><span>Cerca materiali e colori</span><button type="button" onClick={() => materialInputRef.current?.click()}>Carica foto</button></div><input className="material-search" aria-label="Cerca materiali" value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} placeholder="es. rovere chiaro, travertino, salvia" /><div className="material-results">{filteredMaterials.map((item) => <button type="button" key={item.id} className={`material-result ${material?.id === item.id ? 'is-selected' : ''}`} onClick={() => chooseMaterial(item)}><span className={`catalog-swatch ${item.pattern ?? 'color'}`} style={{ '--swatch-color': item.color } as CSSProperties} /><span><strong>{item.name}</strong><small>{item.category} · {item.description}</small></span></button>)}{filteredMaterials.length === 0 && <p className="no-results">Nessun prodotto demo. Puoi caricare la foto del materiale.</p>}</div>{material?.previewUrl && <div className="loaded-material"><img src={material.previewUrl} alt="Campione materiale" /><div><strong>{material.name}</strong><small>{material.description}</small></div></div>}<button className="apply-button" type="button" onClick={applyMaterial} disabled={!material || selected.frozen}>Applica a {selected.name}</button><p className="material-search-note">Questi sono prodotti dimostrativi locali. Il catalogo internet reale verrà collegato separatamente.</p></div>
-            <div className="property-section"><div className="property-title"><span>Mobili per il render</span><span className="editable-badge">{furniture.length} scelti</span></div><div className="furniture-grid">{furnitureCatalog.map((item) => <button type="button" key={item} className={furniture.includes(item) ? 'is-selected' : ''} onClick={() => toggleFurniture(item)}>{furniture.includes(item) ? '✓ ' : '+ '}{item}</button>)}</div><p className="material-search-note">Nella prova scegli cosa inserire. Con il motore AI potrai anche caricare la foto esatta del mobile e indicarne la posizione.</p></div>
+            <div className="property-section"><div className="property-title"><span>Ricerca unica</span><button type="button" onClick={() => materialInputRef.current?.click()}>Carica foto</button></div><input className="material-search" aria-label="Cerca materiali, colori o mobili" value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} placeholder="Cerca pavimento, colore, divano, cucina…" /><div className="search-scope"><span>Materiali</span><span>Colori</span><span>Mobili</span><span className="internet-pending">Internet dopo la chiave</span></div><div className="material-results">{filteredMaterials.map((item) => <button type="button" key={item.id} className={`material-result ${material?.id === item.id ? 'is-selected' : ''}`} onClick={() => chooseMaterial(item)}><span className={`catalog-swatch ${item.pattern ?? 'color'}`} style={{ '--swatch-color': item.color } as CSSProperties} /><span><strong>{item.name}</strong><small>{item.category} · {item.description}</small></span></button>)}{filteredFurniture.map((item) => <button type="button" key={item.name} className={`material-result furniture-result ${furniture.includes(item.name) ? 'is-selected' : ''}`} onClick={() => toggleFurniture(item.name)}><span className="furniture-icon">{furniture.includes(item.name) ? '✓' : '+'}</span><span><strong>{item.name}</strong><small>Mobili · {item.description}</small></span></button>)}{filteredMaterials.length === 0 && filteredFurniture.length === 0 && <div className="custom-search-result"><p>Nessun elemento locale con questo nome.</p><button type="button" onClick={addCustomRequest}>Aggiungi “{materialQuery.trim()}” al render</button></div>}</div><div className="custom-color"><input type="color" aria-label="Scegli colore personalizzato" value={customColor} onChange={(event) => setCustomColor(event.target.value)} /><button type="button" onClick={chooseCustomColor}>Usa questo colore</button></div>{material?.previewUrl && <div className="loaded-material"><img src={material.previewUrl} alt="Campione materiale" /><div><strong>{material.name}</strong><small>{material.description}</small></div></div>}<button className="apply-button" type="button" aria-label={`Applica a ${selected.name}`} onClick={applyMaterial} disabled={!material || selected.frozen}>Applica {material?.name ?? 'materiale'} a {selected.name}</button><p className="material-search-note">Puoi già configurare tutto. Con la chiave, la stessa ricerca cercherà anche prodotti reali su internet mostrando marca e fonte.</p></div>
+            <div className="property-section"><div className="property-title"><span>Elementi nel render</span><span className="editable-badge">{furniture.length + customRequests.length} scelti</span></div>{furniture.length || customRequests.length ? <div className="selected-assets">{furniture.map((item) => <button type="button" key={item} onClick={() => toggleFurniture(item)}>{item}<span>×</span></button>)}{customRequests.map((item) => <button type="button" key={item} onClick={() => setCustomRequests((current) => current.filter((name) => name !== item))}>{item}<span>×</span></button>)}</div> : <p className="no-results">Cerca un mobile o scrivi liberamente ciò che vuoi inserire.</p>}<p className="material-search-note">Con il motore AI potrai caricare anche la foto esatta del mobile e indicarne la posizione.</p></div>
             <div className="property-section metrics"><div><span>Vertici</span><strong>{selected.points.length}</strong></div><div><span>Stato</span><strong>{selected.frozen ? 'Lock' : 'Edit'}</strong></div><div><span>Texture</span><strong>{selected.materialId ? 'Sì' : 'No'}</strong></div></div><button className="remove-button" type="button" onClick={deleteSelected} disabled={selected.frozen}>Elimina superficie</button></> : room ? <div className="empty-properties"><strong>Seleziona un contorno</strong><p>Tocca una superficie sulla foto o sceglila dall’elenco. Puoi anche disegnarne una nuova.</p></div> : null}
           {room && <button className="remove-room-button" type="button" onClick={removeRoom}>Chiudi progetto</button>}
           <div className="phase-card"><span className="phase-index">0.2</span><div><p className="eyebrow">Modalità prova</p><strong>Progetto render configurabile</strong><p>Materiali, colori, mobili e Freeze funzionano. La generazione fotografica richiederà la chiave AI.</p></div></div>
         </aside>
       </div>
-      {renderSummaryOpen && <div className="render-modal" role="dialog" aria-modal="true" aria-labelledby="render-summary-title"><div className="render-modal-card"><button className="modal-close" type="button" onClick={() => setRenderSummaryOpen(false)} aria-label="Chiudi riepilogo">×</button><p className="eyebrow">Richiesta pronta</p><h2 id="render-summary-title">Prima del render reale</h2><div className="render-checks"><div><span>Superfici con materiale</span><strong>{surfaces.filter((surface) => surface.materialId).length}</strong></div><div><span>Zone protette</span><strong>{surfaces.filter((surface) => surface.frozen).length}</strong></div><div><span>Mobili richiesti</span><strong>{furniture.length}</strong></div></div><div className="render-list"><strong>Il motore riceverà:</strong><p>{surfaces.filter((surface) => surface.materialId).map((surface) => `${surface.name}: ${materialMap.get(surface.materialId!)?.name ?? 'materiale'}`).join(' · ') || 'Nessun materiale ancora applicato'}</p><p>{furniture.length ? `Arredi: ${furniture.join(', ')}` : 'Nessun arredo aggiunto'}</p></div><div className="engine-warning"><span>AI</span><p><strong>Render fotografico non ancora collegato</strong>Questa schermata prepara una richiesta reale, ma non inventa un’immagine. Dopo la chiave, lo stesso pulsante genererà il risultato.</p></div><button className="modal-primary" type="button" onClick={() => setRenderSummaryOpen(false)}>Continua a configurare</button></div></div>}
+      {renderSummaryOpen && <div className="render-modal" role="dialog" aria-modal="true" aria-labelledby="render-summary-title"><div className="render-modal-card"><button className="modal-close" type="button" onClick={() => setRenderSummaryOpen(false)} aria-label="Chiudi riepilogo">×</button><p className="eyebrow">Richiesta pronta</p><h2 id="render-summary-title">Prima del render reale</h2><div className="render-checks"><div><span>Superfici con materiale</span><strong>{surfaces.filter((surface) => surface.materialId).length}</strong></div><div><span>Zone protette</span><strong>{surfaces.filter((surface) => surface.frozen).length}</strong></div><div><span>Elementi richiesti</span><strong>{furniture.length + customRequests.length}</strong></div></div><div className="render-list"><strong>Il motore riceverà:</strong><p>{surfaces.filter((surface) => surface.materialId).map((surface) => `${surface.name}: ${materialMap.get(surface.materialId!)?.name ?? 'materiale'}`).join(' · ') || 'Nessun materiale ancora applicato'}</p><p>{furniture.length || customRequests.length ? `Da inserire: ${[...furniture, ...customRequests].join(', ')}` : 'Nessun arredo aggiunto'}</p></div><div className="engine-warning"><span>AI</span><p><strong>Render fotografico non ancora collegato</strong>Questa schermata prepara una richiesta reale, ma non inventa un’immagine. Dopo la chiave, lo stesso pulsante genererà il risultato.</p></div><button className="modal-primary" type="button" onClick={() => setRenderSummaryOpen(false)}>Continua a configurare</button></div></div>}
     </main>
   );
 }

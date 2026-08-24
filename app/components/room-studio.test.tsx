@@ -102,13 +102,27 @@ describe('RoomStudio', () => {
   it('searches demo materials and prepares an honest render summary', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
-    fireEvent.change(screen.getByLabelText('Cerca materiali'), { target: { value: 'salvia' } });
+    const search = screen.getByLabelText('Cerca materiali, colori o mobili');
+    fireEvent.change(search, { target: { value: 'salvia' } });
     fireEvent.click(screen.getByRole('button', { name: /Verde salvia/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Applica a Muro 1' }));
+    fireEvent.change(search, { target: { value: 'divano' } });
     fireEvent.click(screen.getByRole('button', { name: /Divano chiaro/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Prova flusso render' }));
     expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Muro 1: Verde salvia');
-    expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Arredi: Divano chiaro');
+    expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Da inserire: Divano chiaro');
     expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Render fotografico non ancora collegato');
+  });
+
+  it('uses one search for furniture and accepts a free-form render request', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    const search = screen.getByLabelText('Cerca materiali, colori o mobili');
+    fireEvent.change(search, { target: { value: 'cucina' } });
+    fireEvent.click(screen.getByRole('button', { name: /Cucina/ }));
+    expect(screen.getByText('Cucina', { selector: '.selected-assets button' })).toBeInTheDocument();
+    fireEvent.change(search, { target: { value: 'pianoforte nero a coda' } });
+    fireEvent.click(screen.getByRole('button', { name: /Aggiungi “pianoforte nero a coda” al render/ }));
+    expect(screen.getByText('pianoforte nero a coda', { selector: '.selected-assets button' })).toBeInTheDocument();
   });
 });
