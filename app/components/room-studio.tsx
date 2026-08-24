@@ -24,7 +24,8 @@ import {
   surfaceLabels,
 } from '../domain/editor';
 
-type ImportedRoom = AcceptedRoomFile & { previewUrl?: string };
+type SourceType = 'photo' | 'floorplan';
+type ImportedRoom = AcceptedRoomFile & { previewUrl?: string; sourceType: SourceType };
 type StudioMaterial = {
   id: string;
   name: string;
@@ -77,6 +78,31 @@ function createGuidedSurfaces() {
   return guidedPresets.map((surface, index) => ({ ...surface, id: `guided-${Date.now()}-${index}` }));
 }
 
+function createFloorplanOutline(): Surface[] {
+  return [{
+    id: `floorplan-${Date.now()}`,
+    name: 'Perimetro planimetria',
+    kind: 'floor',
+    frozen: false,
+    points: [{ x: .06, y: .06 }, { x: .94, y: .06 }, { x: .94, y: .94 }, { x: .06, y: .94 }],
+  }];
+}
+
+function wallFromLine(start: Point, end: Point): Point[] {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const halfThickness = .008;
+  const offsetX = (-dy / length) * halfThickness;
+  const offsetY = (dx / length) * halfThickness;
+  return [
+    { x: start.x + offsetX, y: start.y + offsetY },
+    { x: end.x + offsetX, y: end.y + offsetY },
+    { x: end.x - offsetX, y: end.y - offsetY },
+    { x: start.x - offsetX, y: start.y - offsetY },
+  ];
+}
+
 function eventPoint(event: ReactPointerEvent<SVGSVGElement>): Point {
   const rect = event.currentTarget.getBoundingClientRect();
   return { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height };
@@ -92,6 +118,7 @@ export function RoomStudio() {
   const [renameDraft, setRenameDraft] = useState('');
   const [drawKind, setDrawKind] = useState<SurfaceKind | null>(null);
   const [quickDraw, setQuickDraw] = useState(false);
+  const [lineWallDraw, setLineWallDraw] = useState(false);
   const [draft, setDraft] = useState<Point[]>([]);
   const [material, setMaterial] = useState<StudioMaterial | null>(null);
   const [materialQuery, setMaterialQuery] = useState('');
@@ -106,6 +133,7 @@ export function RoomStudio() {
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [dragVertex, setDragVertex] = useState<DragVertex | null>(null);
   const roomInputRef = useRef<HTMLInputElement>(null);
+  const pendingSourceTypeRef = useRef<SourceType>('photo');
   const materialInputRef = useRef<HTMLInputElement>(null);
   const shellRef = useRef<HTMLElement>(null);
   const roomBlobRef = useRef<string | null>(null);
@@ -161,7 +189,7 @@ export function RoomStudio() {
     setNotice('Modifica ripristinata.');
   }
 
-  function importRoom(file?: File) {
+  function importRoom(file?: File, sourceType: SourceType = pendingSourceTypeRef.current) {
     if (!file) return;
     const result = validateRoomFile(file);
     if (!result.ok) { setError(result.message); return; }
@@ -172,10 +200,18 @@ export function RoomStudio() {
     if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
     const previewUrl = URL.createObjectURL(file);
     roomBlobRef.current = previewUrl;
-    setRoom({ ...result.value, previewUrl });
-    setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setError(null);
-    setNotice('Foto pronta. Usa “Crea 3 muri + pavimento” oppure aggiungi un muro con quattro tocchi.');
+    const initialSurfaces = sourceType === 'floorplan' ? createFloorplanOutline() : [];
+    setRoom({ ...result.value, previewUrl, sourceType });
+    setSurfaces(initialSurfaces); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(initialSurfaces[0]?.id ?? null); setRenameDraft(initialSurfaces[0]?.name ?? ''); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setError(null);
+    setNotice(sourceType === 'floorplan'
+      ? 'Planimetria riprodotta. Adatta il perimetro con i pallini e aggiungi le pareti interne con due tocchi.'
+      : 'Foto pronta. Crea le superfici automaticamente oppure aggiungi un muro con quattro tocchi.');
     setActiveStep(2);
+  }
+
+  function chooseSourceType(sourceType: SourceType) {
+    pendingSourceTypeRef.current = sourceType;
+    roomInputRef.current?.click();
   }
 
   function onRoomInput(event: ChangeEvent<HTMLInputElement>) {
@@ -189,20 +225,27 @@ export function RoomStudio() {
   function removeRoom() {
     if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
     roomBlobRef.current = null;
-    setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setNotice(null);
+    setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setNotice(null);
   }
 
   function startDrawing(kind: SurfaceKind = 'wall', quick = false) {
     if (!room) return;
-    setDrawKind(kind); setQuickDraw(quick); setDraft([]); setSelectedId(null); setRenameDraft('');
+    setDrawKind(kind); setQuickDraw(quick); setLineWallDraw(false); setDraft([]); setSelectedId(null); setRenameDraft('');
     setNotice(quick ? 'Muro facile: tocca i quattro angoli. Si chiuderà automaticamente.' : `Disegno avanzato: tocca tutti i vertici e poi “Chiudi superficie”.`);
+  }
+
+  function startFloorplanWall() {
+    if (!room) return;
+    setDrawKind('wall'); setQuickDraw(false); setLineWallDraw(true); setDraft([]); setSelectedId(null); setRenameDraft('');
+    setNotice('Parete interna: tocca l’inizio e la fine della linea. Lo spessore viene creato automaticamente.');
   }
 
   function addDraftPoint(event: ReactPointerEvent<SVGSVGElement>) {
     if (!drawKind || dragVertex) return;
     const point = eventPoint(event);
     const next = [...draft, point];
-    if (quickDraw && next.length === 4) completeSurface(next, drawKind);
+    if (lineWallDraw && next.length === 2) completeSurface(wallFromLine(next[0], next[1]), 'wall');
+    else if (quickDraw && next.length === 4) completeSurface(next, drawKind);
     else setDraft(next);
   }
 
@@ -217,11 +260,11 @@ export function RoomStudio() {
     }
     const id = `surface-${Date.now()}-${surfaces.length}`;
     const surface: Surface = { id, name: nextSurfaceName(kind, surfaces), kind, points, frozen: false };
-    commitSurfaces([...surfaces, surface]); setSelectedId(id); setRenameDraft(surface.name); setDraft([]); setDrawKind(null); setQuickDraw(false); setError(null);
+    commitSurfaces([...surfaces, surface]); setSelectedId(id); setRenameDraft(surface.name); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setError(null);
     setNotice(`${surface.name} creata. Trascina i punti per correggerla.`);
   }
 
-  function cancelDrawing() { setDraft([]); setDrawKind(null); setQuickDraw(false); setNotice(null); }
+  function cancelDrawing() { setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setNotice(null); }
 
   function beginVertexDrag(event: ReactPointerEvent<SVGCircleElement>, surfaceId: string, vertexIndex: number) {
     const surface = surfaces.find((item) => item.id === surfaceId);
@@ -333,7 +376,7 @@ export function RoomStudio() {
   function loadDemoRoom() {
     const file = new File(['demo'], 'stanza-esempio.png', { type: 'image/png' });
     const created = createGuidedSurfaces();
-    setRoom({ file, kind: 'image', canPreview: true, displaySize: 'esempio incluso', projectName: 'Stanza esempio', previewUrl: '/og.png' });
+    setRoom({ file, kind: 'image', canPreview: true, displaySize: 'esempio incluso', projectName: 'Stanza esempio', previewUrl: '/og.png', sourceType: 'photo' });
     setRoomRatio(16 / 9); setSurfaces(created); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(created[0].id); setRenameDraft(created[0].name); setError(null);
     setNotice('Esempio pronto. Prova a spostare i vertici, bloccare un muro o caricare un campione.');
     setActiveStep(2);
@@ -353,7 +396,7 @@ export function RoomStudio() {
     <main ref={shellRef} className={`app-shell ${simpleMode ? `simple-mode step-${activeStep}` : 'advanced-mode'}`}>
       <header className="topbar">
         <a href="/projects" className="brand-lockup" aria-label="Vai ai progetti"><div className="brand-mark" aria-hidden="true"><span /><span /></div><div><p className="eyebrow">Studio materiali</p><p className="brand-name">Materia</p></div></a>
-        <div className="project-heading"><span className="status-dot" /><div><p>{projectName}</p><span>{room ? 'Editor manuale attivo · originale protetto' : 'Nuovo progetto locale'}</span></div></div>
+        <div className="project-heading"><span className="status-dot" /><div><p>{projectName}</p><span>{room ? `${room.sourceType === 'floorplan' ? 'Planimetria' : 'Foto'} · originale protetto` : 'Nuovo progetto locale'}</span></div></div>
         <div className="top-actions"><button className="mode-switch" type="button" onClick={() => setSimpleMode((current) => !current)}>{simpleMode ? 'Strumenti avanzati' : 'Modalità semplice'}</button><button className="avatar" type="button" aria-label="Profilo locale">AG</button></div>
       </header>
 
@@ -371,8 +414,8 @@ export function RoomStudio() {
 
         <section className="stage" aria-labelledby="editor-title">
           <div className="editor-toolbar">
-            <div className="tool-group"><button className={`tool-button ${!drawKind ? 'is-selected' : ''}`} type="button" onClick={cancelDrawing} aria-label="Seleziona">↖</button><button className="tool-button history-button" type="button" onClick={undo} disabled={!pastSurfaces.length} aria-label="Annulla ultima modifica">↶</button><button className="tool-button history-button" type="button" onClick={redo} disabled={!futureSurfaces.length} aria-label="Ripristina modifica">↷</button><button className={`draw-button easy-draw-button ${quickDraw ? 'is-selected' : ''}`} type="button" onClick={() => startDrawing('wall', true)} disabled={!room}>＋ Aggiungi muro facile</button><button className={`advanced-draw-button ${drawKind && !quickDraw ? 'is-selected' : ''}`} type="button" onClick={() => startDrawing('wall', false)} disabled={!room}>Avanzato</button>{drawKind && !quickDraw && <select className="kind-select" aria-label="Tipo superficie" value={drawKind} onChange={(event) => { setDrawKind(event.target.value as SurfaceKind); setDraft([]); }}>{kinds.map((kind) => <option value={kind} key={kind}>{surfaceLabels[kind]}</option>)}</select>}</div>
-            {drawKind ? <div className="drawing-actions"><span>{quickDraw ? `${draft.length}/4 angoli` : `${draft.length} punti`}</span><button type="button" onClick={cancelDrawing}>Annulla</button>{!quickDraw && <button className="finish-button" type="button" onClick={finishSurface} disabled={draft.length < 3}>Chiudi superficie</button>}</div> : <span className="mode-label">{selected ? `Selezionata: ${selected.name}` : room ? 'Scegli “muro facile” o la creazione automatica' : 'Carica una fotografia per iniziare'}</span>}
+            <div className="tool-group"><button className={`tool-button ${!drawKind ? 'is-selected' : ''}`} type="button" onClick={cancelDrawing} aria-label="Seleziona">↖</button><button className="tool-button history-button" type="button" onClick={undo} disabled={!pastSurfaces.length} aria-label="Annulla ultima modifica">↶</button><button className="tool-button history-button" type="button" onClick={redo} disabled={!futureSurfaces.length} aria-label="Ripristina modifica">↷</button>{room?.sourceType === 'floorplan' ? <button className={`draw-button easy-draw-button ${lineWallDraw ? 'is-selected' : ''}`} type="button" onClick={startFloorplanWall}>＋ Parete con 2 tocchi</button> : <button className={`draw-button easy-draw-button ${quickDraw ? 'is-selected' : ''}`} type="button" onClick={() => startDrawing('wall', true)} disabled={!room}>＋ Aggiungi muro facile</button>}<button className={`advanced-draw-button ${drawKind && !quickDraw && !lineWallDraw ? 'is-selected' : ''}`} type="button" aria-label="Avanzato" onClick={() => startDrawing('wall', false)} disabled={!room}>Disegno libero</button>{drawKind && !quickDraw && !lineWallDraw && <select className="kind-select" aria-label="Tipo superficie" value={drawKind} onChange={(event) => { setDrawKind(event.target.value as SurfaceKind); setDraft([]); }}>{kinds.map((kind) => <option value={kind} key={kind}>{surfaceLabels[kind]}</option>)}</select>}</div>
+            {drawKind ? <div className="drawing-actions"><span>{lineWallDraw ? `${draft.length}/2 punti` : quickDraw ? `${draft.length}/4 angoli` : `${draft.length} punti`}</span><button type="button" onClick={cancelDrawing}>Annulla</button>{!quickDraw && !lineWallDraw && <button className="finish-button" type="button" onClick={finishSurface} disabled={draft.length < 3}>Chiudi superficie</button>}</div> : <span className="mode-label">{selected ? `Selezionata: ${selected.name}` : room?.sourceType === 'floorplan' ? 'Tocca “Parete con 2 tocchi” per ricalcare i divisori' : room ? 'Scegli “muro facile” o la creazione automatica' : 'Carica una foto o una planimetria per iniziare'}</span>}
           </div>
 
           <div className="canvas-wrap"><div className={`canvas ${isDraggingFile ? 'is-dragging' : ''}`} id="editor-title" style={room ? { aspectRatio: roomRatio } : undefined} onDragEnter={() => setIsDraggingFile(true)} onDragLeave={() => setIsDraggingFile(false)} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
@@ -386,16 +429,16 @@ export function RoomStudio() {
                 {surfaces.map((surface) => <g key={surface.id} className={surface.frozen ? 'is-frozen' : ''}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{surface.id === selectedId && surface.points.map((point, index) => <circle key={`${surface.id}-${index}`} cx={point.x * 1000} cy={point.y * 625} r="10" className="surface-vertex" onPointerDown={(event) => beginVertexDrag(event, surface.id, index)} />)}</g>)}
                 {draft.length > 0 && <><polyline points={pointsToSvg(draft)} fill="none" stroke="#d7f05c" strokeWidth="5" vectorEffect="non-scaling-stroke" />{draft.map((point, index) => <circle key={index} cx={point.x * 1000} cy={point.y * 625} r="9" className="draft-vertex" />)}</>}
               </svg><div className="import-status"><span className="status-dot" /><div><strong>Originale intatto</strong><small>{importedCaption}</small></div></div>
-            </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Versione operativa</p><h1>Carica la stanza</h1><p>Usa una foto JPG o PNG. Poi disegna o adatta i contorni delle superfici.</p><label className="primary-button" htmlFor="room-file">Scegli una fotografia</label><button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>oppure trascina il file qui</small><small>JPG o PNG · massimo 20 MB</small></div></>}
+            </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Inizia da ciò che hai</p><h1>Cosa vuoi caricare?</h1><p>Scegli una foto della stanza oppure una planimetria. L’originale resterà sempre intatto.</p><div className="source-actions"><button className="source-card is-primary" type="button" onClick={() => chooseSourceType('photo')}><span>▣</span><strong>Foto stanza</strong><small>Per cambiare muri, pavimento e arredi</small></button><button className="source-card" type="button" onClick={() => chooseSourceType('floorplan')}><span>⌗</span><strong>Planimetria</strong><small>Per ricalcare perimetro e pareti interne</small></button></div><button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>JPG o PNG · massimo 20 MB</small></div></>}
             {isDraggingFile && <div className="drop-overlay"><strong>Rilascia per importare</strong><span>La foto resterà nel browser.</span></div>}
           </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
           <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" onChange={onRoomInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" onChange={onMaterialInput} />
-          <div className="status-bar"><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'La foto originale resta sotto le superfici e non viene modificata.'}</p>{room && surfaces.length === 0 && <button className="guided-start-button" type="button" aria-label="Crea 3 muri + pavimento" onClick={seedGuidedSurfaces}>Crea superfici automaticamente</button>}{room && surfaces.length > 0 && (!simpleMode || activeStep === 4) && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{simpleMode && activeStep === 2 && surfaces.length > 0 && <button type="button" onClick={() => goToStep(3)}>Continua: cerca materiali</button>}{simpleMode && activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
+          <div className="status-bar"><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'L’originale resta sotto i contorni e non viene modificato.'}</p>{room?.sourceType === 'photo' && surfaces.length === 0 && <button className="guided-start-button" type="button" aria-label="Crea 3 muri + pavimento" onClick={seedGuidedSurfaces}>Crea superfici automaticamente</button>}{room?.sourceType === 'floorplan' && simpleMode && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && (!simpleMode || activeStep === 4) && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{simpleMode && activeStep === 2 && surfaces.length > 0 && <button type="button" onClick={() => goToStep(3)}>Continua: cerca materiali</button>}{simpleMode && activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
         </section>
 
         <aside className="properties-panel" aria-label="Proprietà">
           <div className="panel-heading"><div><p className="eyebrow">Controlli</p><h2>{selected?.name ?? (room ? 'Nessuna selezione' : 'Importa una stanza')}</h2></div>{selected && <span className="type-badge">{surfaceLabels[selected.kind]}</span>}</div>
-          {room && <div className="asset-card"><span>IMG</span><div><strong>{room.file.name}</strong><small>{importedCaption}</small></div><button type="button" onClick={() => roomInputRef.current?.click()}>Sostituisci</button></div>}
+          {room && <div className="asset-card"><span>{room.sourceType === 'floorplan' ? 'PLAN' : 'IMG'}</span><div><strong>{room.file.name}</strong><small>{room.sourceType === 'floorplan' ? 'Planimetria originale' : importedCaption}</small></div><button type="button" onClick={() => chooseSourceType(room.sourceType)}>Sostituisci</button></div>}
           {selected ? <><div className="property-section"><div className="property-title"><span>Nome superficie</span><span className="editable-badge">Personalizzabile</span></div><div className="rename-control"><input aria-label="Nome superficie" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} /><button type="button" onClick={renameSelected} disabled={!renameDraft.trim() || renameDraft.trim() === selected.name}>Salva</button></div></div><div className="property-section"><div className="property-title"><span>Protezione superficie</span><span className={`editable-badge ${selected.frozen ? 'frozen' : ''}`}>{selected.frozen ? 'Frozen' : 'Modificabile'}</span></div><button className={`freeze-button ${selected.frozen ? 'is-active' : ''}`} type="button" aria-label={selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'} onClick={toggleFreeze}><span>{selected.frozen ? '◆' : '◇'}</span>{selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'}<small>{selected.frozen ? 'Protetta' : 'Attivo subito'}</small></button><button className="freeze-others-button" type="button" onClick={freezeAllExceptSelected}>Blocca tutto tranne {selected.name}</button></div>
             <div className="property-section"><div className="property-title"><span>Ricerca unica</span><button type="button" onClick={() => materialInputRef.current?.click()}>Carica foto</button></div><input className="material-search" aria-label="Cerca materiali, colori o mobili" value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} placeholder="Cerca pavimento, colore, divano, cucina…" /><div className="search-scope"><span>Materiali</span><span>Colori</span><span>Mobili</span><span className="internet-pending">Internet dopo la chiave</span></div><div className="material-results">{filteredMaterials.map((item) => <button type="button" key={item.id} className={`material-result ${material?.id === item.id ? 'is-selected' : ''}`} onClick={() => chooseMaterial(item)}><span className={`catalog-swatch ${item.pattern ?? 'color'}`} style={{ '--swatch-color': item.color } as CSSProperties} /><span><strong>{item.name}</strong><small>{item.category} · {item.description}</small></span></button>)}{filteredFurniture.map((item) => <button type="button" key={item.name} className={`material-result furniture-result ${furniture.includes(item.name) ? 'is-selected' : ''}`} onClick={() => toggleFurniture(item.name)}><span className="furniture-icon">{furniture.includes(item.name) ? '✓' : '+'}</span><span><strong>{item.name}</strong><small>Mobili · {item.description}</small></span></button>)}{filteredMaterials.length === 0 && filteredFurniture.length === 0 && <div className="custom-search-result"><p>Nessun elemento locale con questo nome.</p><button type="button" onClick={addCustomRequest}>Aggiungi “{materialQuery.trim()}” al render</button></div>}</div><div className="custom-color"><input type="color" aria-label="Scegli colore personalizzato" value={customColor} onChange={(event) => setCustomColor(event.target.value)} /><button type="button" onClick={chooseCustomColor}>Usa questo colore</button></div>{material?.previewUrl && <div className="loaded-material"><img src={material.previewUrl} alt="Campione materiale" /><div><strong>{material.name}</strong><small>{material.description}</small></div></div>}<button className="apply-button" type="button" aria-label={`Applica a ${selected.name}`} onClick={applyMaterial} disabled={!material || selected.frozen}>Applica {material?.name ?? 'materiale'} a {selected.name}</button><p className="material-search-note">Puoi già configurare tutto. Con la chiave, la stessa ricerca cercherà anche prodotti reali su internet mostrando marca e fonte.</p></div>
             <div className="property-section"><div className="property-title"><span>Elementi nel render</span><span className="editable-badge">{furniture.length + customRequests.length} scelti</span></div>{furniture.length || customRequests.length ? <div className="selected-assets">{furniture.map((item) => <button type="button" key={item} onClick={() => toggleFurniture(item)}>{item}<span>×</span></button>)}{customRequests.map((item) => <button type="button" key={item} onClick={() => setCustomRequests((current) => current.filter((name) => name !== item))}>{item}<span>×</span></button>)}</div> : <p className="no-results">Cerca un mobile o scrivi liberamente ciò che vuoi inserire.</p>}<p className="material-search-note">Con il motore AI potrai caricare anche la foto esatta del mobile e indicarne la posizione.</p></div>

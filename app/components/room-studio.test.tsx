@@ -10,7 +10,7 @@ beforeAll(() => {
 describe('RoomStudio', () => {
   it('shows the product-specific import flow', () => {
     render(<RoomStudio />);
-    expect(screen.getByRole('heading', { name: 'Carica la stanza' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Cosa vuoi caricare?' })).toBeInTheDocument();
     expect(screen.getByLabelText('Superfici della stanza')).toBeInTheDocument();
   });
 
@@ -28,6 +28,20 @@ describe('RoomStudio', () => {
     expect(screen.getByText('Soggiorno verde')).toBeInTheDocument();
     expect(screen.getByText('Originale intatto')).toBeInTheDocument();
     expect(screen.getByText('Partenza semplice')).toBeInTheDocument();
+  });
+
+  it('imports a floorplan, creates its perimeter and offers two-tap internal walls', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: /Planimetria/ }));
+    fireEvent.change(document.querySelector('#room-file') as HTMLInputElement, { target: { files: [new File(['plan'], 'casa.png', { type: 'image/png' })] } });
+    expect(screen.getAllByText('Perimetro planimetria').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Planimetria riprodotta/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Aggiungi parete interna' }));
+    const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+    fireEvent.pointerDown(overlay, { clientX: 250, clientY: 250 });
+    fireEvent.pointerDown(overlay, { clientX: 750, clientY: 250 });
+    expect(screen.getAllByText('Muro 1').length).toBeGreaterThan(0);
   });
 
   it('creates guided surfaces and freezes the selected wall', () => {
