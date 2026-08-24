@@ -127,9 +127,10 @@ describe('RoomStudio', () => {
     fireEvent.change(search, { target: { value: 'divano' } });
     fireEvent.click(screen.getByRole('button', { name: /Divano chiaro/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Prova flusso render' }));
-    expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Muro 1: Verde salvia');
-    expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Da inserire: Divano chiaro');
-    expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Grok pronto, chiave server da configurare');
+    expect(screen.getByRole('dialog', { name: 'Crea il render reale' })).toHaveTextContent('Muro 1: Verde salvia');
+    expect(screen.getByRole('dialog', { name: 'Crea il render reale' })).toHaveTextContent('Da inserire: Divano chiaro');
+    expect(screen.getByRole('dialog', { name: 'Crea il render reale' })).toHaveTextContent('Grok non ancora attivo');
+    expect(screen.getByRole('button', { name: 'Collega la chiave xAI' })).toBeInTheDocument();
   });
 
   it('uses one search for furniture and accepts a free-form render request', () => {

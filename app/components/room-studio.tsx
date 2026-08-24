@@ -256,6 +256,7 @@ export function RoomStudio() {
   const [isEmptyingRoom, setIsEmptyingRoom] = useState(false);
   const [isSearchingProducts, setIsSearchingProducts] = useState(false);
   const [isApplyingProduct, setIsApplyingProduct] = useState(false);
+  const [isRendering, setIsRendering] = useState(false);
   const [aiStatus, setAiStatus] = useState<AiStatus>('checking');
   const [aiProviderLabel, setAiProviderLabel] = useState<string | null>(null);
   const [processedPreview, setProcessedPreview] = useState<string | null>(null);
@@ -317,7 +318,7 @@ export function RoomStudio() {
     if (!query) return [];
     return furnitureCatalog.filter((item) => `${item.name} ${item.description}`.toLocaleLowerCase('it').includes(query));
   }, [materialQuery]);
-  const materialMap = useMemo(() => new Map(catalogMaterials.concat(material ? [material] : []).map((item) => [item.id, item])), [material]);
+  const materialMap = useMemo(() => new Map(catalogMaterials.concat(onlineMaterials, material ? [material] : []).map((item) => [item.id, item])), [material, onlineMaterials]);
 
   function commitSurfaces(next: Surface[]) {
     setPastSurfaces((history) => [...history, surfaces].slice(-40));
@@ -590,9 +591,10 @@ export function RoomStudio() {
       ?? null;
   }
 
-  async function createMaskedInput(options: { editableSurface?: Surface; frozenSurfaces?: Surface[] }) {
-    if (!room?.previewUrl) throw new Error('La foto della stanza non è pronta.');
-    const image = await loadImageSource(room.previewUrl);
+  async function createMaskedInput(options: { editableSurface?: Surface; frozenSurfaces?: Surface[]; sourceUrl?: string }) {
+    const sourceUrl = options.sourceUrl ?? room?.previewUrl;
+    if (!sourceUrl) throw new Error('La foto della stanza non è pronta.');
+    const image = await loadImageSource(sourceUrl);
     const maxSide = 1536;
     const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
     const width = Math.max(1, Math.round(image.naturalWidth * scale));
@@ -826,6 +828,49 @@ export function RoomStudio() {
     }
   }
 
+  async function createFinalRender() {
+    if (!room?.previewUrl || room.sourceType !== 'photo' || isRendering) return;
+    if (aiStatus !== 'ready') {
+      setRenderSummaryOpen(false);
+      setError(aiStatus === 'checking'
+        ? 'Sto ancora verificando Grok. Riprova tra un momento.'
+        : 'Il render reale non può partire: manca la tua chiave xAI nei segreti del server.');
+      return;
+    }
+
+    const frozenSurfaces = surfaces.filter((surface) => surface.frozen);
+    const sourceUrl = showProcessedPreview && processedPreview ? processedPreview : room.previewUrl;
+    const materialAssignments = surfaces.filter((surface) => surface.materialId).map((surface) => {
+      const assigned = materialMap.get(surface.materialId!);
+      return `${surface.name}: ${assigned?.brand ? `${assigned.brand} ` : ''}${assigned?.name ?? 'materiale scelto'} (${assigned?.description ?? 'mantieni il campione selezionato'})`;
+    });
+
+    setIsRendering(true); setError(null); setRenderSummaryOpen(false);
+    setNotice('Grok sta creando il render fotografico. Le aree Freeze verranno ricopiate dall’originale.');
+    try {
+      const { inputImage, mask } = await createMaskedInput({ frozenSurfaces, sourceUrl });
+      const form = new FormData();
+      form.append('image', inputImage, room.file.name.replace(/\.(heic|heif)$/i, '.png'));
+      form.append('mask', mask, 'freeze-mask.png');
+      form.append('materials', materialAssignments.join('\n'));
+      form.append('furniture', furniture.join(', '));
+      form.append('requests', customRequests.join(', '));
+      form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
+      if (material?.previewUrl && materialAssignments.length) form.append('imageUrl', material.previewUrl);
+      const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/render-room'), { method: 'POST', body: form }, 240000);
+      if (!response.ok || !result.image) throw new Error(result.message ?? 'Render non disponibile.');
+      const protectedPreview = await protectAiResult(result.image, { frozenSurfaces });
+      setProcessedPreview(protectedPreview); setProcessedLabel('Render finale'); setShowProcessedPreview(true);
+      setActiveStep(4);
+      setNotice('Render finale pronto. Puoi confrontarlo con la foto originale; le zone Freeze sono identiche.');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Non sono riuscito a creare il render.');
+      setNotice(null);
+    } finally {
+      setIsRendering(false);
+    }
+  }
+
   function loadDemoRoom() {
     if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
     processedBlobRef.current = null;
@@ -922,7 +967,7 @@ export function RoomStudio() {
           <div className="phase-card"><span className="phase-index">0.3</span><div><p className="eyebrow">Modalità prova</p><strong>Grok e Freeze pronti</strong><p>Ricerca verificata, stanza vuota e render sono predisposti; per attivarli sul server serve la chiave xAI.</p></div></div>
         </aside>
       </div>
-      {renderSummaryOpen && <div className="render-modal" role="dialog" aria-modal="true" aria-labelledby="render-summary-title"><div className="render-modal-card"><button className="modal-close" type="button" onClick={() => setRenderSummaryOpen(false)} aria-label="Chiudi riepilogo">×</button><p className="eyebrow">Richiesta pronta</p><h2 id="render-summary-title">Prima del render reale</h2><div className="render-checks"><div><span>Superfici con materiale</span><strong>{surfaces.filter((surface) => surface.materialId).length}</strong></div><div><span>Zone protette</span><strong>{surfaces.filter((surface) => surface.frozen).length}</strong></div><div><span>Elementi richiesti</span><strong>{furniture.length + customRequests.length}</strong></div></div><div className="render-list"><strong>Il motore riceverà:</strong><p>{surfaces.filter((surface) => surface.materialId).map((surface) => `${surface.name}: ${materialMap.get(surface.materialId!)?.name ?? 'materiale'}`).join(' · ') || 'Nessun materiale ancora applicato'}</p><p>{furniture.length || customRequests.length ? `Da inserire: ${[...furniture, ...customRequests].join(', ')}` : 'Nessun arredo aggiunto'}</p></div><div className="engine-warning"><span>AI</span><p><strong>{aiStatus === 'ready' ? `${aiProviderLabel ?? 'IA'} attiva` : 'Grok pronto, chiave server da configurare'}</strong>L’app invierà foto, prodotto e maschere Freeze al motore fotografico. Il risultato viene poi ricomposto con l’originale nelle aree protette.</p></div><button className="modal-primary" type="button" onClick={() => setRenderSummaryOpen(false)}>Continua a configurare</button></div></div>}
+      {renderSummaryOpen && <div className="render-modal" role="dialog" aria-modal="true" aria-labelledby="render-summary-title"><div className="render-modal-card"><button className="modal-close" type="button" onClick={() => setRenderSummaryOpen(false)} aria-label="Chiudi riepilogo">×</button><p className="eyebrow">Richiesta pronta</p><h2 id="render-summary-title">Crea il render reale</h2><div className="render-checks"><div><span>Superfici con materiale</span><strong>{surfaces.filter((surface) => surface.materialId).length}</strong></div><div><span>Zone protette</span><strong>{surfaces.filter((surface) => surface.frozen).length}</strong></div><div><span>Elementi richiesti</span><strong>{furniture.length + customRequests.length}</strong></div></div><div className="render-list"><strong>Il motore riceverà:</strong><p>{surfaces.filter((surface) => surface.materialId).map((surface) => `${surface.name}: ${materialMap.get(surface.materialId!)?.name ?? 'materiale'}`).join(' · ') || 'Nessun materiale ancora applicato'}</p><p>{furniture.length || customRequests.length ? `Da inserire: ${[...furniture, ...customRequests].join(', ')}` : 'Nessun arredo aggiunto'}</p></div><div className="engine-warning"><span>AI</span><p><strong>{aiStatus === 'ready' ? `${aiProviderLabel ?? 'IA'} attiva` : 'Grok non ancora attivo'}</strong>{aiStatus === 'ready' ? 'La foto sarà elaborata davvero; al termine le aree Freeze verranno ricopiate dall’originale.' : 'Per avviare il render serve la tua chiave xAI salvata come segreto del server.'}</p></div><button className="modal-primary" type="button" onClick={() => void createFinalRender()} disabled={isRendering}>{isRendering ? 'Creo il render…' : aiStatus === 'ready' ? 'Crea render reale con Grok' : 'Collega la chiave xAI'}</button><button className="modal-secondary" type="button" onClick={() => setRenderSummaryOpen(false)}>Torna alle modifiche</button></div></div>}
     </main>
   );
 }
