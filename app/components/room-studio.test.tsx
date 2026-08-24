@@ -28,6 +28,7 @@ describe('RoomStudio', () => {
     expect(screen.getByText('Soggiorno verde')).toBeInTheDocument();
     expect(screen.getByText('Originale intatto')).toBeInTheDocument();
     expect(screen.getByText('Partenza semplice')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '⌂ Svuota la stanza' })).toBeInTheDocument();
   });
 
   it('imports a floorplan, creates its perimeter and offers two-tap internal walls', () => {

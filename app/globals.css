@@ -86,6 +86,10 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .surface-vertex { cursor:grab; touch-action:none; filter:drop-shadow(0 2px 3px rgba(15,37,32,.3)); }
 .is-frozen .surface-vertex { fill:#293633; cursor:not-allowed; }
 .draft-vertex { fill:var(--lime); }
+.before-after-toggle { position:absolute; z-index:5; top:10px; right:10px; display:flex; gap:3px; padding:3px; border-radius:10px; background:rgba(255,255,255,.9); box-shadow:0 4px 16px rgba(15,35,30,.16); backdrop-filter:blur(8px); }
+.before-after-toggle button { min-height:30px; padding:0 10px; border:0; border-radius:7px; background:transparent; color:#5f6b67; font-size:9px; font-weight:750; cursor:pointer; }
+.before-after-toggle button.is-active { background:var(--accent); color:#fff; }
+.empty-room-button { background:var(--ink)!important; color:#fff!important; }
 .import-status { z-index:4; pointer-events:none; }
 .status-bar { display:flex; align-items:center; gap:9px; margin:12px 18px 16px; padding:10px 12px; border:1px solid #d7ddd9; border-radius:13px; background:#fff; box-shadow:0 4px 14px rgba(25,41,36,.05); }
 .status-bar p { min-width:0; flex:1; margin:0; color:#64706b; font-size:10px; line-height:1.4; }

@@ -209,6 +209,9 @@ export function RoomStudio() {
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [isImportingRoom, setIsImportingRoom] = useState(false);
   const [isAutoFitting, setIsAutoFitting] = useState(false);
+  const [isEmptyingRoom, setIsEmptyingRoom] = useState(false);
+  const [emptyRoomPreview, setEmptyRoomPreview] = useState<string | null>(null);
+  const [showEmptyRoom, setShowEmptyRoom] = useState(false);
   const [dragVertex, setDragVertex] = useState<DragVertex | null>(null);
   const roomInputRef = useRef<HTMLInputElement>(null);
   const floorplanInputRef = useRef<HTMLInputElement>(null);
@@ -281,6 +284,7 @@ export function RoomStudio() {
       roomBlobRef.current = previewUrl;
       const initialSurfaces = sourceType === 'floorplan' ? createFloorplanOutline() : [];
       setRoom({ ...result.value, previewUrl, sourceType });
+      setEmptyRoomPreview(null); setShowEmptyRoom(false);
       setSurfaces(initialSurfaces); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(initialSurfaces[0]?.id ?? null); setRenameDraft(initialSurfaces[0]?.name ?? ''); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setError(null);
       setNotice(sourceType === 'floorplan'
         ? 'Planimetria riprodotta. Adatta il perimetro con i pallini e aggiungi le pareti interne con due tocchi.'
@@ -314,7 +318,7 @@ export function RoomStudio() {
   function removeRoom() {
     if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
     roomBlobRef.current = null;
-    setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setNotice(null);
+    setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setEmptyRoomPreview(null); setShowEmptyRoom(false); setNotice(null);
   }
 
   function startDrawing(kind: SurfaceKind = 'wall', quick = false) {
@@ -489,6 +493,31 @@ export function RoomStudio() {
     }
   }
 
+  async function emptyRoom() {
+    if (!room?.previewUrl || room.sourceType !== 'photo' || isEmptyingRoom) return;
+    setIsEmptyingRoom(true); setError(null);
+    setNotice('L’IA sta riconoscendo e rimuovendo i mobili. L’originale resta sempre disponibile.');
+    try {
+      const image = await fetch(room.previewUrl).then((response) => response.blob());
+      const form = new FormData();
+      form.append('image', image, room.file.name.replace(/\.(heic|heif)$/i, '.jpg'));
+      form.append('protectedAreas', surfaces.filter((surface) => surface.frozen).map((surface) => surface.name).join(', '));
+      const endpoint = window.location.protocol === 'capacitor:'
+        ? 'https://materia-stanze-ai.andreagadducci.chatgpt.site/api/empty-room'
+        : '/api/empty-room';
+      const response = await fetch(endpoint, { method: 'POST', body: form });
+      const result = await response.json() as { image?: string; message?: string };
+      if (!response.ok || !result.image) throw new Error(result.message ?? 'Immagine non disponibile.');
+      setEmptyRoomPreview(result.image); setShowEmptyRoom(true);
+      setNotice('Stanza vuota pronta. Confrontala con l’originale e scegli quale usare.');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Non sono riuscito a svuotare la stanza.');
+      setNotice(null);
+    } finally {
+      setIsEmptyingRoom(false);
+    }
+  }
+
   function loadDemoRoom() {
     const file = new File(['demo'], 'stanza-esempio.png', { type: 'image/png' });
     const created = createGuidedSurfaces();
@@ -536,7 +565,7 @@ export function RoomStudio() {
 
           <div className="canvas-wrap"><div className={`canvas ${isDraggingFile ? 'is-dragging' : ''}`} id="editor-title" style={room ? { aspectRatio: roomRatio } : undefined} onDragEnter={() => setIsDraggingFile(true)} onDragLeave={() => setIsDraggingFile(false)} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
             {room?.previewUrl ? <div className="editor-media">
-              <img ref={roomImageRef} src={room.previewUrl} alt={`Originale importato: ${room.file.name}`} onLoad={(event) => setRoomRatio(event.currentTarget.naturalWidth / event.currentTarget.naturalHeight)} />
+              <img ref={roomImageRef} src={showEmptyRoom && emptyRoomPreview ? emptyRoomPreview : room.previewUrl} alt={showEmptyRoom ? 'Stanza svuotata dall’IA' : `Originale importato: ${room.file.name}`} onLoad={(event) => setRoomRatio(event.currentTarget.naturalWidth / event.currentTarget.naturalHeight)} />
               <svg className={`surface-overlay ${drawKind ? 'is-drawing' : ''}`} viewBox="0 0 1000 625" preserveAspectRatio="none" onPointerDown={addDraftPoint} onPointerMove={moveDraggedVertex} onPointerUp={endVertexDrag} onPointerCancel={endVertexDrag}>
                 <defs>
                   {catalogMaterials.filter((item) => item.pattern).map((item) => <pattern id={`catalog-material-${item.id}`} key={item.id} width={item.pattern === 'wood' ? 180 : 120} height={item.pattern === 'wood' ? 42 : 120} patternUnits="userSpaceOnUse"><rect width="100%" height="100%" fill={item.color} /><path d={item.pattern === 'wood' ? 'M0 2H180 M0 40H180 M45 2V40 M135 2V40' : 'M0 1H120 M1 0V120'} stroke="rgba(67,55,43,.22)" strokeWidth="3" /><path d={item.pattern === 'stone' ? 'M8 38 C38 17 64 55 110 25 M14 92 C45 68 77 106 116 74' : ''} fill="none" stroke="rgba(255,255,255,.24)" strokeWidth="5" /></pattern>)}
@@ -544,13 +573,14 @@ export function RoomStudio() {
                 </defs>
                 {surfaces.map((surface) => <g key={surface.id} className={surface.frozen ? 'is-frozen' : ''}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{surface.id === selectedId && surface.points.map((point, index) => <circle key={`${surface.id}-${index}`} cx={point.x * 1000} cy={point.y * 625} r="14" className="surface-vertex" onPointerDown={(event) => beginVertexDrag(event, surface.id, index)} />)}</g>)}
                 {draft.length > 0 && <><polyline points={pointsToSvg(draft)} fill="none" stroke="#d7f05c" strokeWidth="5" vectorEffect="non-scaling-stroke" />{draft.map((point, index) => <circle key={index} cx={point.x * 1000} cy={point.y * 625} r="9" className="draft-vertex" />)}</>}
-              </svg><div className="import-status"><span className="status-dot" /><div><strong>Originale intatto</strong><small>{importedCaption}</small></div></div>
+              </svg><div className="import-status"><span className="status-dot" /><div><strong>{showEmptyRoom ? 'Stanza vuota' : 'Originale intatto'}</strong><small>{showEmptyRoom ? 'Generata dall’IA · originale disponibile' : importedCaption}</small></div></div>
+              {emptyRoomPreview && <div className="before-after-toggle" aria-label="Confronta originale e stanza vuota"><button type="button" className={!showEmptyRoom ? 'is-active' : ''} onClick={() => setShowEmptyRoom(false)}>Originale</button><button type="button" className={showEmptyRoom ? 'is-active' : ''} onClick={() => setShowEmptyRoom(true)}>Stanza vuota</button></div>}
             </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Inizia da ciò che hai</p><h1>Cosa vuoi caricare?</h1><p>Scegli una foto della stanza oppure una planimetria. L’originale resterà sempre intatto.</p><div className="source-actions"><label className="source-card is-primary" htmlFor="room-file"><span>▣</span><strong>Foto stanza</strong><small>Apri direttamente Foto su iPhone e iPad</small></label><label className="source-card" htmlFor="floorplan-file"><span>⌗</span><strong>Planimetria</strong><small>Ricalca perimetro e pareti interne</small></label></div><button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>JPG, PNG o HEIC · massimo 20 MB</small></div></>}
             {isDraggingFile && <div className="drop-overlay"><strong>Rilascia per importare</strong><span>La foto resterà nel browser.</span></div>}
             {isImportingRoom && <div className="processing-overlay" role="status"><span className="processing-spinner" /><strong>Preparo la foto…</strong><small>Le immagini grandi vengono ottimizzate per evitare blocchi.</small></div>}
           </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
           <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" onChange={onMaterialInput} />
-          <div className="status-bar"><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Automatico per iniziare, pallini per correggere a mano.'}</p>{room?.sourceType === 'photo' && activeStep === 2 && <button className="guided-start-button" type="button" aria-label="Adatta superfici alla foto" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting}>{isAutoFitting ? 'Sto adattando…' : surfaces.length ? '✦ Adatta di nuovo' : '✦ Adatta automaticamente'}</button>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && <button type="button" onClick={() => goToStep(3)}>Continua: cerca materiali</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
+          <div className="status-bar"><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Automatico per iniziare, pallini per correggere a mano.'}</p>{room?.sourceType === 'photo' && activeStep === 2 && <button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom}>{isEmptyingRoom ? 'Svuoto la stanza…' : emptyRoomPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && <button className="guided-start-button" type="button" aria-label="Adatta superfici alla foto" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting}>{isAutoFitting ? 'Sto adattando…' : surfaces.length ? '✦ Adatta di nuovo' : '✦ Adatta automaticamente'}</button>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && <button type="button" onClick={() => goToStep(3)}>Continua: cerca materiali</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
         </section>
 
         <aside className="properties-panel" aria-label="Proprietà">
