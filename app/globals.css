@@ -101,6 +101,11 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .freeze-button { opacity:1; cursor:pointer; }
 .freeze-button.is-active { border-color:#9a85a6; background:#f2eef4; color:#60486d; }
 .freeze-others-button { width:100%; margin-top:8px; padding:8px 9px; border:0; background:transparent; color:var(--accent); font-size:9px; font-weight:750; text-decoration:underline; cursor:pointer; }
+.simple-freeze-actions { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:12px; padding:11px; border:1px solid #dce5e1; border-radius:13px; background:#f6f9f7; }
+.simple-freeze-actions button { min-height:40px; padding:7px; border:1px solid #cbd8d3; border-radius:9px; background:#fff; color:var(--accent); font-size:9px; font-weight:800; cursor:pointer; }
+.simple-freeze-actions button:first-child { background:var(--accent); color:#fff; }
+.simple-freeze-actions button:first-child.is-frozen { background:#60486d; }
+.simple-freeze-actions p { grid-column:1/-1; margin:0; color:#6d7873; font-size:8px; line-height:1.4; }
 .rename-control { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; }
 .rename-control input { min-width:0; height:38px; padding:0 10px; border:1px solid #d8dfdb; border-radius:9px; outline:none; font-size:10px; }
 .rename-control input:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
@@ -119,9 +124,26 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .remove-room-button { width:100%; min-height:38px; margin-top:10px; border:0; background:transparent; color:#7c8582; font-size:9px; text-decoration:underline; cursor:pointer; }
 .material-search { width:100%; height:39px; padding:0 11px; border:1px solid #d4dcd8; border-radius:10px; outline:none; color:var(--ink); font-size:10px; }
 .material-search:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+.online-search-control { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; }
+.online-search-control button { min-width:92px; border:0; border-radius:10px; background:var(--ink); color:#fff; font-size:9px; font-weight:800; cursor:pointer; }
+.online-search-control button:disabled { opacity:.55; }
 .search-scope { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
 .search-scope span { padding:4px 6px; border-radius:6px; background:#edf4f1; color:var(--accent); font-size:8px; font-weight:700; }
 .search-scope .internet-pending { background:#f2efe8; color:#8b7249; }
+.search-scope .internet-ready { background:#e7f3ed; color:#2f705a; }
+.online-results { display:grid; gap:7px; margin:11px 0; padding:11px; border:1px solid #bad6ce; border-radius:13px; background:#f0f8f5; }
+.online-results>strong { color:var(--accent); font-size:9px; text-transform:uppercase; letter-spacing:.08em; }
+.online-product { display:grid; grid-template-columns:44px minmax(0,1fr) auto; align-items:center; gap:8px; padding:7px; border:1px solid #dbe5e1; border-radius:10px; background:#fff; }
+.online-product.is-selected { border-color:var(--accent); box-shadow:inset 3px 0 var(--accent); }
+.online-product>img { width:44px; height:44px; object-fit:cover; border-radius:8px; }
+.online-product>button { min-width:0; padding:0; border:0; background:transparent; text-align:left; cursor:pointer; }
+.online-product strong,.online-product small { display:block; }
+.online-product strong { font-size:9px; }
+.online-product small { margin-top:3px; color:#74807b; font-size:8px; line-height:1.35; }
+.online-product>a { color:var(--accent); font-size:8px; font-weight:750; }
+.auto-apply-product-button { width:100%; min-height:46px; margin-top:12px; padding:8px 12px; border:0; border-radius:11px; background:var(--accent); color:#fff; font-size:10px; font-weight:800; cursor:pointer; }
+.auto-apply-product-button:disabled { opacity:.45; cursor:not-allowed; }
+.secondary-apply { margin-top:7px; background:#edf4f1; color:var(--accent); }
 .material-results { display:grid; gap:6px; max-height:220px; margin:9px 0 11px; overflow-y:auto; }
 .material-result { display:flex; align-items:center; gap:9px; width:100%; padding:7px; border:1px solid #e0e5e2; border-radius:11px; background:#fff; text-align:left; cursor:pointer; }
 .material-result.is-selected { border-color:var(--accent); background:#eef7f4; box-shadow:inset 3px 0 var(--accent); }

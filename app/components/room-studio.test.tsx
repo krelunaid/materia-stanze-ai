@@ -27,7 +27,7 @@ describe('RoomStudio', () => {
     fireEvent.change(input, { target: { files: [new File(['room'], 'soggiorno-verde.jpg', { type: 'image/jpeg' })] } });
     expect(screen.getByText('Soggiorno verde')).toBeInTheDocument();
     expect(screen.getByText('Originale intatto')).toBeInTheDocument();
-    expect(screen.getByText('Partenza semplice')).toBeInTheDocument();
+    expect(screen.getByText('Riconoscimento automatico')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '⌂ Svuota la stanza' })).toBeInTheDocument();
   });
 
@@ -106,7 +106,7 @@ describe('RoomStudio', () => {
   it('searches demo materials and prepares an honest render summary', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Continua: cerca materiali' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cerca i prodotti' }));
     const search = screen.getByLabelText('Cerca materiali, colori o mobili');
     fireEvent.change(search, { target: { value: 'salvia' } });
     fireEvent.click(screen.getByRole('button', { name: /Verde salvia/ }));
@@ -116,7 +116,7 @@ describe('RoomStudio', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Prova flusso render' }));
     expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Muro 1: Verde salvia');
     expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Da inserire: Divano chiaro');
-    expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Render fotografico non ancora collegato');
+    expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Motore pronto, chiave server da configurare');
   });
 
   it('uses one search for furniture and accepts a free-form render request', () => {
@@ -127,17 +127,17 @@ describe('RoomStudio', () => {
     fireEvent.click(screen.getByRole('button', { name: /Cucina/ }));
     expect(screen.getByText('Cucina', { selector: '.selected-assets button' })).toBeInTheDocument();
     fireEvent.change(search, { target: { value: 'pianoforte nero a coda' } });
-    fireEvent.click(screen.getByRole('button', { name: /Aggiungi “pianoforte nero a coda” al render/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Aggiungi “pianoforte nero a coda” alla richiesta/ }));
     expect(screen.getByText('pianoforte nero a coda', { selector: '.selected-assets button' })).toBeInTheDocument();
   });
 
   it('starts with a four-step workflow and only exposes the simple mode', () => {
     render(<RoomStudio />);
-    expect(screen.getByRole('navigation', { name: 'Passaggi del progetto' })).toHaveTextContent('1Foto2Superfici3Cerca4Render');
+    expect(screen.getByRole('navigation', { name: 'Passaggi del progetto' })).toHaveTextContent('1Foto2Prepara3Prodotti4Render');
     expect(screen.queryByText(/Modalità (semplice|avanzata)/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Strumenti avanzati' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Superfici/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Prepara/ })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
-    expect(screen.getByRole('button', { name: /Superfici/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Prepara/ })).toBeEnabled();
   });
 });

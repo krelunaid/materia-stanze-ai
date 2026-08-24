@@ -24,6 +24,7 @@ export async function POST(request: Request) {
   try {
     const incoming = await request.formData();
     const image = incoming.get('image');
+    const mask = incoming.get('mask');
     const protectedAreas = String(incoming.get('protectedAreas') ?? '').slice(0, 1000);
     if (!(image instanceof File) || !image.type.startsWith('image/')) {
       return json({ message: 'Carica una fotografia valida della stanza.' }, 400);
@@ -42,7 +43,9 @@ export async function POST(request: Request) {
     const form = new FormData();
     form.append('model', 'gpt-image-2');
     form.append('image[]', image, image.name || 'room.jpg');
+    if (mask instanceof File && mask.type === 'image/png') form.append('mask', mask, 'freeze-mask.png');
     form.append('prompt', prompt);
+    form.append('input_fidelity', 'high');
 
     const response = await fetch('https://api.openai.com/v1/images/edits', {
       method: 'POST',

@@ -28,11 +28,13 @@ type ImportedRoom = AcceptedRoomFile & { previewUrl?: string; sourceType: Source
 type StudioMaterial = {
   id: string;
   name: string;
-  category: 'Pavimenti' | 'Rivestimenti' | 'Colori';
+  category: 'Pavimenti' | 'Rivestimenti' | 'Colori' | 'Arredi';
   description: string;
   color?: string;
   pattern?: 'wood' | 'stone' | 'tile';
   previewUrl?: string;
+  brand?: string;
+  sourceUrl?: string;
 };
 type DragVertex = { surfaceId: string; vertexIndex: number; pointerId: number; origin: Point };
 
@@ -199,6 +201,7 @@ export function RoomStudio() {
   const [draft, setDraft] = useState<Point[]>([]);
   const [material, setMaterial] = useState<StudioMaterial | null>(null);
   const [materialQuery, setMaterialQuery] = useState('');
+  const [onlineMaterials, setOnlineMaterials] = useState<StudioMaterial[]>([]);
   const [furniture, setFurniture] = useState<string[]>([]);
   const [customRequests, setCustomRequests] = useState<string[]>([]);
   const [customColor, setCustomColor] = useState('#c8b9a6');
@@ -210,8 +213,11 @@ export function RoomStudio() {
   const [isImportingRoom, setIsImportingRoom] = useState(false);
   const [isAutoFitting, setIsAutoFitting] = useState(false);
   const [isEmptyingRoom, setIsEmptyingRoom] = useState(false);
-  const [emptyRoomPreview, setEmptyRoomPreview] = useState<string | null>(null);
-  const [showEmptyRoom, setShowEmptyRoom] = useState(false);
+  const [isSearchingProducts, setIsSearchingProducts] = useState(false);
+  const [isApplyingProduct, setIsApplyingProduct] = useState(false);
+  const [processedPreview, setProcessedPreview] = useState<string | null>(null);
+  const [processedLabel, setProcessedLabel] = useState('Stanza vuota');
+  const [showProcessedPreview, setShowProcessedPreview] = useState(false);
   const [dragVertex, setDragVertex] = useState<DragVertex | null>(null);
   const roomInputRef = useRef<HTMLInputElement>(null);
   const floorplanInputRef = useRef<HTMLInputElement>(null);
@@ -221,6 +227,7 @@ export function RoomStudio() {
   const materialBlobRef = useRef<string | null>(null);
   const dragStartRef = useRef<Surface[] | null>(null);
   const roomImageRef = useRef<HTMLImageElement>(null);
+  const autoFitPreviewRef = useRef<string | null>(null);
 
   useEffect(() => {
     shellRef.current?.setAttribute('data-hydrated', 'true');
@@ -288,7 +295,8 @@ export function RoomStudio() {
       roomBlobRef.current = previewUrl;
       const initialSurfaces = sourceType === 'floorplan' ? createFloorplanOutline() : [];
       setRoom({ ...result.value, previewUrl, sourceType });
-      setEmptyRoomPreview(null); setShowEmptyRoom(false);
+      setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]);
+      autoFitPreviewRef.current = null;
       setSurfaces(initialSurfaces); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(initialSurfaces[0]?.id ?? null); setRenameDraft(initialSurfaces[0]?.name ?? ''); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setError(null);
       setNotice(sourceType === 'floorplan'
         ? 'Planimetria riprodotta. Adatta il perimetro con i pallini e aggiungi le pareti interne con due tocchi.'
@@ -322,7 +330,7 @@ export function RoomStudio() {
   function removeRoom() {
     if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
     roomBlobRef.current = null;
-    setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setEmptyRoomPreview(null); setShowEmptyRoom(false); setNotice(null);
+    setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]); setNotice(null);
   }
 
   function startDrawing(kind: SurfaceKind = 'wall', quick = false) {
@@ -437,6 +445,132 @@ export function RoomStudio() {
     setNotice(`${material.name} applicato a ${selected.name}. L’originale resta visibile fuori dal contorno.`);
   }
 
+  function endpoint(path: string) {
+    return window.location.protocol === 'capacitor:'
+      ? `https://materia-stanze-ai.andreagadducci.chatgpt.site${path}`
+      : path;
+  }
+
+  async function searchProductsOnline() {
+    const query = materialQuery.trim();
+    if (query.length < 3 || isSearchingProducts) {
+      if (query.length < 3) setError('Scrivi almeno tre caratteri per cercare un prodotto.');
+      return;
+    }
+    setIsSearchingProducts(true); setError(null); setNotice(`Cerco “${query}” nei cataloghi online…`); setOnlineMaterials([]);
+    try {
+      const response = await fetch(endpoint('/api/search-products'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }),
+      });
+      const result = await response.json() as { products?: Array<{ name: string; brand: string; category: StudioMaterial['category']; description: string; sourceUrl: string; imageUrl?: string }>; message?: string };
+      if (!response.ok) throw new Error(result.message ?? 'Ricerca non disponibile.');
+      const found = (result.products ?? []).map((item, index) => ({
+        id: `online-${Date.now()}-${index}`,
+        name: item.name,
+        brand: item.brand,
+        category: item.category,
+        description: item.description,
+        sourceUrl: item.sourceUrl,
+        previewUrl: item.imageUrl || undefined,
+      }));
+      setOnlineMaterials(found);
+      setNotice(found.length ? `${found.length} prodotti reali trovati. Scegline uno e premi “Applica automaticamente”.` : 'Nessun prodotto affidabile trovato. Prova con marca e collezione più precise.');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Ricerca non disponibile.'); setNotice(null);
+    } finally { setIsSearchingProducts(false); }
+  }
+
+  function recommendedSurface(item: StudioMaterial) {
+    const description = `${item.name} ${item.category} ${item.description}`.toLocaleLowerCase('it');
+    const preferredKind: SurfaceKind = item.category === 'Pavimenti' || /pavimento|parquet|rovere|piastrella|mattonell/.test(description) ? 'floor' : 'wall';
+    return surfaces.find((surface) => !surface.frozen && surface.kind === preferredKind)
+      ?? (selected && !selected.frozen ? selected : null)
+      ?? surfaces.find((surface) => !surface.frozen)
+      ?? null;
+  }
+
+  async function createMaskedInput(options: { editableSurface?: Surface; frozenSurfaces?: Surface[] }) {
+    const image = roomImageRef.current;
+    if (!image) throw new Error('La foto della stanza non è pronta.');
+    const maxSide = 1536;
+    const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const imageCanvas = document.createElement('canvas');
+    const maskCanvas = document.createElement('canvas');
+    imageCanvas.width = maskCanvas.width = width;
+    imageCanvas.height = maskCanvas.height = height;
+    const imageContext = imageCanvas.getContext('2d');
+    const maskContext = maskCanvas.getContext('2d');
+    if (!imageContext || !maskContext) throw new Error('Non posso preparare la superficie.');
+    imageContext.drawImage(image, 0, 0, width, height);
+
+    const drawPolygon = (surface: Surface) => {
+      maskContext.beginPath();
+      surface.points.forEach((point, index) => {
+        const x = point.x * width; const y = point.y * height;
+        if (index === 0) maskContext.moveTo(x, y); else maskContext.lineTo(x, y);
+      });
+      maskContext.closePath(); maskContext.fill();
+    };
+
+    if (options.editableSurface) {
+      maskContext.fillStyle = '#ffffff'; maskContext.fillRect(0, 0, width, height);
+      maskContext.globalCompositeOperation = 'destination-out';
+      drawPolygon(options.editableSurface);
+    } else {
+      maskContext.clearRect(0, 0, width, height);
+      maskContext.fillStyle = '#ffffff';
+      for (const surface of options.frozenSurfaces ?? []) drawPolygon(surface);
+    }
+
+    const [inputImage, mask] = await Promise.all([
+      new Promise<Blob | null>((resolve) => imageCanvas.toBlob(resolve, 'image/png')),
+      new Promise<Blob | null>((resolve) => maskCanvas.toBlob(resolve, 'image/png')),
+    ]);
+    if (!inputImage || !mask) throw new Error('Non posso preparare foto e maschera della superficie.');
+    return { inputImage, mask };
+  }
+
+  async function applyMaterialAutomatically() {
+    if (!material || !room?.previewUrl || isApplyingProduct) return;
+    if (material.category === 'Arredi') {
+      setCustomRequests((current) => current.includes(material.name) ? current : [...current, material.name]);
+      setNotice(`${material.name} aggiunto al render. Le superfici bloccate resteranno identiche.`);
+      return;
+    }
+    const target = recommendedSurface(material);
+    if (!target) { setError('Tutte le superfici sono bloccate. Sbloccane una per applicare il prodotto.'); return; }
+    setSelectedId(target.id); setRenameDraft(target.name); setError(null);
+
+    if (!material.sourceUrl) {
+      commitSurfaces(surfaces.map((surface) => surface.id === target.id ? { ...surface, materialId: material.id } : surface));
+      setNotice(`${material.name} applicato automaticamente a ${target.name}. Le zone bloccate non sono state toccate.`);
+      return;
+    }
+
+    setIsApplyingProduct(true); setNotice(`Adatto ${material.name} a ${target.name} rispettando prospettiva e zone bloccate…`);
+    try {
+      const { inputImage, mask } = await createMaskedInput({ editableSurface: target });
+      const form = new FormData();
+      form.append('image', inputImage, room.file.name.replace(/\.(heic|heif)$/i, '.png'));
+      form.append('mask', mask, 'surface-mask.png');
+      form.append('productName', `${material.brand ? `${material.brand} ` : ''}${material.name}`);
+      form.append('productDescription', `${material.description} · fonte: ${material.sourceUrl}`);
+      form.append('targetName', target.name);
+      form.append('protectedAreas', surfaces.filter((surface) => surface.frozen).map((surface) => surface.name).join(', '));
+      if (material.previewUrl) form.append('imageUrl', material.previewUrl);
+      const response = await fetch(endpoint('/api/apply-product'), { method: 'POST', body: form });
+      const result = await response.json() as { image?: string; message?: string };
+      if (!response.ok || !result.image) throw new Error(result.message ?? 'Render non disponibile.');
+      commitSurfaces(surfaces.map((surface) => surface.id === target.id ? { ...surface, materialId: material.id } : surface));
+      setProcessedPreview(result.image); setProcessedLabel(material.name); setShowProcessedPreview(true);
+      setNotice(`${material.name} adattato a ${target.name}. Tutte le zone Freeze sono rimaste protette.`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Non sono riuscito ad applicare il prodotto.'); setNotice(null);
+    } finally { setIsApplyingProduct(false); }
+  }
+
   function chooseMaterial(next: StudioMaterial) {
     setMaterial(next);
     setNotice(`${next.name} selezionato. Ora applicalo alla superficie scelta.`);
@@ -497,22 +631,29 @@ export function RoomStudio() {
     }
   }
 
+  function onRoomImageLoad(image: HTMLImageElement) {
+    setRoomRatio(image.naturalWidth / image.naturalHeight);
+    if (room?.sourceType === 'photo' && room.previewUrl && surfaces.length === 0 && autoFitPreviewRef.current !== room.previewUrl) {
+      autoFitPreviewRef.current = room.previewUrl;
+      window.setTimeout(() => void autoFitSurfaces(), 0);
+    }
+  }
+
   async function emptyRoom() {
     if (!room?.previewUrl || room.sourceType !== 'photo' || isEmptyingRoom) return;
     setIsEmptyingRoom(true); setError(null);
     setNotice('L’IA sta riconoscendo e rimuovendo i mobili. L’originale resta sempre disponibile.');
     try {
-      const image = await fetch(room.previewUrl).then((response) => response.blob());
+      const frozenSurfaces = surfaces.filter((surface) => surface.frozen);
+      const { inputImage, mask } = await createMaskedInput({ frozenSurfaces });
       const form = new FormData();
-      form.append('image', image, room.file.name.replace(/\.(heic|heif)$/i, '.jpg'));
-      form.append('protectedAreas', surfaces.filter((surface) => surface.frozen).map((surface) => surface.name).join(', '));
-      const endpoint = window.location.protocol === 'capacitor:'
-        ? 'https://materia-stanze-ai.andreagadducci.chatgpt.site/api/empty-room'
-        : '/api/empty-room';
-      const response = await fetch(endpoint, { method: 'POST', body: form });
+      form.append('image', inputImage, room.file.name.replace(/\.(heic|heif)$/i, '.png'));
+      form.append('mask', mask, 'freeze-mask.png');
+      form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
+      const response = await fetch(endpoint('/api/empty-room'), { method: 'POST', body: form });
       const result = await response.json() as { image?: string; message?: string };
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Immagine non disponibile.');
-      setEmptyRoomPreview(result.image); setShowEmptyRoom(true);
+      setProcessedPreview(result.image); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
       setNotice('Stanza vuota pronta. Confrontala con l’originale e scegli quale usare.');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Non sono riuscito a svuotare la stanza.');
@@ -550,14 +691,15 @@ export function RoomStudio() {
       </header>
 
       <nav className="simple-steps" aria-label="Passaggi del progetto">{[
-        ['1', 'Foto'], ['2', 'Superfici'], ['3', 'Cerca'], ['4', 'Render'],
+        ['1', 'Foto'], ['2', 'Prepara'], ['3', 'Prodotti'], ['4', 'Render'],
       ].map(([number, label], index) => <button type="button" key={number} className={activeStep === index + 1 ? 'is-active' : activeStep > index + 1 ? 'is-done' : ''} onClick={() => goToStep(index + 1)} disabled={(index > 0 && !room) || (index > 1 && surfaces.length === 0)}><span>{activeStep > index + 1 ? '✓' : number}</span><strong>{label}</strong></button>)}</nav>
 
       <div className="workspace">
         <aside className="surface-panel" aria-label="Superfici della stanza">
-          <div className="panel-heading"><div><p className="eyebrow">Geometria reale</p><h2>Superfici</h2></div><span className="count-badge">{surfaces.length}</span></div>
+          <div className="panel-heading"><div><p className="eyebrow">Aree riconosciute</p><h2>Cosa vuoi proteggere?</h2></div><span className="count-badge">{surfaces.length}</span></div>
           <button className="detect-button" type="button" onClick={() => void autoFitSurfaces()} disabled={!room || room.sourceType !== 'photo' || isAutoFitting}><span className="spark">✦</span>{isAutoFitting ? 'Sto adattando…' : 'Adatta automaticamente'}<span className="soon">Foto</span></button>
-          {surfaces.length ? <div className="surface-list">{surfaces.map((surface) => <button className={`surface-item ${surface.id === selectedId ? 'is-active' : ''}`} key={surface.id} type="button" onClick={() => { setSelectedId(surface.id); setRenameDraft(surface.name); setDrawKind(null); setQuickDraw(false); setDraft([]); }}><span className="surface-swatch" style={{ background: kindColors[surface.kind] }} /><span className="surface-copy"><strong>{surface.name}</strong><small>{surface.points.length} vertici · {surface.materialId ? 'materiale applicato' : 'senza materiale'}</small></span><span className="lock-state" aria-label={surface.frozen ? 'Bloccata' : 'Modificabile'}>{surface.frozen ? '◆' : '◇'}</span></button>)}</div> : <div className="surface-empty"><span>◇</span><strong>Partenza semplice</strong><p>Crea automaticamente i contorni base e sposta soltanto i pallini.</p></div>}
+          {surfaces.length ? <div className="surface-list">{surfaces.map((surface) => <button className={`surface-item ${surface.id === selectedId ? 'is-active' : ''}`} key={surface.id} type="button" onClick={() => { setSelectedId(surface.id); setRenameDraft(surface.name); setDrawKind(null); setQuickDraw(false); setDraft([]); }}><span className="surface-swatch" style={{ background: kindColors[surface.kind] }} /><span className="surface-copy"><strong>{surface.name}</strong><small>{surface.frozen ? 'Freeze attivo' : surface.materialId ? 'Prodotto applicato' : 'Tocca per selezionare'}</small></span><span className="lock-state" aria-label={surface.frozen ? 'Bloccata' : 'Modificabile'}>{surface.frozen ? '🔒' : '◇'}</span></button>)}</div> : <div className="surface-empty"><span>✦</span><strong>Riconoscimento automatico</strong><p>L’app divide la foto in pavimento, muri e soffitto.</p></div>}
+          {selected && activeStep === 2 && <div className="simple-freeze-actions"><button type="button" className={selected.frozen ? 'is-frozen' : ''} onClick={toggleFreeze}>{selected.frozen ? `Sblocca ${selected.name}` : `🔒 Blocca ${selected.name}`}</button><button type="button" onClick={freezeAllExceptSelected}>Proteggi tutto il resto</button><p>Freeze mantiene identica questa zona nei render successivi.</p></div>}
           <div className="panel-note"><span>i</span><p>Automatico per iniziare, manuale per rifinire: trascina i pallini direttamente sui bordi della foto.</p></div>
         </aside>
 
@@ -569,7 +711,7 @@ export function RoomStudio() {
 
           <div className="canvas-wrap"><div className={`canvas ${isDraggingFile ? 'is-dragging' : ''}`} id="editor-title" style={room ? { aspectRatio: roomRatio } : undefined} onDragEnter={() => setIsDraggingFile(true)} onDragLeave={() => setIsDraggingFile(false)} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
             {room?.previewUrl ? <div className="editor-media">
-              <img ref={roomImageRef} src={showEmptyRoom && emptyRoomPreview ? emptyRoomPreview : room.previewUrl} alt={showEmptyRoom ? 'Stanza svuotata dall’IA' : `Originale importato: ${room.file.name}`} onLoad={(event) => setRoomRatio(event.currentTarget.naturalWidth / event.currentTarget.naturalHeight)} />
+              <img ref={roomImageRef} src={showProcessedPreview && processedPreview ? processedPreview : room.previewUrl} alt={showProcessedPreview ? `Anteprima elaborata: ${processedLabel}` : `Originale importato: ${room.file.name}`} onLoad={(event) => onRoomImageLoad(event.currentTarget)} />
               <svg className={`surface-overlay ${drawKind ? 'is-drawing' : ''}`} viewBox="0 0 1000 625" preserveAspectRatio="none" onPointerDown={addDraftPoint} onPointerMove={moveDraggedVertex} onPointerUp={endVertexDrag} onPointerCancel={endVertexDrag}>
                 <defs>
                   {catalogMaterials.filter((item) => item.pattern).map((item) => <pattern id={`catalog-material-${item.id}`} key={item.id} width={item.pattern === 'wood' ? 180 : 120} height={item.pattern === 'wood' ? 42 : 120} patternUnits="userSpaceOnUse"><rect width="100%" height="100%" fill={item.color} /><path d={item.pattern === 'wood' ? 'M0 2H180 M0 40H180 M45 2V40 M135 2V40' : 'M0 1H120 M1 0V120'} stroke="rgba(67,55,43,.22)" strokeWidth="3" /><path d={item.pattern === 'stone' ? 'M8 38 C38 17 64 55 110 25 M14 92 C45 68 77 106 116 74' : ''} fill="none" stroke="rgba(255,255,255,.24)" strokeWidth="5" /></pattern>)}
@@ -577,28 +719,39 @@ export function RoomStudio() {
                 </defs>
                 {surfaces.map((surface) => <g key={surface.id} className={surface.frozen ? 'is-frozen' : ''}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{surface.id === selectedId && surface.points.map((point, index) => <circle key={`${surface.id}-${index}`} cx={point.x * 1000} cy={point.y * 625} r="14" className="surface-vertex" onPointerDown={(event) => beginVertexDrag(event, surface.id, index)} />)}</g>)}
                 {draft.length > 0 && <><polyline points={pointsToSvg(draft)} fill="none" stroke="#d7f05c" strokeWidth="5" vectorEffect="non-scaling-stroke" />{draft.map((point, index) => <circle key={index} cx={point.x * 1000} cy={point.y * 625} r="9" className="draft-vertex" />)}</>}
-              </svg><div className="import-status"><span className="status-dot" /><div><strong>{showEmptyRoom ? 'Stanza vuota' : 'Originale intatto'}</strong><small>{showEmptyRoom ? 'Generata dall’IA · originale disponibile' : importedCaption}</small></div></div>
-              {emptyRoomPreview && <div className="before-after-toggle" aria-label="Confronta originale e stanza vuota"><button type="button" className={!showEmptyRoom ? 'is-active' : ''} onClick={() => setShowEmptyRoom(false)}>Originale</button><button type="button" className={showEmptyRoom ? 'is-active' : ''} onClick={() => setShowEmptyRoom(true)}>Stanza vuota</button></div>}
+              </svg><div className="import-status"><span className="status-dot" /><div><strong>{showProcessedPreview ? processedLabel : 'Originale intatto'}</strong><small>{showProcessedPreview ? 'Elaborazione IA · originale sempre disponibile' : importedCaption}</small></div></div>
+              {processedPreview && <div className="before-after-toggle" aria-label="Confronta originale e risultato"><button type="button" className={!showProcessedPreview ? 'is-active' : ''} onClick={() => setShowProcessedPreview(false)}>Originale</button><button type="button" className={showProcessedPreview ? 'is-active' : ''} onClick={() => setShowProcessedPreview(true)}>{processedLabel}</button></div>}
             </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Inizia da ciò che hai</p><h1>Cosa vuoi caricare?</h1><p>Scegli una foto della stanza oppure una planimetria. L’originale resterà sempre intatto.</p><div className="source-actions"><label className="source-card is-primary" htmlFor="room-file"><span>▣</span><strong>Foto stanza</strong><small>Apri direttamente Foto su iPhone e iPad</small></label><label className="source-card" htmlFor="floorplan-file"><span>⌗</span><strong>Planimetria</strong><small>Ricalca perimetro e pareti interne</small></label></div><button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>JPG, PNG o HEIC · massimo 20 MB</small></div></>}
             {isDraggingFile && <div className="drop-overlay"><strong>Rilascia per importare</strong><span>La foto resterà nel browser.</span></div>}
             {isImportingRoom && <div className="processing-overlay" role="status"><span className="processing-spinner" /><strong>Preparo la foto…</strong><small>Le immagini grandi vengono ottimizzate per evitare blocchi.</small></div>}
           </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
           <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" onChange={onMaterialInput} />
-          <div className="status-bar"><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Automatico per iniziare, pallini per correggere a mano.'}</p>{room?.sourceType === 'photo' && activeStep === 2 && <button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom}>{isEmptyingRoom ? 'Svuoto la stanza…' : emptyRoomPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && <button className="guided-start-button" type="button" aria-label="Adatta superfici alla foto" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting}>{isAutoFitting ? 'Sto adattando…' : surfaces.length ? '✦ Adatta di nuovo' : '✦ Adatta automaticamente'}</button>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && <button type="button" onClick={() => goToStep(3)}>Continua: cerca materiali</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
+          <div className="status-bar"><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica, svuota, scegli cosa proteggere e cerca il prodotto.'}</p>{room?.sourceType === 'photo' && activeStep === 2 && <button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && <button type="button" onClick={() => goToStep(3)}>Cerca i prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
         </section>
 
         <aside className="properties-panel" aria-label="Proprietà">
           <div className="panel-heading"><div><p className="eyebrow">Controlli</p><h2>{selected?.name ?? (room ? 'Nessuna selezione' : 'Importa una stanza')}</h2></div>{selected && <span className="type-badge">{surfaceLabels[selected.kind]}</span>}</div>
           {room && <div className="asset-card"><span>{room.sourceType === 'floorplan' ? 'PLAN' : 'IMG'}</span><div><strong>{room.file.name}</strong><small>{room.sourceType === 'floorplan' ? 'Planimetria originale' : importedCaption}</small></div><label htmlFor={room.sourceType === 'floorplan' ? 'floorplan-file' : 'room-file'}>Sostituisci</label></div>}
           {selected ? <><div className="property-section"><div className="property-title"><span>Nome superficie</span><span className="editable-badge">Personalizzabile</span></div><div className="rename-control"><input aria-label="Nome superficie" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} /><button type="button" onClick={renameSelected} disabled={!renameDraft.trim() || renameDraft.trim() === selected.name}>Salva</button></div></div><div className="property-section"><div className="property-title"><span>Protezione superficie</span><span className={`editable-badge ${selected.frozen ? 'frozen' : ''}`}>{selected.frozen ? 'Frozen' : 'Modificabile'}</span></div><button className={`freeze-button ${selected.frozen ? 'is-active' : ''}`} type="button" aria-label={selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'} onClick={toggleFreeze}><span>{selected.frozen ? '◆' : '◇'}</span>{selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'}<small>{selected.frozen ? 'Protetta' : 'Attivo subito'}</small></button><button className="freeze-others-button" type="button" onClick={freezeAllExceptSelected}>Blocca tutto tranne {selected.name}</button></div>
-            <div className="property-section"><div className="property-title"><span>Ricerca unica</span><button type="button" onClick={() => materialInputRef.current?.click()}>Carica foto</button></div><input className="material-search" aria-label="Cerca materiali, colori o mobili" value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} placeholder="Cerca pavimento, colore, divano, cucina…" /><div className="search-scope"><span>Materiali</span><span>Colori</span><span>Mobili</span><span className="internet-pending">Internet dopo la chiave</span></div><div className="material-results">{filteredMaterials.map((item) => <button type="button" key={item.id} className={`material-result ${material?.id === item.id ? 'is-selected' : ''}`} onClick={() => chooseMaterial(item)}><span className={`catalog-swatch ${item.pattern ?? 'color'}`} style={{ '--swatch-color': item.color } as CSSProperties} /><span><strong>{item.name}</strong><small>{item.category} · {item.description}</small></span></button>)}{filteredFurniture.map((item) => <button type="button" key={item.name} className={`material-result furniture-result ${furniture.includes(item.name) ? 'is-selected' : ''}`} onClick={() => toggleFurniture(item.name)}><span className="furniture-icon">{furniture.includes(item.name) ? '✓' : '+'}</span><span><strong>{item.name}</strong><small>Mobili · {item.description}</small></span></button>)}{filteredMaterials.length === 0 && filteredFurniture.length === 0 && <div className="custom-search-result"><p>Nessun elemento locale con questo nome.</p><button type="button" onClick={addCustomRequest}>Aggiungi “{materialQuery.trim()}” al render</button></div>}</div><div className="custom-color"><input type="color" aria-label="Scegli colore personalizzato" value={customColor} onChange={(event) => setCustomColor(event.target.value)} /><button type="button" onClick={chooseCustomColor}>Usa questo colore</button></div>{material?.previewUrl && <div className="loaded-material"><img src={material.previewUrl} alt="Campione materiale" /><div><strong>{material.name}</strong><small>{material.description}</small></div></div>}<button className="apply-button" type="button" aria-label={`Applica a ${selected.name}`} onClick={applyMaterial} disabled={!material || selected.frozen}>Applica {material?.name ?? 'materiale'} a {selected.name}</button><p className="material-search-note">Puoi già configurare tutto. Con la chiave, la stessa ricerca cercherà anche prodotti reali su internet mostrando marca e fonte.</p></div>
+            <div className="property-section product-search-section">
+              <div className="property-title"><span>Cerca un prodotto preciso</span><button type="button" onClick={() => materialInputRef.current?.click()}>Carica campione</button></div>
+              <div className="online-search-control"><input className="material-search" aria-label="Cerca materiali, colori o mobili" value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchProductsOnline(); }} placeholder="Es. mattonelle rovere chiaro Biason" /><button type="button" onClick={() => void searchProductsOnline()} disabled={isSearchingProducts}>{isSearchingProducts ? 'Cerco…' : 'Cerca online'}</button></div>
+              <div className="search-scope"><span>Materiali</span><span>Colori</span><span>Arredi</span><span className="internet-ready">Prodotti reali con fonte</span></div>
+              {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt="" /> : <span className="catalog-swatch tile" /> }<button type="button" onClick={() => chooseMaterial(item)}><strong>{item.brand} · {item.name}</strong><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a></div>)}</div>}
+              <div className="material-results">{filteredMaterials.map((item) => <button type="button" key={item.id} className={`material-result ${material?.id === item.id ? 'is-selected' : ''}`} onClick={() => chooseMaterial(item)}><span className={`catalog-swatch ${item.pattern ?? 'color'}`} style={{ '--swatch-color': item.color } as CSSProperties} /><span><strong>{item.name}</strong><small>{item.category} · {item.description}</small></span></button>)}{filteredFurniture.map((item) => <button type="button" key={item.name} className={`material-result furniture-result ${furniture.includes(item.name) ? 'is-selected' : ''}`} onClick={() => toggleFurniture(item.name)}><span className="furniture-icon">{furniture.includes(item.name) ? '✓' : '+'}</span><span><strong>{item.name}</strong><small>Mobili · {item.description}</small></span></button>)}{filteredMaterials.length === 0 && filteredFurniture.length === 0 && onlineMaterials.length === 0 && <div className="custom-search-result"><p>Nessun elemento locale. Premi “Cerca online” per trovare marca e prodotto esatti.</p><button type="button" onClick={addCustomRequest}>Aggiungi “{materialQuery.trim()}” alla richiesta</button></div>}</div>
+              <div className="custom-color"><input type="color" aria-label="Scegli colore personalizzato" value={customColor} onChange={(event) => setCustomColor(event.target.value)} /><button type="button" onClick={chooseCustomColor}>Usa questo colore</button></div>
+              {material?.previewUrl && <div className="loaded-material"><img src={material.previewUrl} alt="Campione materiale" /><div><strong>{material.name}</strong><small>{material.description}</small></div></div>}
+              <button className="auto-apply-product-button" type="button" onClick={() => void applyMaterialAutomatically()} disabled={!material || isApplyingProduct}>{isApplyingProduct ? 'Adatto il prodotto alla stanza…' : `Applica automaticamente ${material?.name ?? 'il prodotto'}`}</button>
+              <button className="apply-button secondary-apply" type="button" aria-label={`Applica a ${selected.name}`} onClick={applyMaterial} disabled={!material || selected.frozen}>Oppure applica solo a {selected.name}</button>
+              <p className="material-search-note">L’app sceglie pavimento o muro, corregge prospettiva e scala, e lascia identiche tutte le zone Freeze.</p>
+            </div>
             <div className="property-section"><div className="property-title"><span>Elementi nel render</span><span className="editable-badge">{furniture.length + customRequests.length} scelti</span></div>{furniture.length || customRequests.length ? <div className="selected-assets">{furniture.map((item) => <button type="button" key={item} onClick={() => toggleFurniture(item)}>{item}<span>×</span></button>)}{customRequests.map((item) => <button type="button" key={item} onClick={() => setCustomRequests((current) => current.filter((name) => name !== item))}>{item}<span>×</span></button>)}</div> : <p className="no-results">Cerca un mobile o scrivi liberamente ciò che vuoi inserire.</p>}<p className="material-search-note">Con il motore AI potrai caricare anche la foto esatta del mobile e indicarne la posizione.</p></div>
             <div className="property-section metrics"><div><span>Vertici</span><strong>{selected.points.length}</strong></div><div><span>Stato</span><strong>{selected.frozen ? 'Lock' : 'Edit'}</strong></div><div><span>Texture</span><strong>{selected.materialId ? 'Sì' : 'No'}</strong></div></div><button className="remove-button" type="button" onClick={deleteSelected} disabled={selected.frozen}>Elimina superficie</button></> : room ? <div className="empty-properties"><strong>Seleziona un contorno</strong><p>Tocca una superficie sulla foto o sceglila dall’elenco. Puoi anche disegnarne una nuova.</p></div> : null}
           {room && <button className="remove-room-button" type="button" onClick={removeRoom}>Chiudi progetto</button>}
-          <div className="phase-card"><span className="phase-index">0.2</span><div><p className="eyebrow">Modalità prova</p><strong>Progetto render configurabile</strong><p>Materiali, colori, mobili e Freeze funzionano. La generazione fotografica richiederà la chiave AI.</p></div></div>
+          <div className="phase-card"><span className="phase-index">0.2</span><div><p className="eyebrow">Modalità prova</p><strong>Flusso render pronto</strong><p>Ricerca online, adattamento fotografico e Freeze sono collegati; per attivarli sul server serve la chiave AI.</p></div></div>
         </aside>
       </div>
-      {renderSummaryOpen && <div className="render-modal" role="dialog" aria-modal="true" aria-labelledby="render-summary-title"><div className="render-modal-card"><button className="modal-close" type="button" onClick={() => setRenderSummaryOpen(false)} aria-label="Chiudi riepilogo">×</button><p className="eyebrow">Richiesta pronta</p><h2 id="render-summary-title">Prima del render reale</h2><div className="render-checks"><div><span>Superfici con materiale</span><strong>{surfaces.filter((surface) => surface.materialId).length}</strong></div><div><span>Zone protette</span><strong>{surfaces.filter((surface) => surface.frozen).length}</strong></div><div><span>Elementi richiesti</span><strong>{furniture.length + customRequests.length}</strong></div></div><div className="render-list"><strong>Il motore riceverà:</strong><p>{surfaces.filter((surface) => surface.materialId).map((surface) => `${surface.name}: ${materialMap.get(surface.materialId!)?.name ?? 'materiale'}`).join(' · ') || 'Nessun materiale ancora applicato'}</p><p>{furniture.length || customRequests.length ? `Da inserire: ${[...furniture, ...customRequests].join(', ')}` : 'Nessun arredo aggiunto'}</p></div><div className="engine-warning"><span>AI</span><p><strong>Render fotografico non ancora collegato</strong>Questa schermata prepara una richiesta reale, ma non inventa un’immagine. Dopo la chiave, lo stesso pulsante genererà il risultato.</p></div><button className="modal-primary" type="button" onClick={() => setRenderSummaryOpen(false)}>Continua a configurare</button></div></div>}
+      {renderSummaryOpen && <div className="render-modal" role="dialog" aria-modal="true" aria-labelledby="render-summary-title"><div className="render-modal-card"><button className="modal-close" type="button" onClick={() => setRenderSummaryOpen(false)} aria-label="Chiudi riepilogo">×</button><p className="eyebrow">Richiesta pronta</p><h2 id="render-summary-title">Prima del render reale</h2><div className="render-checks"><div><span>Superfici con materiale</span><strong>{surfaces.filter((surface) => surface.materialId).length}</strong></div><div><span>Zone protette</span><strong>{surfaces.filter((surface) => surface.frozen).length}</strong></div><div><span>Elementi richiesti</span><strong>{furniture.length + customRequests.length}</strong></div></div><div className="render-list"><strong>Il motore riceverà:</strong><p>{surfaces.filter((surface) => surface.materialId).map((surface) => `${surface.name}: ${materialMap.get(surface.materialId!)?.name ?? 'materiale'}`).join(' · ') || 'Nessun materiale ancora applicato'}</p><p>{furniture.length || customRequests.length ? `Da inserire: ${[...furniture, ...customRequests].join(', ')}` : 'Nessun arredo aggiunto'}</p></div><div className="engine-warning"><span>AI</span><p><strong>Motore pronto, chiave server da configurare</strong>L’app invierà foto, prodotto e maschere Freeze al motore fotografico. Senza chiave non mostra risultati inventati.</p></div><button className="modal-primary" type="button" onClick={() => setRenderSummaryOpen(false)}>Continua a configurare</button></div></div>}
     </main>
   );
 }
