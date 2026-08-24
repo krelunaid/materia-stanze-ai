@@ -72,7 +72,7 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .drawing-actions button { min-height:32px; padding:0 10px; background:#e7ebe8; }
 .drawing-actions .finish-button { background:var(--accent); color:white; }
 .drawing-actions .finish-button:disabled { opacity:.4; cursor:not-allowed; }
-.canvas { min-height:0; max-height:calc(100vh - 240px); touch-action:none; }
+.canvas { min-height:0; max-height:calc(100vh - 240px); touch-action:pan-y; }
 .editor-media,.editor-media>img,.surface-overlay { position:absolute; inset:0; width:100%; height:100%; }
 .editor-media { overflow:hidden; background:#26302e; }
 .editor-media>img { display:block; object-fit:fill; }
@@ -106,6 +106,17 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .simple-freeze-actions button:first-child { background:var(--accent); color:#fff; }
 .simple-freeze-actions button:first-child.is-frozen { background:#60486d; }
 .simple-freeze-actions p { grid-column:1/-1; margin:0; color:#6d7873; font-size:8px; line-height:1.4; }
+.ai-status { display:inline-flex; align-items:center; gap:6px; padding:6px 8px; border-radius:999px; background:#fff2dc; color:#765a2d; font-size:9px; font-weight:800; white-space:nowrap; }
+.ai-status i { width:7px; height:7px; border-radius:50%; background:#d99b43; }
+.ai-status.ready { background:#e5f4ed; color:#2e6c56; }
+.ai-status.ready i { background:#49a77d; }
+.ai-status.checking i { animation:processing-spin .8s linear infinite; border:1px solid #d99b43; border-top-color:transparent; background:transparent; }
+.ai-setup-banner { display:grid; gap:4px; margin-bottom:9px; padding:10px; border:1px solid #ead6b4; border-radius:10px; background:#fff8eb; color:#765a2d; }
+.ai-setup-banner strong { font-size:9px; }
+.ai-setup-banner span { font-size:8px; line-height:1.4; }
+.surface-overlay { pointer-events:none; touch-action:pan-y; }
+.surface-overlay polygon,.surface-overlay .surface-vertex { pointer-events:auto; }
+.surface-overlay .surface-vertex,.surface-overlay.is-drawing { touch-action:none; }
 .rename-control { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; }
 .rename-control input { min-width:0; height:38px; padding:0 10px; border:1px solid #d8dfdb; border-radius:9px; outline:none; font-size:10px; }
 .rename-control input:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
@@ -259,9 +270,9 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 
 @media (max-width:760px) {
   .simple-steps { position:sticky; z-index:9; top:64px; grid-template-columns:repeat(4,1fr); gap:4px; padding:7px; }
-  .simple-steps button { justify-content:center; min-width:0; min-height:38px; padding:4px; }
-  .simple-steps button>span { width:25px; height:25px; }
-  .simple-steps button>strong { display:none; }
+  .simple-steps button { flex-direction:column; justify-content:center; min-width:0; min-height:48px; gap:2px; padding:3px; }
+  .simple-steps button>span { width:22px; height:22px; }
+  .simple-steps button>strong { display:block; font-size:8px; }
   .simple-mode.step-2 .workspace,.simple-mode.step-3 .workspace { display:flex; }
   .simple-mode.step-2 .surface-panel { display:block; order:2; }
   .simple-mode.step-3 .properties-panel { order:2; border-left:0; }
@@ -295,6 +306,7 @@ html,body { height:100%; overflow:hidden; overscroll-behavior:none; }
   .topbar { min-height:60px; padding:0 12px; }
   .brand-lockup { gap:8px; }
   .brand-mark { width:32px; height:32px; }
+  .ai-status { padding:5px 7px; font-size:8px; }
   .simple-steps { top:60px; }
   .simple-mode .canvas-wrap { padding:8px 0; }
   .simple-mode.step-2 .canvas,.simple-mode.step-3 .canvas,.simple-mode.step-4 .canvas { border-width:4px; border-right:0; border-left:0; border-radius:0; }
