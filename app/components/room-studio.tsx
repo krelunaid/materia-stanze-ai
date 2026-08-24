@@ -230,6 +230,10 @@ export function RoomStudio() {
     };
   }, []);
 
+  useEffect(() => {
+    shellRef.current?.scrollTo?.({ top: 0, left: 0, behavior: 'auto' });
+  }, [activeStep]);
+
   const selected = surfaces.find((surface) => surface.id === selectedId) ?? null;
   const projectName = room?.projectName ?? 'Progetto senza titolo';
   const importedCaption = useMemo(() => room ? `Immagine · ${room.displaySize}` : null, [room]);
