@@ -1,3 +1,5 @@
+import { getAiProvider } from '../../server/ai-provider';
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
@@ -10,5 +12,10 @@ export function OPTIONS() {
 }
 
 export function GET() {
-  return Response.json({ aiReady: Boolean(process.env.OPENAI_API_KEY) }, { headers: corsHeaders });
+  const provider = getAiProvider();
+  return Response.json({
+    aiReady: Boolean(provider),
+    provider: provider?.id ?? null,
+    providerLabel: provider?.label ?? null,
+  }, { headers: corsHeaders });
 }

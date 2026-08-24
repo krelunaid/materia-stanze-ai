@@ -192,6 +192,17 @@ function optimizedPreviewUrl(file: File): string | Promise<string> {
   })();
 }
 
+function loadImageSource(source: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.decoding = 'async';
+    const timer = window.setTimeout(() => reject(new Error('La foto sta impiegando troppo tempo a caricarsi.')), 20000);
+    image.onload = () => { window.clearTimeout(timer); resolve(image); };
+    image.onerror = () => { window.clearTimeout(timer); reject(new Error('Non riesco a leggere una delle immagini.')); };
+    image.src = source;
+  });
+}
+
 async function requestJson<T>(url: string, init: RequestInit, timeoutMs: number) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -246,6 +257,7 @@ export function RoomStudio() {
   const [isSearchingProducts, setIsSearchingProducts] = useState(false);
   const [isApplyingProduct, setIsApplyingProduct] = useState(false);
   const [aiStatus, setAiStatus] = useState<AiStatus>('checking');
+  const [aiProviderLabel, setAiProviderLabel] = useState<string | null>(null);
   const [processedPreview, setProcessedPreview] = useState<string | null>(null);
   const [processedLabel, setProcessedLabel] = useState('Stanza vuota');
   const [showProcessedPreview, setShowProcessedPreview] = useState(false);
@@ -257,6 +269,7 @@ export function RoomStudio() {
   const shellRef = useRef<HTMLElement>(null);
   const roomBlobRef = useRef<string | null>(null);
   const materialBlobRef = useRef<string | null>(null);
+  const processedBlobRef = useRef<string | null>(null);
   const dragStartRef = useRef<Surface[] | null>(null);
   const roomImageRef = useRef<HTMLImageElement>(null);
   const autoFitPreviewRef = useRef<string | null>(null);
@@ -266,6 +279,7 @@ export function RoomStudio() {
     return () => {
       if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
       if (materialBlobRef.current) URL.revokeObjectURL(materialBlobRef.current);
+      if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
     };
   }, []);
 
@@ -274,7 +288,8 @@ export function RoomStudio() {
     const timer = window.setTimeout(() => controller.abort(), 10000);
     void fetch(endpoint('/api/capabilities'), { cache: 'no-store', signal: controller.signal })
       .then(async (response) => {
-        const result = await response.json() as { aiReady?: boolean };
+        const result = await response.json() as { aiReady?: boolean; providerLabel?: string | null };
+        setAiProviderLabel(result.providerLabel ?? null);
         setAiStatus(response.ok && result.aiReady ? 'ready' : 'missing');
       })
       .catch((caught: unknown) => {
@@ -342,7 +357,9 @@ export function RoomStudio() {
     }
     const finishImport = (previewUrl: string) => {
       if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
+      if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
       roomBlobRef.current = previewUrl;
+      processedBlobRef.current = null;
       const initialSurfaces = sourceType === 'floorplan' ? createFloorplanOutline() : [];
       setRoom({ ...result.value, previewUrl, sourceType });
       setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]);
@@ -380,7 +397,9 @@ export function RoomStudio() {
 
   function removeRoom() {
     if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
+    if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
     roomBlobRef.current = null;
+    processedBlobRef.current = null;
     setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]); setNotice(null); setIsCorrectingEdges(false);
   }
 
@@ -525,26 +544,38 @@ export function RoomStudio() {
     if (aiStatus !== 'ready') {
       setError(aiStatus === 'checking'
         ? 'Sto ancora verificando il collegamento IA. Riprova tra un momento.'
-        : 'La ricerca reale non è ancora attiva: manca la chiave IA protetta sul server. I materiali di prova qui sotto restano utilizzabili.');
+        : 'La ricerca reale con Grok non è ancora attiva: manca la chiave xAI protetta sul server. I materiali di prova qui sotto restano utilizzabili.');
       return;
     }
     setIsSearchingProducts(true); setError(null); setNotice(`Cerco “${query}” nei cataloghi online…`); setOnlineMaterials([]);
     try {
-      const { response, result } = await requestJson<{ products?: Array<{ name: string; brand: string; category: StudioMaterial['category']; description: string; sourceUrl: string; imageUrl?: string }>; message?: string }>(endpoint('/api/search-products'), {
+      const { response, result } = await requestJson<{ products?: Array<{ name: string; brand: string; collection?: string; category: StudioMaterial['category']; color?: string; effect?: string; format?: string; finish?: string; description: string; sourceUrl: string; imageUrl?: string; confidence?: number; official?: boolean; correction?: string }>; message?: string }>(endpoint('/api/search-products'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }),
       }, 60000);
       if (!response.ok) throw new Error(result.message ?? 'Ricerca non disponibile.');
-      const found = (result.products ?? []).map((item, index) => ({
-        id: `online-${Date.now()}-${index}`,
-        name: item.name,
-        brand: item.brand,
-        category: item.category,
-        description: item.description,
-        sourceUrl: item.sourceUrl,
-        previewUrl: item.imageUrl || undefined,
-      }));
+      const found = (result.products ?? []).map((item, index) => {
+        const technicalDetails = [
+          item.collection,
+          item.color,
+          item.effect,
+          item.format,
+          item.finish,
+          item.correction,
+          item.description,
+          typeof item.confidence === 'number' ? `${item.official ? 'Fonte ufficiale' : 'Fonte verificata'} · ${Math.round(item.confidence * 100)}%` : null,
+        ].filter(Boolean).join(' · ');
+        return {
+          id: `online-${Date.now()}-${index}`,
+          name: item.name,
+          brand: item.brand,
+          category: item.category,
+          description: technicalDetails,
+          sourceUrl: item.sourceUrl,
+          previewUrl: item.imageUrl || undefined,
+        };
+      });
       setOnlineMaterials(found);
-      setNotice(found.length ? `${found.length} prodotti reali trovati. Scegline uno e premi “Applica automaticamente”.` : 'Nessun prodotto affidabile trovato. Prova con marca e collezione più precise.');
+      setNotice(found.length ? `${found.length} prodotti reali verificati da Grok. Scegline uno e premi “Applica automaticamente”.` : 'Nessun prodotto affidabile trovato. Prova con marca e collezione più precise.');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Ricerca non disponibile.'); setNotice(null);
     } finally { setIsSearchingProducts(false); }
@@ -560,8 +591,8 @@ export function RoomStudio() {
   }
 
   async function createMaskedInput(options: { editableSurface?: Surface; frozenSurfaces?: Surface[] }) {
-    const image = roomImageRef.current;
-    if (!image) throw new Error('La foto della stanza non è pronta.');
+    if (!room?.previewUrl) throw new Error('La foto della stanza non è pronta.');
+    const image = await loadImageSource(room.previewUrl);
     const maxSide = 1536;
     const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
     const width = Math.max(1, Math.round(image.naturalWidth * scale));
@@ -602,6 +633,55 @@ export function RoomStudio() {
     return { inputImage, mask };
   }
 
+  async function protectAiResult(resultSource: string, options: { editableSurface?: Surface; frozenSurfaces?: Surface[] }) {
+    if (!room?.previewUrl) throw new Error('La fotografia originale non è disponibile.');
+    const [original, generated] = await Promise.all([
+      loadImageSource(room.previewUrl),
+      loadImageSource(resultSource),
+    ]);
+    const maxSide = 1536;
+    const scale = Math.min(1, maxSide / Math.max(original.naturalWidth, original.naturalHeight));
+    const width = Math.max(1, Math.round(original.naturalWidth * scale));
+    const height = Math.max(1, Math.round(original.naturalHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width; canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Non posso proteggere le zone Freeze.');
+
+    const clipTo = (surface: Surface) => {
+      context.beginPath();
+      surface.points.forEach((point, index) => {
+        const x = point.x * width; const y = point.y * height;
+        if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
+      });
+      context.closePath();
+      context.clip();
+    };
+
+    if (options.editableSurface) {
+      context.drawImage(original, 0, 0, width, height);
+      context.save();
+      clipTo(options.editableSurface);
+      context.drawImage(generated, 0, 0, width, height);
+      context.restore();
+    } else {
+      context.drawImage(generated, 0, 0, width, height);
+      for (const surface of options.frozenSurfaces ?? []) {
+        context.save();
+        clipTo(surface);
+        context.drawImage(original, 0, 0, width, height);
+        context.restore();
+      }
+    }
+
+    const protectedImage = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!protectedImage) throw new Error('Non posso completare la protezione Freeze.');
+    if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
+    const protectedUrl = URL.createObjectURL(protectedImage);
+    processedBlobRef.current = protectedUrl;
+    return protectedUrl;
+  }
+
   async function applyMaterialAutomatically() {
     if (!material || !room?.previewUrl || isApplyingProduct) return;
     if (material.category === 'Arredi') {
@@ -620,7 +700,7 @@ export function RoomStudio() {
     }
 
     if (aiStatus !== 'ready') {
-      setError('L’adattamento fotografico non è ancora attivo: manca la chiave IA protetta sul server.');
+      setError('L’adattamento fotografico con Grok non è ancora attivo: manca la chiave xAI protetta sul server.');
       return;
     }
 
@@ -637,9 +717,10 @@ export function RoomStudio() {
       if (material.previewUrl) form.append('imageUrl', material.previewUrl);
       const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/apply-product'), { method: 'POST', body: form }, 180000);
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Render non disponibile.');
+      const protectedPreview = await protectAiResult(result.image, { editableSurface: target });
       commitSurfaces(surfaces.map((surface) => surface.id === target.id ? { ...surface, materialId: material.id } : surface));
-      setProcessedPreview(result.image); setProcessedLabel(material.name); setShowProcessedPreview(true);
-      setNotice(`${material.name} adattato a ${target.name}. Tutte le zone Freeze sono rimaste protette.`);
+      setProcessedPreview(protectedPreview); setProcessedLabel(material.name); setShowProcessedPreview(true);
+      setNotice(`${material.name} adattato a ${target.name}. Fuori dal contorno restano i pixel della foto originale.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Non sono riuscito ad applicare il prodotto.'); setNotice(null);
     } finally { setIsApplyingProduct(false); }
@@ -720,7 +801,7 @@ export function RoomStudio() {
     if (aiStatus !== 'ready') {
       setError(aiStatus === 'checking'
         ? 'Sto ancora verificando il collegamento IA. Riprova tra un momento.'
-        : '“Svuota la stanza” è pronto, ma per elaborare davvero la foto manca la chiave IA protetta sul server.');
+        : '“Svuota la stanza” con Grok è pronto, ma per elaborare davvero la foto manca la chiave xAI protetta sul server.');
       return;
     }
     setIsEmptyingRoom(true); setError(null);
@@ -734,8 +815,9 @@ export function RoomStudio() {
       form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
       const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/empty-room'), { method: 'POST', body: form }, 180000);
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Immagine non disponibile.');
-      setProcessedPreview(result.image); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
-      setNotice('Stanza vuota pronta. Confrontala con l’originale e scegli quale usare.');
+      const protectedPreview = await protectAiResult(result.image, { frozenSurfaces });
+      setProcessedPreview(protectedPreview); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
+      setNotice('Stanza vuota pronta. Le zone Freeze sono state ricopiate dalla foto originale.');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Non sono riuscito a svuotare la stanza.');
       setNotice(null);
@@ -745,10 +827,12 @@ export function RoomStudio() {
   }
 
   function loadDemoRoom() {
+    if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
+    processedBlobRef.current = null;
     const file = new File(['demo'], 'stanza-esempio.png', { type: 'image/png' });
     const created = createGuidedSurfaces();
     setRoom({ file, kind: 'image', canPreview: true, displaySize: 'esempio incluso', projectName: 'Stanza esempio', previewUrl: '/og.png', sourceType: 'photo' });
-    setRoomRatio(16 / 9); setSurfaces(created); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(created[0].id); setRenameDraft(created[0].name); setError(null);
+    setRoomRatio(16 / 9); setSurfaces(created); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(created[0].id); setRenameDraft(created[0].name); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setError(null);
     setIsCorrectingEdges(false);
     setNotice('Esempio pronto. L’allineamento è automatico: correggi i bordi solo se serve.');
     setActiveStep(2);
@@ -773,7 +857,7 @@ export function RoomStudio() {
       <header className="topbar">
         <a href="/projects" className="brand-lockup" aria-label="Vai ai progetti"><div className="brand-mark" aria-hidden="true"><span /><span /></div><div><p className="eyebrow">Studio materiali</p><p className="brand-name">Materia</p></div></a>
         <div className="project-heading"><span className="status-dot" /><div><p>{projectName}</p><span>{room ? `${room.sourceType === 'floorplan' ? 'Planimetria' : 'Foto'} · originale protetto` : 'Nuovo progetto locale'}</span></div></div>
-        <div className="top-actions"><span className={`ai-status ${aiStatus}`}><i />{aiStatus === 'ready' ? 'IA attiva' : aiStatus === 'checking' ? 'Verifica IA' : 'IA da attivare'}</span><button className="avatar" type="button" aria-label="Profilo locale">AG</button></div>
+        <div className="top-actions"><span className={`ai-status ${aiStatus}`}><i />{aiStatus === 'ready' ? `${aiProviderLabel ?? 'IA'} attiva` : aiStatus === 'checking' ? 'Verifica IA' : 'Grok da attivare'}</span><button className="avatar" type="button" aria-label="Profilo locale">AG</button></div>
       </header>
 
       <nav className="simple-steps" aria-label="Passaggi del progetto">{[
@@ -812,7 +896,7 @@ export function RoomStudio() {
             {isImportingRoom && <div className="processing-overlay" role="status"><span className="processing-spinner" /><strong>Preparo la foto…</strong><small>Le immagini grandi vengono ottimizzate per evitare blocchi.</small></div>}
           </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
           <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" onChange={onMaterialInput} />
-          <div className={`status-bar ${activeStep === 2 ? 'prepare-status' : ''}`}><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.'}</p>{room && activeStep === 2 && <button className={`edge-edit-button ${isCorrectingEdges ? 'is-active' : ''}`} type="button" onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine correzione' : room.sourceType === 'floorplan' ? 'Correggi il perimetro' : 'Correggi i bordi'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && aiStatus === 'ready' && <button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota con IA'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && aiStatus !== 'ready' && <div className="empty-room-unavailable" role="status"><strong>Svuota con IA</strong><span>Da attivare: senza collegamento IA non può rimuovere davvero i mobili.</span></div>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && <button className="continue-products-button" type="button" onClick={() => goToStep(3)}>Continua ai prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
+          <div className={`status-bar ${activeStep === 2 ? 'prepare-status' : ''}`}><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.'}</p>{room && activeStep === 2 && <button className={`edge-edit-button ${isCorrectingEdges ? 'is-active' : ''}`} type="button" onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine correzione' : room.sourceType === 'floorplan' ? 'Correggi il perimetro' : 'Correggi i bordi'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && aiStatus === 'ready' && <button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota con Grok'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && aiStatus !== 'ready' && <div className="empty-room-unavailable" role="status"><strong>Svuota con Grok</strong><span>Da attivare: collega la chiave xAI per rimuovere davvero i mobili.</span></div>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && <button className="continue-products-button" type="button" onClick={() => goToStep(3)}>Continua ai prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
         </section>
 
         <aside className="properties-panel" aria-label="Proprietà">
@@ -821,8 +905,8 @@ export function RoomStudio() {
           {selected ? <><div className="property-section"><div className="property-title"><span>Nome superficie</span><span className="editable-badge">Personalizzabile</span></div><div className="rename-control"><input aria-label="Nome superficie" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} /><button type="button" onClick={renameSelected} disabled={!renameDraft.trim() || renameDraft.trim() === selected.name}>Salva</button></div></div><div className="property-section"><div className="property-title"><span>Protezione superficie</span><span className={`editable-badge ${selected.frozen ? 'frozen' : ''}`}>{selected.frozen ? 'Frozen' : 'Modificabile'}</span></div><button className={`freeze-button ${selected.frozen ? 'is-active' : ''}`} type="button" aria-label={selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'} onClick={toggleFreeze}><span>{selected.frozen ? '◆' : '◇'}</span>{selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'}<small>{selected.frozen ? 'Protetta' : 'Attivo subito'}</small></button><button className="freeze-others-button" type="button" onClick={freezeAllExceptSelected}>Blocca tutto tranne {selected.name}</button></div>
             <div className="property-section product-search-section">
               <div className="property-title"><span>Cerca un prodotto preciso</span><button type="button" onClick={() => materialInputRef.current?.click()}>Carica campione</button></div>
-              {aiStatus !== 'ready' && <div className="ai-setup-banner"><strong>Prova stabile, IA da attivare</strong><span>Puoi provare i campioni inclusi. Ricerca web, stanza vuota e render reali richiedono la chiave protetta sul server.</span></div>}
-              <div className="online-search-control"><input className="material-search" aria-label="Cerca materiali, colori o mobili" value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchProductsOnline(); }} placeholder="Es. mattonelle rovere chiaro Biason" /><button type="button" onClick={() => void searchProductsOnline()} disabled={isSearchingProducts}>{isSearchingProducts ? 'Cerco…' : aiStatus === 'ready' ? 'Cerca online' : 'IA non attiva'}</button></div>
+              {aiStatus !== 'ready' && <div className="ai-setup-banner"><strong>Grok pronto da collegare</strong><span>Puoi provare i campioni inclusi. Ricerca web, stanza vuota e render reali richiedono la chiave xAI protetta sul server.</span></div>}
+              <div className="online-search-control"><input className="material-search" aria-label="Cerca materiali, colori o mobili" value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchProductsOnline(); }} placeholder="Es. Intense Lea white materico" /><button type="button" onClick={() => void searchProductsOnline()} disabled={isSearchingProducts}>{isSearchingProducts ? 'Cerco…' : aiStatus === 'ready' ? `Cerca con ${aiProviderLabel ?? 'IA'}` : 'Grok non attivo'}</button></div>
               <div className="search-scope"><span>Materiali</span><span>Colori</span><span>Arredi</span><span className="internet-ready">Prodotti reali con fonte</span></div>
               {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt="" /> : <span className="catalog-swatch tile" /> }<button type="button" onClick={() => chooseMaterial(item)}><strong>{item.brand} · {item.name}</strong><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a></div>)}</div>}
               <div className="material-results">{filteredMaterials.map((item) => <button type="button" key={item.id} className={`material-result ${material?.id === item.id ? 'is-selected' : ''}`} onClick={() => chooseMaterial(item)}><span className={`catalog-swatch ${item.pattern ?? 'color'}`} style={{ '--swatch-color': item.color } as CSSProperties} /><span><strong>{item.name}</strong><small>{item.category} · {item.description}</small></span></button>)}{filteredFurniture.map((item) => <button type="button" key={item.name} className={`material-result furniture-result ${furniture.includes(item.name) ? 'is-selected' : ''}`} onClick={() => toggleFurniture(item.name)}><span className="furniture-icon">{furniture.includes(item.name) ? '✓' : '+'}</span><span><strong>{item.name}</strong><small>Mobili · {item.description}</small></span></button>)}{filteredMaterials.length === 0 && filteredFurniture.length === 0 && onlineMaterials.length === 0 && <div className="custom-search-result"><p>Nessun campione incluso corrisponde. Per trovare marca e prodotto esatti serve la ricerca IA attiva.</p><button type="button" onClick={addCustomRequest}>Aggiungi “{materialQuery.trim()}” alla richiesta</button></div>}</div>
@@ -835,10 +919,10 @@ export function RoomStudio() {
             <div className="property-section"><div className="property-title"><span>Elementi nel render</span><span className="editable-badge">{furniture.length + customRequests.length} scelti</span></div>{furniture.length || customRequests.length ? <div className="selected-assets">{furniture.map((item) => <button type="button" key={item} onClick={() => toggleFurniture(item)}>{item}<span>×</span></button>)}{customRequests.map((item) => <button type="button" key={item} onClick={() => setCustomRequests((current) => current.filter((name) => name !== item))}>{item}<span>×</span></button>)}</div> : <p className="no-results">Cerca un mobile o scrivi liberamente ciò che vuoi inserire.</p>}<p className="material-search-note">Con il motore AI potrai caricare anche la foto esatta del mobile e indicarne la posizione.</p></div>
             <div className="property-section metrics"><div><span>Vertici</span><strong>{selected.points.length}</strong></div><div><span>Stato</span><strong>{selected.frozen ? 'Lock' : 'Edit'}</strong></div><div><span>Texture</span><strong>{selected.materialId ? 'Sì' : 'No'}</strong></div></div><button className="remove-button" type="button" onClick={deleteSelected} disabled={selected.frozen}>Elimina superficie</button></> : room ? <div className="empty-properties"><strong>Seleziona un contorno</strong><p>Tocca una superficie sulla foto o sceglila dall’elenco. Puoi anche disegnarne una nuova.</p></div> : null}
           {room && <button className="remove-room-button" type="button" onClick={removeRoom}>Chiudi progetto</button>}
-          <div className="phase-card"><span className="phase-index">0.2</span><div><p className="eyebrow">Modalità prova</p><strong>Flusso render pronto</strong><p>Ricerca online, adattamento fotografico e Freeze sono collegati; per attivarli sul server serve la chiave AI.</p></div></div>
+          <div className="phase-card"><span className="phase-index">0.3</span><div><p className="eyebrow">Modalità prova</p><strong>Grok e Freeze pronti</strong><p>Ricerca verificata, stanza vuota e render sono predisposti; per attivarli sul server serve la chiave xAI.</p></div></div>
         </aside>
       </div>
-      {renderSummaryOpen && <div className="render-modal" role="dialog" aria-modal="true" aria-labelledby="render-summary-title"><div className="render-modal-card"><button className="modal-close" type="button" onClick={() => setRenderSummaryOpen(false)} aria-label="Chiudi riepilogo">×</button><p className="eyebrow">Richiesta pronta</p><h2 id="render-summary-title">Prima del render reale</h2><div className="render-checks"><div><span>Superfici con materiale</span><strong>{surfaces.filter((surface) => surface.materialId).length}</strong></div><div><span>Zone protette</span><strong>{surfaces.filter((surface) => surface.frozen).length}</strong></div><div><span>Elementi richiesti</span><strong>{furniture.length + customRequests.length}</strong></div></div><div className="render-list"><strong>Il motore riceverà:</strong><p>{surfaces.filter((surface) => surface.materialId).map((surface) => `${surface.name}: ${materialMap.get(surface.materialId!)?.name ?? 'materiale'}`).join(' · ') || 'Nessun materiale ancora applicato'}</p><p>{furniture.length || customRequests.length ? `Da inserire: ${[...furniture, ...customRequests].join(', ')}` : 'Nessun arredo aggiunto'}</p></div><div className="engine-warning"><span>AI</span><p><strong>Motore pronto, chiave server da configurare</strong>L’app invierà foto, prodotto e maschere Freeze al motore fotografico. Senza chiave non mostra risultati inventati.</p></div><button className="modal-primary" type="button" onClick={() => setRenderSummaryOpen(false)}>Continua a configurare</button></div></div>}
+      {renderSummaryOpen && <div className="render-modal" role="dialog" aria-modal="true" aria-labelledby="render-summary-title"><div className="render-modal-card"><button className="modal-close" type="button" onClick={() => setRenderSummaryOpen(false)} aria-label="Chiudi riepilogo">×</button><p className="eyebrow">Richiesta pronta</p><h2 id="render-summary-title">Prima del render reale</h2><div className="render-checks"><div><span>Superfici con materiale</span><strong>{surfaces.filter((surface) => surface.materialId).length}</strong></div><div><span>Zone protette</span><strong>{surfaces.filter((surface) => surface.frozen).length}</strong></div><div><span>Elementi richiesti</span><strong>{furniture.length + customRequests.length}</strong></div></div><div className="render-list"><strong>Il motore riceverà:</strong><p>{surfaces.filter((surface) => surface.materialId).map((surface) => `${surface.name}: ${materialMap.get(surface.materialId!)?.name ?? 'materiale'}`).join(' · ') || 'Nessun materiale ancora applicato'}</p><p>{furniture.length || customRequests.length ? `Da inserire: ${[...furniture, ...customRequests].join(', ')}` : 'Nessun arredo aggiunto'}</p></div><div className="engine-warning"><span>AI</span><p><strong>{aiStatus === 'ready' ? `${aiProviderLabel ?? 'IA'} attiva` : 'Grok pronto, chiave server da configurare'}</strong>L’app invierà foto, prodotto e maschere Freeze al motore fotografico. Il risultato viene poi ricomposto con l’originale nelle aree protette.</p></div><button className="modal-primary" type="button" onClick={() => setRenderSummaryOpen(false)}>Continua a configurare</button></div></div>}
     </main>
   );
 }

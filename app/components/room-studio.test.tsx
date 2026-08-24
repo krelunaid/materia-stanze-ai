@@ -28,7 +28,7 @@ describe('RoomStudio', () => {
     expect(screen.getByText('Soggiorno verde')).toBeInTheDocument();
     expect(screen.getByText('Originale intatto')).toBeInTheDocument();
     expect(screen.getByText('Riconoscimento automatico')).toBeInTheDocument();
-    expect(screen.getByText('Svuota con IA')).toBeInTheDocument();
+    expect(screen.getByText('Svuota con Grok')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Svuota/ })).not.toBeInTheDocument();
   });
 
@@ -129,7 +129,7 @@ describe('RoomStudio', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Prova flusso render' }));
     expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Muro 1: Verde salvia');
     expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Da inserire: Divano chiaro');
-    expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Motore pronto, chiave server da configurare');
+    expect(screen.getByRole('dialog', { name: 'Prima del render reale' })).toHaveTextContent('Grok pronto, chiave server da configurare');
   });
 
   it('uses one search for furniture and accepts a free-form render request', () => {
