@@ -1,20 +1,22 @@
 import { expect, test } from '@playwright/test';
 
-test('opens the editor and imports a local image', async ({ page }) => {
+test('opens the editor and creates a wall with four taps', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Carica la stanza' })).toBeVisible();
-
-  await page.locator('#room-file').setInputFiles({
-    name: 'stanza-demo.jpg',
-    mimeType: 'image/jpeg',
-    buffer: Buffer.from('synthetic-room'),
-  });
-
-  await expect(page.getByText('Stanza demo')).toBeVisible();
+  await expect(page.locator('main')).toHaveAttribute('data-hydrated', 'true');
+  await page.getByRole('button', { name: 'Prova con la stanza esempio' }).click();
+  await expect(page.getByText('Stanza esempio', { exact: true })).toBeVisible();
   await expect(page.getByText('Originale intatto')).toBeVisible();
-  await expect(page.getByText('Disegna la prima superficie')).toBeVisible();
 
-  await page.getByRole('button', { name: 'Inserisci tracciatura guidata' }).click();
+  await page.getByRole('button', { name: /Aggiungi muro facile/ }).click();
+  const overlay = page.locator('.surface-overlay');
+  await overlay.click({ position: { x: 260, y: 100 } });
+  await overlay.click({ position: { x: 500, y: 100 } });
+  await overlay.click({ position: { x: 500, y: 260 } });
+  await overlay.click({ position: { x: 260, y: 260 } });
+  await expect(page.getByRole('heading', { name: 'Muro 4' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Chiudi superficie' })).toHaveCount(0);
+
   await expect(page.getByRole('button', { name: 'Freeze superficie' })).toBeVisible();
   await page.getByRole('button', { name: 'Freeze superficie' }).click();
   await expect(page.getByText('Frozen')).toBeVisible();

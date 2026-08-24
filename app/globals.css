@@ -53,6 +53,10 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .draw-button,.finish-button,.drawing-actions button,.status-bar button,.apply-button,.asset-card button { border:0; border-radius:9px; font-size:10px; font-weight:750; cursor:pointer; }
 .demo-button { display:block; margin:9px auto 0; padding:7px 11px; border:0; background:transparent; color:var(--accent); font-size:10px; font-weight:750; text-decoration:underline; cursor:pointer; }
 .draw-button { min-height:34px; padding:0 11px; background:#fff; border:1px solid #cfd7d3; }
+.easy-draw-button { background:var(--accent); color:#fff; border-color:var(--accent); }
+.advanced-draw-button { min-height:32px; padding:0 8px; border:0; border-radius:8px; background:transparent; color:#68736f; font-size:9px; font-weight:700; text-decoration:underline; cursor:pointer; }
+.advanced-draw-button.is-selected { background:#e7ebe8; color:var(--ink); }
+.advanced-draw-button:disabled { opacity:.4; cursor:not-allowed; }
 .history-button { border-color:#d5dad6; background:#fff; font-size:16px; }
 .history-button:disabled { opacity:.35; }
 .draw-button.is-selected { border-color:var(--accent); background:var(--accent); color:#fff; }
@@ -121,6 +125,9 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
   .properties-panel { order:3; padding:20px 16px 32px; }
   .editor-toolbar { align-items:flex-start; gap:8px; padding:9px; min-height:55px; overflow-x:auto; }
   .tool-group { flex-wrap:wrap; }
+  .easy-draw-button { order:4; }
+  .advanced-draw-button { order:5; }
+  .kind-select { order:6; }
   .mode-label { display:none; }
   .drawing-actions { margin-left:auto; }
   .drawing-actions>span { display:none; }
