@@ -542,7 +542,7 @@ export function RoomStudio() {
       <header className="topbar">
         <a href="/projects" className="brand-lockup" aria-label="Vai ai progetti"><div className="brand-mark" aria-hidden="true"><span /><span /></div><div><p className="eyebrow">Studio materiali</p><p className="brand-name">Materia</p></div></a>
         <div className="project-heading"><span className="status-dot" /><div><p>{projectName}</p><span>{room ? `${room.sourceType === 'floorplan' ? 'Planimetria' : 'Foto'} · originale protetto` : 'Nuovo progetto locale'}</span></div></div>
-        <div className="top-actions"><span className="simple-badge">Modalità semplice</span><button className="avatar" type="button" aria-label="Profilo locale">AG</button></div>
+        <div className="top-actions"><button className="avatar" type="button" aria-label="Profilo locale">AG</button></div>
       </header>
 
       <nav className="simple-steps" aria-label="Passaggi del progetto">{[

@@ -63,7 +63,8 @@ describe('RoomStudio', () => {
 
   it('removes the problematic advanced drawing mode', () => {
     render(<RoomStudio />);
-    expect(screen.getByText('Modalità semplice')).toBeInTheDocument();
+    expect(screen.queryByText('Modalità semplice')).not.toBeInTheDocument();
+    expect(screen.queryByText('Modalità avanzata')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Avanzato' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Strumenti avanzati' })).not.toBeInTheDocument();
   });
@@ -133,7 +134,7 @@ describe('RoomStudio', () => {
   it('starts with a four-step workflow and only exposes the simple mode', () => {
     render(<RoomStudio />);
     expect(screen.getByRole('navigation', { name: 'Passaggi del progetto' })).toHaveTextContent('1Foto2Superfici3Cerca4Render');
-    expect(screen.getByText('Modalità semplice')).toBeInTheDocument();
+    expect(screen.queryByText(/Modalità (semplice|avanzata)/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Strumenti avanzati' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Superfici/ })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
