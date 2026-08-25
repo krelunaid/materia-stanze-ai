@@ -179,7 +179,10 @@ describe('getAiProvider', () => {
       [...room, { name: 'glass and frame', kind: 'window', confidence: .9, points: [{ x: .695, y: .015 }, { x: .855, y: .01 }, { x: .855, y: .265 }, { x: .695, y: .268 }] }],
     ]);
 
-    expect(result.filter((surface) => surface.kind === 'window')).toHaveLength(1);
+    const windows = result.filter((surface) => surface.kind === 'window');
+    expect(windows).toHaveLength(1);
+    expect(windows[0].points[0].x).toBeCloseTo(.647, 2);
+    expect(windows[0].points[1].x).toBeCloseTo(.87, 2);
   });
 
   it('corrects an opening type using the floor boundary', () => {

@@ -462,6 +462,27 @@ function openingQuality(surface: DetectedRoomSurface, floor: DetectedRoomSurface
   return score;
 }
 
+function consensusOpening(group: DetectedRoomSurface[], floor: DetectedRoomSurface | undefined) {
+  const ranked = [...group].sort((left, right) => openingQuality(right, floor) - openingQuality(left, floor));
+  const best = ranked[0];
+  if (ranked.length === 1 || ranked.some((surface) => surface.points.length !== 4)) {
+    return normalizeOpeningKind(best, floor);
+  }
+  const weightTotal = ranked.reduce((total, surface) => total + Math.max(.2, surface.confidence), 0);
+  const points = Array.from({ length: 4 }, (_, index) => ranked.reduce((point, surface) => {
+    const weight = Math.max(.2, surface.confidence);
+    return {
+      x: point.x + surface.points[index].x * weight / weightTotal,
+      y: point.y + surface.points[index].y * weight / weightTotal,
+    };
+  }, { x: 0, y: 0 }));
+  return normalizeOpeningKind({
+    ...best,
+    confidence: ranked.reduce((total, surface) => total + surface.confidence, 0) / ranked.length,
+    points,
+  }, floor);
+}
+
 export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[][]) {
   const normalized = candidates.map(normalizeRoomSurfaces).filter((candidate) => candidate.length > 0);
   if (!normalized.length) return [];
@@ -487,10 +508,7 @@ export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[]
     if (group) group.push(opening);
     else groups.push([opening]);
   });
-  const bestOpenings = groups.map((group) => {
-    const best = [...group].sort((left, right) => openingQuality(right, floor) - openingQuality(left, floor))[0];
-    return normalizeOpeningKind(best, floor);
-  });
+  const bestOpenings = groups.map((group) => consensusOpening(group, floor));
 
   return normalizeRoomSurfaces([
     ...base.filter((surface) => surface.kind !== 'door' && surface.kind !== 'window'),
