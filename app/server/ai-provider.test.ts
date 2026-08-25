@@ -81,8 +81,9 @@ describe('getAiProvider', () => {
     const request = fetchMock.mock.calls[0]?.[1];
     const payload = JSON.parse(String(request?.body));
     expect(payload).toMatchObject({
-      model: 'grok-4.6',
-      reasoning: { effort: 'medium' },
+      model: 'grok-4.3',
+      max_output_tokens: 1800,
+      reasoning: { effort: 'none' },
       text: { format: { type: 'json_schema', name: 'room_surface_geometry', strict: true } },
     });
     expect(payload.input[0].content[0]).toMatchObject({ type: 'input_image', detail: 'high' });

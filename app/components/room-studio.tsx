@@ -203,6 +203,21 @@ function loadImageSource(source: string) {
   });
 }
 
+async function createGeometryInput(source: string) {
+  const image = await loadImageSource(source);
+  const maximumSide = 1024;
+  const scale = Math.min(1, maximumSide / Math.max(image.naturalWidth, image.naturalHeight));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Non posso preparare la foto per il riconoscimento.');
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const result = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', .82));
+  if (!result) throw new Error('Non posso preparare la foto per il riconoscimento.');
+  return result;
+}
+
 async function requestJson<T>(url: string, init: RequestInit, timeoutMs: number) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -772,7 +787,7 @@ export function RoomStudio() {
   }
 
   async function autoFitSurfaces() {
-    if (!room || room.sourceType !== 'photo' || !roomImageRef.current) return;
+    if (!room?.previewUrl || room.sourceType !== 'photo' || !roomImageRef.current) return;
     setIsAutoFitting(true); setError(null);
     setNotice(aiStatus === 'ready' || aiStatus === 'checking'
       ? 'Grok sta leggendo gli angoli reali, il pavimento, le pareti e il soffitto…'
@@ -784,13 +799,13 @@ export function RoomStudio() {
 
       if (aiStatus === 'ready' || aiStatus === 'checking') {
         try {
-          const { inputImage } = await createMaskedInput({ sourceUrl: room.previewUrl });
+          const inputImage = await createGeometryInput(room.previewUrl);
           const form = new FormData();
-          form.append('image', inputImage, room.file.name.replace(/\.(heic|heif)$/i, '.png'));
+          form.append('image', inputImage, room.file.name.replace(/\.(heic|heif|png)$/i, '.jpg'));
           const { response, result } = await requestJson<{
             surfaces?: Array<{ name: string; kind: SurfaceKind; points: Point[]; confidence: number }>;
             message?: string;
-          }>(endpoint('/api/detect-surfaces'), { method: 'POST', body: form }, 150000);
+          }>(endpoint('/api/detect-surfaces'), { method: 'POST', body: form }, 75000);
           if (!response.ok || !result.surfaces?.length) throw new Error(result.message ?? 'Grok non ha trovato superfici affidabili.');
           detected = result.surfaces.filter((surface) => isValidPolygon(surface.points)).map((surface, index) => ({
             id: `grok-${Date.now()}-${index}`,

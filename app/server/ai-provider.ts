@@ -265,10 +265,10 @@ export async function detectRoomSurfaces(provider: AiProvider, image: File) {
     method: 'POST',
     headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: provider.id === 'grok' ? 'grok-4.6' : 'gpt-5.4-mini',
+      model: provider.id === 'grok' ? 'grok-4.3' : 'gpt-5.4-mini',
       input,
-      max_output_tokens: 3200,
-      reasoning: { effort: 'medium' },
+      max_output_tokens: 1800,
+      reasoning: { effort: provider.id === 'grok' ? 'none' : 'low' },
       text: { format: { type: 'json_schema', name: 'room_surface_geometry', schema: roomGeometrySchema, strict: true } },
       store: false,
     }),
