@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chooseSupportedImageAspectRatio, detectRoomSurfaces, editImage, getAiProvider, normalizeRoomSurfaces, reconcileRoomSurfaceCandidates, searchMaterials } from './ai-provider';
+import { chooseSupportedImageAspectRatio, detectRoomSurfaces, editImage, getAiProvider, normalizeRoomSurfaces, orderQuadClockwise, reconcileRoomSurfaceCandidates, searchMaterials } from './ai-provider';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -183,6 +183,31 @@ describe('getAiProvider', () => {
     expect(windows).toHaveLength(1);
     expect(windows[0].points[0].x).toBeCloseTo(.647, 2);
     expect(windows[0].points[1].x).toBeCloseTo(.87, 2);
+  });
+
+  it('aligns window vertices before averaging even when the traces start at different corners', () => {
+    const room = [
+      { name: 'wall', kind: 'wall' as const, confidence: .96, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: 0, y: .72 }] },
+      { name: 'floor', kind: 'floor' as const, confidence: .97, points: [{ x: 0, y: .72 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+    ];
+    const clockwise = [{ x: .32, y: .2 }, { x: .68, y: .2 }, { x: .68, y: .58 }, { x: .32, y: .58 }];
+    const reversed = [...clockwise].reverse();
+    const rotated = [clockwise[2], clockwise[3], clockwise[0], clockwise[1]];
+
+    expect(orderQuadClockwise(reversed)).toEqual(clockwise);
+    expect(orderQuadClockwise(rotated)).toEqual(clockwise);
+
+    const result = reconcileRoomSurfaceCandidates([
+      [...room, { name: 'window a', kind: 'window', confidence: .9, points: reversed }],
+      [...room, { name: 'window b', kind: 'window', confidence: .9, points: rotated }],
+    ]);
+    const window = result.find((surface) => surface.kind === 'window');
+    expect(window?.points).toHaveLength(4);
+    expect(window?.points[0].x).toBeCloseTo(.32, 2);
+    expect(window?.points[0].y).toBeCloseTo(.2, 2);
+    expect(window?.points[2].x).toBeCloseTo(.68, 2);
+    expect(window?.points[2].y).toBeCloseTo(.58, 2);
+    expect(result.filter((surface) => surface.kind === 'window')).toHaveLength(1);
   });
 
   it('corrects an opening type using the floor boundary', () => {

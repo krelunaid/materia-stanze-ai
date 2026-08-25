@@ -31,7 +31,7 @@ export default function ProjectsPage() {
         <article className="new-project-card">
           <div className="new-project-icon" aria-hidden="true">+</div>
           <h2>Nuova stanza</h2>
-          <p>Importa una fotografia, un documento PDF o una planimetria.</p>
+          <p>Importa una fotografia JPG, PNG o HEIC, oppure una planimetria.</p>
           <a href="/">Apri l’editor <span aria-hidden="true">→</span></a>
         </article>
 

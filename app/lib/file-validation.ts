@@ -1,7 +1,7 @@
 export const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
-const allowedMimeTypes = new Set(['image/jpeg', 'image/png', 'image/heic', 'image/heif', 'application/pdf']);
-const allowedFallbackExtensions = new Set(['jpg', 'jpeg', 'png', 'heic', 'heif', 'pdf']);
+const allowedMimeTypes = new Set(['image/jpeg', 'image/png', 'image/heic', 'image/heif']);
+const allowedFallbackExtensions = new Set(['jpg', 'jpeg', 'png', 'heic', 'heif']);
 
 export type AcceptedRoomFile = {
   file: File;
@@ -36,8 +36,12 @@ export function validateRoomFile(file: File): RoomFileValidation {
   const recognizedType = allowedMimeTypes.has(file.type);
   const recognizedFallback = file.type === '' && allowedFallbackExtensions.has(extension);
 
+  const isPdf = file.type === 'application/pdf' || extension === 'pdf';
+  if (isPdf) {
+    return { ok: false, message: 'Il PDF non è ancora modificabile. Esportalo come JPG o PNG e riprova.' };
+  }
   if (!recognizedType && !recognizedFallback) {
-    return { ok: false, message: 'Formato non supportato. Usa JPG, PNG, HEIC o PDF.' };
+    return { ok: false, message: 'Formato non supportato. Usa JPG, PNG o HEIC.' };
   }
   if (file.size <= 0) {
     return { ok: false, message: 'Il file è vuoto. Scegli un originale valido.' };
@@ -46,15 +50,12 @@ export function validateRoomFile(file: File): RoomFileValidation {
     return { ok: false, message: 'Il file supera il limite di 20 MB.' };
   }
 
-  const isPdf = file.type === 'application/pdf' || extension === 'pdf';
-  const canPreview = !isPdf;
-
   return {
     ok: true,
     value: {
       file,
-      kind: isPdf ? 'pdf' : 'image',
-      canPreview,
+      kind: 'image',
+      canPreview: true,
       displaySize: formatBytes(file.size),
       projectName: deriveProjectName(file.name),
     },

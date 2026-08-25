@@ -12,6 +12,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { drawImageCover } from '../lib/canvas-draw';
 import { AcceptedRoomFile, validateRoomFile } from '../lib/file-validation';
 import {
   isValidPolygon,
@@ -46,6 +47,28 @@ type StudioMaterial = {
 type DragVertex = { surfaceId: string; vertexIndex: number; pointerId: number; origin: Point };
 type AiStatus = 'checking' | 'ready' | 'missing' | 'unreachable';
 type DetectedSurface = { name: string; kind: SurfaceKind; points: Point[]; confidence: number };
+
+const HOSTED_SITE = 'https://materia-stanze-ai.andreagadducci.chatgpt.site';
+const EMPTY_ROOM_FRAMING_MIN = .64;
+
+function isNativeApp() {
+  return typeof window !== 'undefined' && window.location.protocol === 'capacitor:';
+}
+
+function nativeAccessToken() {
+  return import.meta.env.VITE_SITES_BYPASS_TOKEN?.trim() ?? '';
+}
+
+function withNativeAuth(headers?: HeadersInit) {
+  const next = new Headers(headers);
+  const token = nativeAccessToken();
+  if (isNativeApp() && token) next.set('OAI-Sites-Authorization', `Bearer ${token}`);
+  return next;
+}
+
+function studioEndpoint(path: string) {
+  return isNativeApp() ? `${HOSTED_SITE}${path}` : path;
+}
 
 const catalogMaterials: StudioMaterial[] = [
   { id: 'oak-natural', name: 'Rovere naturale', category: 'Pavimenti', description: 'Doghe grandi · effetto legno', color: '#b88d5f', pattern: 'wood' },
@@ -111,40 +134,6 @@ function inheritSurfaceState(detected: Surface[], previous: Surface[]) {
     if (matchIndex < 0) return surface;
     const match = unmatched.splice(matchIndex, 1)[0];
     return { ...surface, id: match.id, frozen: match.frozen, materialId: match.materialId };
-  });
-}
-
-function surfaceBounds(surface: Surface) {
-  const xs = surface.points.map((point) => point.x);
-  const ys = surface.points.map((point) => point.y);
-  const left = Math.min(...xs); const right = Math.max(...xs);
-  const top = Math.min(...ys); const bottom = Math.max(...ys);
-  return { left, right, top, bottom, width: right - left, height: bottom - top };
-}
-
-function roomStructurePreserved(before: Surface[], after: Surface[]) {
-  const previousFloor = before.find((surface) => surface.kind === 'floor');
-  const nextFloor = after.find((surface) => surface.kind === 'floor');
-  if (previousFloor && nextFloor) {
-    const previousTop = surfaceBounds(previousFloor).top;
-    const nextTop = surfaceBounds(nextFloor).top;
-    if (Math.abs(previousTop - nextTop) > .16) return false;
-  }
-
-  const openings = before.filter((surface) => surface.kind === 'door' || surface.kind === 'window');
-  return openings.every((opening) => {
-    const center = surfaceCenter(opening);
-    const bounds = surfaceBounds(opening);
-    return after.some((candidate) => {
-      if (candidate.kind !== opening.kind) return false;
-      const candidateCenter = surfaceCenter(candidate);
-      const candidateBounds = surfaceBounds(candidate);
-      const widthRatio = candidateBounds.width / Math.max(.001, bounds.width);
-      const heightRatio = candidateBounds.height / Math.max(.001, bounds.height);
-      return Math.hypot(center.x - candidateCenter.x, center.y - candidateCenter.y) <= .14
-        && widthRatio >= .55 && widthRatio <= 1.8
-        && heightRatio >= .55 && heightRatio <= 1.8;
-    });
   });
 }
 
@@ -262,25 +251,47 @@ function optimizedPreviewUrl(file: File): string | Promise<string> {
 
   return (async () => {
     const sourceUrl = URL.createObjectURL(file);
+    let bitmap: ImageBitmap | null = null;
     try {
-      const image = new Image();
-      image.decoding = 'async';
-      await new Promise<void>((resolve, reject) => {
-        const timer = window.setTimeout(() => reject(new Error('timeout')), 15000);
-        image.onload = () => { window.clearTimeout(timer); resolve(); };
-        image.onerror = () => { window.clearTimeout(timer); reject(new Error('decode')); };
-        image.src = sourceUrl;
-      });
-      const maximumSide = 1800;
-      const scale = Math.min(1, maximumSide / Math.max(image.naturalWidth, image.naturalHeight));
+      if (typeof createImageBitmap === 'function') {
+        try {
+          bitmap = await createImageBitmap(file);
+        } catch {
+          bitmap = null;
+        }
+      }
+
       const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-      canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('encode');
+
+      if (bitmap) {
+        const maximumSide = 1800;
+        const scale = Math.min(1, maximumSide / Math.max(bitmap.width, bitmap.height));
+        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+        context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      } else {
+        const image = new Image();
+        image.decoding = 'async';
+        await new Promise<void>((resolve, reject) => {
+          const timer = window.setTimeout(() => reject(new Error('timeout')), 15000);
+          image.onload = () => { window.clearTimeout(timer); resolve(); };
+          image.onerror = () => { window.clearTimeout(timer); reject(new Error('decode')); };
+          image.src = sourceUrl;
+        });
+        const maximumSide = 1800;
+        const scale = Math.min(1, maximumSide / Math.max(image.naturalWidth, image.naturalHeight));
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      }
+
       const optimized = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', .88));
       if (!optimized) throw new Error('encode');
       return URL.createObjectURL(optimized);
     } finally {
+      bitmap?.close();
       URL.revokeObjectURL(sourceUrl);
     }
   })();
@@ -310,8 +321,8 @@ async function framingSimilarity(originalSource: string, generatedSource: string
   const originalContext = originalCanvas.getContext('2d', { willReadFrequently: true });
   const generatedContext = generatedCanvas.getContext('2d', { willReadFrequently: true });
   if (!originalContext || !generatedContext) return 0;
-  originalContext.drawImage(original, 0, 0, width, height);
-  generatedContext.drawImage(generated, 0, 0, width, height);
+  drawImageCover(originalContext, original, width, height);
+  drawImageCover(generatedContext, generated, width, height);
   const originalPixels = originalContext.getImageData(0, 0, width, height).data;
   const generatedPixels = generatedContext.getImageData(0, 0, width, height).data;
   let difference = 0; let samples = 0;
@@ -352,11 +363,7 @@ async function requestJson<T>(url: string, init: RequestInit, timeoutMs: number)
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const headers = new Headers(init.headers);
-    const nativeAccessToken = import.meta.env.VITE_SITES_BYPASS_TOKEN?.trim();
-    if (window.location.protocol === 'capacitor:' && nativeAccessToken) {
-      headers.set('OAI-Sites-Authorization', `Bearer ${nativeAccessToken}`);
-    }
+    const headers = withNativeAuth(init.headers);
     const response = await fetch(url, { ...init, headers, signal: controller.signal });
     const text = await response.text();
     let result: T;
@@ -439,12 +446,7 @@ export function RoomStudio() {
   useEffect(() => {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), 10000);
-    const headers = new Headers();
-    const nativeAccessToken = import.meta.env.VITE_SITES_BYPASS_TOKEN?.trim();
-    if (window.location.protocol === 'capacitor:' && nativeAccessToken) {
-      headers.set('OAI-Sites-Authorization', `Bearer ${nativeAccessToken}`);
-    }
-    void fetch(endpoint('/api/capabilities'), { cache: 'no-store', headers, signal: controller.signal })
+    void fetch(studioEndpoint('/api/capabilities'), { cache: 'no-store', headers: withNativeAuth(), signal: controller.signal })
       .then(async (response) => {
         const result = await response.json() as { aiReady?: boolean; providerLabel?: string | null };
         setAiProviderLabel(result.providerLabel ?? null);
@@ -522,10 +524,6 @@ export function RoomStudio() {
     if (!file) return;
     const result = validateRoomFile(file);
     if (!result.ok) { setError(result.message); return; }
-    if (!result.value.canPreview) {
-      setError('Il PDF non è ancora modificabile. Esportalo come immagine e riprova.');
-      return;
-    }
     const finishImport = (previewUrl: string) => {
       if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
       if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
@@ -545,8 +543,13 @@ export function RoomStudio() {
       setIsImportingRoom(false);
       setActiveStep(2);
     };
-    const failImport = () => {
-      setError('La foto non può essere letta. Su iPhone prova a condividerla come JPEG oppure scegli uno screenshot.');
+    const failImport = (reason?: unknown) => {
+      const isApplePhoto = ['image/heic', 'image/heif'].includes(file.type) || /\.(heic|heif)$/i.test(file.name);
+      setError(isApplePhoto
+        ? 'Non riesco a leggere questo HEIC. Su iPhone apri Foto → Condividi → “Salva come JPEG”, oppure carica uno screenshot.'
+        : reason instanceof Error && /timeout/i.test(reason.message)
+          ? 'La foto sta impiegando troppo tempo a caricarsi. Riprova con un JPEG più piccolo.'
+          : 'La foto non può essere letta. Su iPhone prova a condividerla come JPEG oppure scegli uno screenshot.');
       setIsImportingRoom(false);
     };
 
@@ -705,9 +708,7 @@ export function RoomStudio() {
   }
 
   function endpoint(path: string) {
-    return window.location.protocol === 'capacitor:'
-      ? `https://materia-stanze-ai.andreagadducci.chatgpt.site${path}`
-      : path;
+    return studioEndpoint(path);
   }
 
   async function searchProductsOnline() {
@@ -841,10 +842,10 @@ export function RoomStudio() {
       context.drawImage(original, 0, 0, width, height);
       context.save();
       clipTo(options.editableSurface);
-      context.drawImage(generated, 0, 0, width, height);
+      drawImageCover(context, generated, width, height);
       context.restore();
     } else {
-      context.drawImage(generated, 0, 0, width, height);
+      drawImageCover(context, generated, width, height);
       for (const surface of options.frozenSurfaces ?? []) {
         context.save();
         clipTo(surface);
@@ -986,11 +987,10 @@ export function RoomStudio() {
 
       const frozenSurfaces = surfaces.filter((surface) => surface.frozen);
       const frozenKeys = new Set(frozenSurfaces.map((surface) => `${surface.kind}:${surface.name.toLocaleLowerCase('it')}`));
-      const editableByKey = new Map(surfaces.filter((surface) => !surface.frozen).map((surface) => [`${surface.kind}:${surface.name.toLocaleLowerCase('it')}`, surface]));
-      const adjusted = detected.filter((surface) => !frozenKeys.has(`${surface.kind}:${surface.name.toLocaleLowerCase('it')}`)).map((surface) => {
-        const previous = editableByKey.get(`${surface.kind}:${surface.name.toLocaleLowerCase('it')}`);
-        return previous ? { ...surface, id: previous.id, materialId: previous.materialId } : surface;
-      });
+      const adjusted = inheritSurfaceState(
+        detected.filter((surface) => !frozenKeys.has(`${surface.kind}:${surface.name.toLocaleLowerCase('it')}`)),
+        surfaces.filter((surface) => !surface.frozen),
+      );
       const nextSurfaces = [...adjusted, ...frozenSurfaces];
       commitSurfaces(nextSurfaces);
       const first = adjusted[0] ?? frozenSurfaces[0] ?? null;
@@ -1028,8 +1028,8 @@ export function RoomStudio() {
     try {
       const frozenSurfaces = baselineSurfaces.filter((surface) => surface.frozen);
       const { inputImage, mask } = await createMaskedInput({ frozenSurfaces });
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        if (attempt > 0) setNotice('La prima elaborazione ha cambiato l’inquadratura: la scarto e riprovo mantenendo tutti i bordi originali.');
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (attempt > 0) setNotice('La precedente elaborazione ha cambiato l’inquadratura: la scarto e riprovo mantenendo tutti i bordi originali.');
         const form = new FormData();
         form.append('image', inputImage, room.file.name.replace(/\.(heic|heif)$/i, '.png'));
         if (frozenSurfaces.length) form.append('mask', mask, 'freeze-mask.png');
@@ -1039,27 +1039,18 @@ export function RoomStudio() {
         if (!response.ok || !result.image) throw new Error(result.message ?? 'Immagine non disponibile.');
         const protectedPreview = await protectAiResult(result.image, { frozenSurfaces });
         const similarity = await framingSimilarity(room.previewUrl, protectedPreview);
-        if (similarity < .72) {
-          if (attempt === 0) continue;
+        if (similarity < EMPTY_ROOM_FRAMING_MIN) {
+          if (attempt < 2) continue;
           throw new Error('Grok ha cambiato l’inquadratura della foto: il risultato è stato scartato e l’originale è rimasto intatto. Riprova tra poco.');
         }
 
-        setNotice('Stanza svuotata. Ora verifico di nuovo pavimento, finestre, porte, stipiti e soglie sulla nuova immagine…');
-        const verified = inheritSurfaceState(
-          await detectSurfacesForPreview(protectedPreview, room.file.name),
-          baselineSurfaces,
-        );
-        if (!verified.length || !roomStructurePreserved(baselineSurfaces, verified)) {
-          if (attempt === 0) continue;
-          throw new Error('La struttura della stanza non coincide con la foto originale: il risultato è stato scartato. Riprova tra poco.');
-        }
         originalSurfacesRef.current = baselineSurfaces;
-        processedSurfacesRef.current = verified;
-        setSurfaces(verified); setPastSurfaces([]); setFutureSurfaces([]);
-        const preferred = verified.find((surface) => surface.kind === 'floor') ?? verified[0];
-        setSelectedId(preferred.id); setRenameDraft(preferred.name);
+        processedSurfacesRef.current = baselineSurfaces;
+        setSurfaces(baselineSurfaces); setPastSurfaces([]); setFutureSurfaces([]);
+        const preferred = baselineSurfaces.find((surface) => surface.kind === 'floor') ?? baselineSurfaces[0] ?? null;
+        setSelectedId(preferred?.id ?? null); setRenameDraft(preferred?.name ?? '');
         setProcessedPreview(protectedPreview); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
-        setNotice(`Stanza vuota pronta: inquadratura verificata e ${verified.length} superfici ricalcolate.`);
+        setNotice('Stanza vuota pronta: inquadratura verificata. I contorni restano sulla foto originale; usa “Adatta alla foto” se vuoi ricalcolarli.');
         return;
       }
     } catch (caught) {
@@ -1220,7 +1211,7 @@ export function RoomStudio() {
           {selected ? <><div className="property-section"><div className="property-title"><span>Nome superficie</span><span className="editable-badge">Personalizzabile</span></div><div className="rename-control"><input aria-label="Nome superficie" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} /><button type="button" onClick={renameSelected} disabled={!renameDraft.trim() || renameDraft.trim() === selected.name}>Salva</button></div></div><div className="property-section"><div className="property-title"><span>Protezione superficie</span><span className={`editable-badge ${selected.frozen ? 'frozen' : ''}`}>{selected.frozen ? 'Frozen' : 'Modificabile'}</span></div><button className={`freeze-button ${selected.frozen ? 'is-active' : ''}`} type="button" aria-label={selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'} onClick={toggleFreeze}><span>{selected.frozen ? '◆' : '◇'}</span>{selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'}<small>{selected.frozen ? 'Protetta' : 'Attivo subito'}</small></button><button className="freeze-others-button" type="button" onClick={freezeAllExceptSelected}>Blocca tutto tranne {selected.name}</button></div>
             <div className="property-section product-search-section">
               <div className="property-title"><span>Cerca un prodotto preciso</span><button type="button" onClick={() => materialInputRef.current?.click()}>Carica campione</button></div>
-              {aiStatus !== 'ready' && <div className="ai-setup-banner"><strong>IA momentaneamente non raggiungibile</strong><span>La chiave resta protetta sul server. Puoi comunque premere il comando: l’app riproverà il collegamento.</span></div>}
+              {aiStatus !== 'ready' && <div className="ai-setup-banner"><strong>{aiStatus === 'missing' ? 'IA non configurata sul server' : 'IA momentaneamente non raggiungibile'}</strong><span>{isNativeApp() && !nativeAccessToken() ? 'Questa build iOS non contiene il token di accesso al server. Ricostruisci l’app con VITE_SITES_BYPASS_TOKEN, altrimenti Grok non può essere chiamato.' : 'La chiave resta protetta sul server. Puoi comunque premere il comando: l’app riproverà il collegamento.'}</span></div>}
               <div className="online-search-control"><input className="material-search" aria-label="Cerca materiali, colori o mobili" value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchProductsOnline(); }} placeholder="Es. Intense Lea white materico" /><button type="button" onClick={() => void searchProductsOnline()} disabled={isSearchingProducts}>{isSearchingProducts ? 'Cerco…' : `Cerca con ${aiProviderLabel ?? 'IA'}`}</button></div>
               <div className="search-scope"><span>Materiali</span><span>Colori</span><span>Arredi</span><span className="internet-ready">Prodotti reali con fonte</span></div>
               {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={`Riferimento ${item.name}`} /> : <span className="catalog-swatch tile" /> }<button type="button" onClick={() => chooseMaterial(item)}><strong>{item.brand} · {item.name}</strong><span className={`reference-badge reference-${item.referenceKind ?? 'metadata-only'}`}>{materialReferenceLabel(item)}</span><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a></div>)}</div>}

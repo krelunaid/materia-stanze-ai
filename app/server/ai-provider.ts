@@ -462,14 +462,35 @@ function openingQuality(surface: DetectedRoomSurface, floor: DetectedRoomSurface
   return score;
 }
 
+export function orderQuadClockwise(points: Array<{ x: number; y: number }>) {
+  if (points.length !== 4) return points;
+  const centerX = points.reduce((total, point) => total + point.x, 0) / 4;
+  const centerY = points.reduce((total, point) => total + point.y, 0) / 4;
+  const ordered = [...points].sort((left, right) => (
+    Math.atan2(left.y - centerY, left.x - centerX) - Math.atan2(right.y - centerY, right.x - centerX)
+  ));
+  let start = 0;
+  for (let index = 1; index < ordered.length; index += 1) {
+    const candidate = ordered[index];
+    const current = ordered[start];
+    const candidateScore = candidate.x + candidate.y;
+    const currentScore = current.x + current.y;
+    if (candidateScore < currentScore - 1e-9 || (Math.abs(candidateScore - currentScore) < 1e-9 && candidate.y < current.y)) {
+      start = index;
+    }
+  }
+  return [...ordered.slice(start), ...ordered.slice(0, start)];
+}
+
 function consensusOpening(group: DetectedRoomSurface[], floor: DetectedRoomSurface | undefined) {
   const ranked = [...group].sort((left, right) => openingQuality(right, floor) - openingQuality(left, floor));
   const best = ranked[0];
   if (ranked.length === 1 || ranked.some((surface) => surface.points.length !== 4)) {
     return normalizeOpeningKind(best, floor);
   }
-  const weightTotal = ranked.reduce((total, surface) => total + Math.max(.2, surface.confidence), 0);
-  const points = Array.from({ length: 4 }, (_, index) => ranked.reduce((point, surface) => {
+  const aligned = ranked.map((surface) => ({ ...surface, points: orderQuadClockwise(surface.points) }));
+  const weightTotal = aligned.reduce((total, surface) => total + Math.max(.2, surface.confidence), 0);
+  const points = Array.from({ length: 4 }, (_, index) => aligned.reduce((point, surface) => {
     const weight = Math.max(.2, surface.confidence);
     return {
       x: point.x + surface.points[index].x * weight / weightTotal,
@@ -477,8 +498,8 @@ function consensusOpening(group: DetectedRoomSurface[], floor: DetectedRoomSurfa
     };
   }, { x: 0, y: 0 }));
   return normalizeOpeningKind({
-    ...best,
-    confidence: ranked.reduce((total, surface) => total + surface.confidence, 0) / ranked.length,
+    ...aligned[0],
+    confidence: aligned.reduce((total, surface) => total + surface.confidence, 0) / aligned.length,
     points,
   }, floor);
 }

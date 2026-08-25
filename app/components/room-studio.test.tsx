@@ -21,6 +21,14 @@ describe('RoomStudio', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Formato non supportato');
   });
 
+  it('rejects a PDF before import instead of accepting it and failing later', () => {
+    render(<RoomStudio />);
+    fireEvent.change(document.querySelector('#room-file') as HTMLInputElement, {
+      target: { files: [new File(['%PDF'], 'planimetria.pdf', { type: 'application/pdf' })] },
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Il PDF non è ancora modificabile');
+  });
+
   it('imports a valid image locally and updates the project title', () => {
     render(<RoomStudio />);
     const input = document.querySelector('#room-file') as HTMLInputElement;
