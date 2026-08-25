@@ -122,7 +122,7 @@ function detectRoomBounds(image: HTMLImageElement) {
   const top = strongestEdge(horizontalScores, .12, .48, .2);
   const floor = strongestEdge(horizontalScores, Math.max(.52, top + .2), .86, .68);
   const upperBandStart = Math.max(.05, top - .05);
-  const upperBandEnd = Math.min(.92, top + .2);
+  const upperBandEnd = Math.min(.92, top + .1);
   for (let x = 1; x < width - 1; x += 1) {
     for (let y = Math.round(height * upperBandStart); y < height * upperBandEnd; y += 1) verticalScores[x] += Math.abs(luminance(x + 1, y) - luminance(x - 1, y));
   }
@@ -131,7 +131,7 @@ function detectRoomBounds(image: HTMLImageElement) {
   return { left, right, top, floor };
 }
 
-function refineArchitecturalOpening(image: HTMLImageElement, surface: Surface, roomFloor?: number) {
+function refineArchitecturalOpening(image: HTMLImageElement, surface: Surface, roomBounds?: { left: number; right: number; top: number; floor: number }) {
   if (!['window', 'door'].includes(surface.kind) || surface.points.length < 3) return surface;
   const width = 360;
   const height = Math.max(220, Math.round(width * image.naturalHeight / image.naturalWidth));
@@ -152,16 +152,14 @@ function refineArchitecturalOpening(image: HTMLImageElement, surface: Surface, r
   const original = { left: Math.min(...xs), right: Math.max(...xs), top: Math.min(...ys), bottom: Math.max(...ys) };
   const openingWidth = Math.max(.035, original.right - original.left);
   const openingHeight = Math.max(.05, original.bottom - original.top);
-  const strongestBoundary = (axis: 'x' | 'y', from: number, to: number, crossFrom: number, crossTo: number, fallback: number, preferEnd = false) => {
+  const scanBoundaries = (axis: 'x' | 'y', from: number, to: number, crossFrom: number, crossTo: number) => {
     const size = axis === 'x' ? width : height;
     const crossSize = axis === 'x' ? height : width;
     const start = Math.max(2, Math.round(from * size));
     const end = Math.min(size - 3, Math.round(to * size));
     const crossStart = Math.max(0, Math.round(crossFrom * crossSize));
     const crossEnd = Math.min(crossSize - 1, Math.round(crossTo * crossSize));
-    let bestIndex = Math.round(fallback * size);
-    let bestScore = 0;
-    const scored: Array<{ index: number; score: number }> = [];
+    const scored: Array<{ position: number; score: number }> = [];
     for (let index = start; index <= end; index += 1) {
       let score = 0;
       let samples = 0;
@@ -172,28 +170,41 @@ function refineArchitecturalOpening(image: HTMLImageElement, surface: Surface, r
         samples += 1;
       }
       score /= Math.max(1, samples);
-      scored.push({ index, score });
-      if (score > bestScore) { bestScore = score; bestIndex = index; }
+      scored.push({ position: index / size, score });
     }
-    if (preferEnd && bestScore >= 5) {
-      const reliable = Math.max(8, bestScore * .55);
-      const outer = [...scored].reverse().find((candidate) => candidate.score >= reliable);
-      if (outer) bestIndex = outer.index;
-    }
-    return bestScore >= 5 ? bestIndex / size : fallback;
+    return scored;
+  };
+  const outerPair = (scored: Array<{ position: number; score: number }>, center: number, fallbackStart: number, fallbackEnd: number) => {
+    const bestScore = scored.reduce((best, candidate) => Math.max(best, candidate.score), 0);
+    const reliableScore = Math.max(7, bestScore * .5);
+    const reliable = scored.filter((candidate) => candidate.score >= reliableScore);
+    const before = reliable.filter((candidate) => candidate.position < center - .008).at(0);
+    const after = reliable.filter((candidate) => candidate.position > center + .008).at(-1);
+    return { start: before?.position ?? fallbackStart, end: after?.position ?? fallbackEnd };
   };
 
-  const verticalFrom = Math.max(0, original.top - openingHeight * .5);
-  const verticalTo = Math.min(1, original.bottom + openingHeight * .35);
-  const left = strongestBoundary('x', original.left - openingWidth * .55, original.left + openingWidth * .18, verticalFrom, verticalTo, original.left);
-  const right = strongestBoundary('x', original.right - openingWidth * .18, original.right + openingWidth * .55, verticalFrom, verticalTo, original.right);
-  const horizontalFrom = Math.max(0, left - openingWidth * .08);
-  const horizontalTo = Math.min(1, right + openingWidth * .08);
-  const top = strongestBoundary('y', original.top - openingHeight * .55, original.top + openingHeight * .1, horizontalFrom, horizontalTo, original.top);
-  const bottomLimit = surface.kind === 'window' && roomFloor
-    ? Math.min(roomFloor - .025, original.bottom + openingHeight * 3)
-    : original.bottom + openingHeight * (surface.kind === 'door' ? .55 : .75);
-  const bottom = strongestBoundary('y', original.bottom - openingHeight * .1, bottomLimit, horizontalFrom, horizontalTo, original.bottom, surface.kind === 'window');
+  const roomLeft = roomBounds?.left ?? Math.max(0, original.left - openingWidth * 1.5);
+  const roomRight = roomBounds?.right ?? Math.min(1, original.right + openingWidth * 1.5);
+  const roomTop = roomBounds?.top ?? Math.max(0, original.top - openingHeight * 1.5);
+  const roomFloor = roomBounds?.floor ?? Math.min(1, original.bottom + openingHeight * 2);
+  const roomWidth = Math.max(.2, roomRight - roomLeft);
+  const centerX = (original.left + original.right) / 2;
+  const centerY = (original.top + original.bottom) / 2;
+  const horizontalRadius = Math.min(roomWidth * .48, Math.max(.18, openingWidth * 1.5));
+  const verticalEdges = scanBoundaries(
+    'x',
+    Math.max(roomLeft + roomWidth * .06, centerX - horizontalRadius),
+    Math.min(roomRight - roomWidth * .06, centerX + horizontalRadius),
+    Math.max(roomTop + .015, original.top - openingHeight * .5),
+    Math.min(roomFloor - .02, original.bottom + Math.max(.2, openingHeight * 2.5)),
+  );
+  const verticalPair = outerPair(verticalEdges, centerX, original.left, original.right);
+  const left = verticalPair.start;
+  const right = verticalPair.end;
+  const horizontalEdges = scanBoundaries('y', roomTop + .025, roomFloor - .025, left, right);
+  const horizontalPair = outerPair(horizontalEdges, centerY, original.top, original.bottom);
+  const top = horizontalPair.start;
+  const bottom = horizontalPair.end;
   if (right - left < .025 || bottom - top < .04) return surface;
   return { ...surface, points: [{ x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom }] };
 }
@@ -912,7 +923,7 @@ export function RoomStudio() {
                 { x: combinedBounds.right, y: combinedBounds.top },
                 { x: combinedBounds.left, y: combinedBounds.top },
               ],
-            } : refineArchitecturalOpening(roomImageRef.current as HTMLImageElement, surface, combinedBounds.floor));
+            } : refineArchitecturalOpening(roomImageRef.current as HTMLImageElement, surface, combinedBounds));
             detected = [...createGuidedSurfaces(combinedBounds), ...alignedExtras];
           }
         } catch (caught) {
