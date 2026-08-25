@@ -28,8 +28,8 @@ describe('RoomStudio', () => {
     expect(screen.getByText('Soggiorno verde')).toBeInTheDocument();
     expect(screen.getByText('Originale intatto')).toBeInTheDocument();
     expect(screen.getByText('Riconoscimento automatico')).toBeInTheDocument();
-    expect(screen.getByText('Svuota con Grok')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Svuota/ })).not.toBeInTheDocument();
+    expect(screen.getByText('Vuoi svuotare la stanza?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '⌂ Svuota la stanza' })).toBeInTheDocument();
   });
 
   it('imports a floorplan, creates its perimeter and offers two-tap internal walls', () => {
@@ -137,8 +137,8 @@ describe('RoomStudio', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Prova flusso render' }));
     expect(screen.getByRole('dialog', { name: 'Crea il render reale' })).toHaveTextContent('Muro 1: Verde salvia');
     expect(screen.getByRole('dialog', { name: 'Crea il render reale' })).toHaveTextContent('Da inserire: Divano chiaro');
-    expect(screen.getByRole('dialog', { name: 'Crea il render reale' })).toHaveTextContent('Grok non ancora attivo');
-    expect(screen.getByRole('button', { name: 'Collega la chiave xAI' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Crea il render reale' })).toHaveTextContent('L’app riproverà il collegamento');
+    expect(screen.getByRole('button', { name: 'Crea render reale con IA' })).toBeInTheDocument();
   });
 
   it('uses one search for furniture and accepts a free-form render request', () => {

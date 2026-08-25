@@ -3,7 +3,7 @@ import { getAiProvider } from '../../server/ai-provider';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, OAI-Sites-Authorization',
   'Cache-Control': 'no-store',
 };
 

@@ -3,7 +3,7 @@ import { getAiProvider, searchMaterials } from '../../server/ai-provider';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, OAI-Sites-Authorization',
 };
 
 function json(body: unknown, status = 200) {
@@ -19,7 +19,7 @@ export async function POST(request: Request) {
   if (!provider) {
     return json({
       code: 'not_configured',
-      message: 'La ricerca Internet è pronta, ma manca la chiave Grok protetta sul server.',
+      message: 'Il servizio IA del server non è momentaneamente disponibile.',
     }, 503);
   }
 

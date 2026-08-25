@@ -3,7 +3,7 @@ import { editImage, getAiProvider } from '../../server/ai-provider';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, OAI-Sites-Authorization',
 };
 
 function json(body: unknown, status = 200) {
@@ -17,7 +17,7 @@ export function OPTIONS() {
 export async function POST(request: Request) {
   const provider = getAiProvider();
   if (!provider) {
-    return json({ code: 'not_configured', message: 'Il motore Grok è pronto, ma manca la chiave xAI protetta sul server.' }, 503);
+    return json({ code: 'not_configured', message: 'Il servizio IA del server non è momentaneamente disponibile.' }, 503);
   }
 
   try {
