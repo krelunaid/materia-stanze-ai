@@ -252,6 +252,8 @@ export async function detectRoomSurfaces(provider: AiProvider, image: File) {
     'Trace every visible structural planar surface: the complete floor, each distinct wall plane, the ceiling when visible, and visible doors or windows as separate surfaces.',
     'Before answering, inspect the entire image explicitly for every architectural opening. Do not omit low-contrast, overexposed or partially cropped windows and doors, including white frames on white walls.',
     'For every visible window or door, trace the outside edge of the complete frame as its own polygon, separate from the wall behind it.',
+    'Treat a multi-pane window as one complete opening: include every upper and lower pane inside the outer frame, never return only one sash or one bright section.',
+    'If any floor area is visible, a complete floor polygon is mandatory even when the floor is white, glossy or low contrast.',
     'Return polygon vertices as normalized image coordinates where x=0 is the left edge, x=1 the right edge, y=0 the top edge and y=1 the bottom edge.',
     'Follow the real wall-wall, wall-floor and wall-ceiling junctions. Do not use furniture edges, window frames, shadows, tile joints, rugs or decorations as room corners.',
     'Infer each architectural plane continuously behind furniture and other movable objects. A floor polygon must cover the entire floor plane all the way to the bottom and lateral image edges wherever the floor leaves the frame, not only a central trapezoid.',

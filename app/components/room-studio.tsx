@@ -129,6 +129,64 @@ function detectRoomBounds(image: HTMLImageElement) {
   return { left, right, top, floor };
 }
 
+function refineArchitecturalOpening(image: HTMLImageElement, surface: Surface) {
+  if (!['window', 'door'].includes(surface.kind) || surface.points.length < 3) return surface;
+  const width = 360;
+  const height = Math.max(220, Math.round(width * image.naturalHeight / image.naturalWidth));
+  const canvas = document.createElement('canvas');
+  canvas.width = width; canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) return surface;
+  context.drawImage(image, 0, 0, width, height);
+  const pixels = context.getImageData(0, 0, width, height).data;
+  const luminance = (x: number, y: number) => {
+    const safeX = Math.min(width - 1, Math.max(0, x));
+    const safeY = Math.min(height - 1, Math.max(0, y));
+    const offset = (safeY * width + safeX) * 4;
+    return pixels[offset] * .299 + pixels[offset + 1] * .587 + pixels[offset + 2] * .114;
+  };
+  const xs = surface.points.map((point) => point.x);
+  const ys = surface.points.map((point) => point.y);
+  const original = { left: Math.min(...xs), right: Math.max(...xs), top: Math.min(...ys), bottom: Math.max(...ys) };
+  const openingWidth = Math.max(.035, original.right - original.left);
+  const openingHeight = Math.max(.05, original.bottom - original.top);
+  const strongestBoundary = (axis: 'x' | 'y', from: number, to: number, crossFrom: number, crossTo: number, fallback: number) => {
+    const size = axis === 'x' ? width : height;
+    const crossSize = axis === 'x' ? height : width;
+    const start = Math.max(2, Math.round(from * size));
+    const end = Math.min(size - 3, Math.round(to * size));
+    const crossStart = Math.max(0, Math.round(crossFrom * crossSize));
+    const crossEnd = Math.min(crossSize - 1, Math.round(crossTo * crossSize));
+    let bestIndex = Math.round(fallback * size);
+    let bestScore = 0;
+    for (let index = start; index <= end; index += 1) {
+      let score = 0;
+      let samples = 0;
+      for (let cross = crossStart; cross <= crossEnd; cross += 2) {
+        score += axis === 'x'
+          ? Math.abs(luminance(index + 2, cross) - luminance(index - 2, cross))
+          : Math.abs(luminance(cross, index + 2) - luminance(cross, index - 2));
+        samples += 1;
+      }
+      score /= Math.max(1, samples);
+      if (score > bestScore) { bestScore = score; bestIndex = index; }
+    }
+    return bestScore >= 5 ? bestIndex / size : fallback;
+  };
+
+  const verticalFrom = Math.max(0, original.top - openingHeight * .5);
+  const verticalTo = Math.min(1, original.bottom + openingHeight * .35);
+  const left = strongestBoundary('x', original.left - openingWidth * .55, original.left + openingWidth * .18, verticalFrom, verticalTo, original.left);
+  const right = strongestBoundary('x', original.right - openingWidth * .18, original.right + openingWidth * .55, verticalFrom, verticalTo, original.right);
+  const horizontalFrom = Math.max(0, left - openingWidth * .08);
+  const horizontalTo = Math.min(1, right + openingWidth * .08);
+  const top = strongestBoundary('y', original.top - openingHeight * .55, original.top + openingHeight * .1, horizontalFrom, horizontalTo, original.top);
+  const bottomExpansion = surface.kind === 'door' ? .55 : .35;
+  const bottom = strongestBoundary('y', original.bottom - openingHeight * .1, original.bottom + openingHeight * bottomExpansion, horizontalFrom, horizontalTo, original.bottom);
+  if (right - left < .025 || bottom - top < .04) return surface;
+  return { ...surface, points: [{ x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom }] };
+}
+
 function createFloorplanOutline(): Surface[] {
   return [{
     id: `floorplan-${Date.now()}`,
@@ -816,8 +874,7 @@ export function RoomStudio() {
           }));
           usedGrok = detected.length > 0;
           const detectedWalls = detected.filter((surface) => surface.kind === 'wall');
-          const detectedFloors = detected.filter((surface) => surface.kind === 'floor');
-          if (detectedWalls.length === 3 && detectedFloors.length === 1) {
+          if (detectedWalls.length === 3) {
             const edgeTouches = (surface: Surface) => surface.points.filter((point) => point.x <= .025 || point.x >= .975).length;
             const centralWall = [...detectedWalls].sort((a, b) => edgeTouches(a) - edgeTouches(b))[0];
             const wallXs = centralWall.points.map((point) => point.x);
@@ -828,6 +885,13 @@ export function RoomStudio() {
               ? { ...localBounds, left: aiLeft, right: aiRight }
               : localBounds;
             const architecturalExtras = detected.filter((surface) => !['wall', 'floor'].includes(surface.kind));
+            if (!architecturalExtras.some((surface) => surface.kind === 'ceiling')) architecturalExtras.push({
+              id: `guided-ceiling-${Date.now()}`,
+              name: 'Soffitto',
+              kind: 'ceiling',
+              frozen: false,
+              points: [],
+            });
             const alignedExtras = architecturalExtras.map((surface) => surface.kind === 'ceiling' ? {
               ...surface,
               points: [
@@ -836,7 +900,7 @@ export function RoomStudio() {
                 { x: combinedBounds.right, y: combinedBounds.top },
                 { x: combinedBounds.left, y: combinedBounds.top },
               ],
-            } : surface);
+            } : refineArchitecturalOpening(roomImageRef.current as HTMLImageElement, surface));
             detected = [...createGuidedSurfaces(combinedBounds), ...alignedExtras];
           }
         } catch (caught) {
