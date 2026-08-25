@@ -32,6 +32,7 @@ export async function POST(request: Request) {
 
     const prompt = [
       'Edit this exact interior photograph into the same room completely empty of movable furniture, lamps, rugs, decorations, curtains and loose objects.',
+      'Remove wall-hung pictures, photo frames, posters, mirrors, clocks and every decorative object too; the final room must contain no movable or decorative item.',
       'Treat the source photograph as a strict architectural record: preserve the exact camera position, lens perspective, crop, room dimensions, wall edges, ceiling, floor, doors, windows, openings, skirting, radiators and every fixed detail already visible.',
       'Never create a new window, door, opening, radiator, column, cabinet, fixture, trim or architectural feature that is not visibly present in the source photograph.',
       'Where removed furniture hides part of the room, reconstruct only the simplest continuous extension of the nearest visible wall, wall covering, skirting and floor. When uncertain, continue the existing wall or floor; never invent a feature.',
