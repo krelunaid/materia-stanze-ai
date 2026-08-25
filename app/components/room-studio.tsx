@@ -70,15 +70,15 @@ const kindColors: Record<SurfaceKind, string> = {
 
 const guidedPresets: Array<Omit<Surface, 'id'>> = [
   { name: 'Muro 1', kind: 'wall', frozen: false, points: [{ x: .25, y: .2 }, { x: .75, y: .2 }, { x: .75, y: .68 }, { x: .25, y: .68 }] },
-  { name: 'Muro 2', kind: 'wall', frozen: false, points: [{ x: 0, y: .05 }, { x: .25, y: .2 }, { x: .25, y: .68 }, { x: 0, y: 1 }] },
-  { name: 'Muro 3', kind: 'wall', frozen: false, points: [{ x: .75, y: .2 }, { x: 1, y: .05 }, { x: 1, y: 1 }, { x: .75, y: .68 }] },
+  { name: 'Muro 2', kind: 'wall', frozen: false, points: [{ x: 0, y: 0 }, { x: .25, y: .2 }, { x: .25, y: .68 }, { x: 0, y: 1 }] },
+  { name: 'Muro 3', kind: 'wall', frozen: false, points: [{ x: .75, y: .2 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: .75, y: .68 }] },
   { name: 'Pavimento', kind: 'floor', frozen: false, points: [{ x: .25, y: .68 }, { x: .75, y: .68 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
 ];
 
 function createGuidedSurfaces(bounds?: { left: number; right: number; top: number; floor: number }) {
   if (!bounds) return guidedPresets.map((surface, index) => ({ ...surface, id: `guided-${Date.now()}-${index}` }));
   const { left, right, top, floor } = bounds;
-  const outerTop = Math.max(.025, top - .16);
+  const outerTop = 0;
   const bottom = 1;
   const presets: Array<Omit<Surface, 'id'>> = [
     { name: 'Muro 1', kind: 'wall', frozen: false, points: [{ x: left, y: top }, { x: right, y: top }, { x: right, y: floor }, { x: left, y: floor }] },
@@ -828,7 +828,16 @@ export function RoomStudio() {
               ? { ...localBounds, left: aiLeft, right: aiRight }
               : localBounds;
             const architecturalExtras = detected.filter((surface) => !['wall', 'floor'].includes(surface.kind));
-            detected = [...createGuidedSurfaces(combinedBounds), ...architecturalExtras];
+            const alignedExtras = architecturalExtras.map((surface) => surface.kind === 'ceiling' ? {
+              ...surface,
+              points: [
+                { x: 0, y: 0 },
+                { x: 1, y: 0 },
+                { x: combinedBounds.right, y: combinedBounds.top },
+                { x: combinedBounds.left, y: combinedBounds.top },
+              ],
+            } : surface);
+            detected = [...createGuidedSurfaces(combinedBounds), ...alignedExtras];
           }
         } catch (caught) {
           grokError = caught instanceof Error ? caught : new Error('Grok non ha completato il riconoscimento.');

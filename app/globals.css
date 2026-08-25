@@ -126,7 +126,9 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .surface-overlay .surface-vertex-hit,.surface-overlay.is-drawing,.surface-overlay.is-correcting { touch-action:none; }
 .simple-mode.step-2 .surface-overlay:not(.is-correcting) polygon { fill:transparent!important; opacity:.2; }
 .simple-mode.step-2 .surface-overlay:not(.is-correcting) .is-selected-surface polygon { opacity:.62; }
+.simple-mode.step-2 .surface-overlay:not(.is-correcting) g:not(.is-selected-surface) polygon { opacity:0; pointer-events:none; }
 .simple-mode.step-2 .surface-overlay.is-correcting polygon { opacity:.78; }
+.simple-mode.step-2 .surface-overlay.is-correcting g:not(.is-selected-surface) polygon { opacity:.1; pointer-events:none; }
 .simple-mode.step-2 .canvas:has(.surface-overlay.is-correcting) { outline:3px solid #9bc7bd; outline-offset:-3px; }
 .app-shell.is-moving-vertex { overflow-y:hidden; touch-action:none; -webkit-overflow-scrolling:auto; }
 .rename-control { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; }
