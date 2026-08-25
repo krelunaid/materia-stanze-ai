@@ -127,6 +127,8 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .simple-mode.step-2 .surface-overlay:not(.is-correcting) polygon { fill:transparent!important; opacity:.2; }
 .simple-mode.step-2 .surface-overlay:not(.is-correcting) .is-selected-surface polygon { opacity:.62; }
 .simple-mode.step-2 .surface-overlay:not(.is-correcting) g:not(.is-selected-surface) polygon { opacity:0; pointer-events:none; }
+.simple-mode.step-2 .surface-overlay:not(.is-correcting) g.surface-kind-window polygon,
+.simple-mode.step-2 .surface-overlay:not(.is-correcting) g.surface-kind-door polygon { opacity:.82; pointer-events:auto; stroke-dasharray:8 5; }
 .simple-mode.step-2 .surface-overlay.is-correcting polygon { opacity:.78; }
 .simple-mode.step-2 .surface-overlay.is-correcting g:not(.is-selected-surface) polygon { opacity:.1; pointer-events:none; }
 .simple-mode.step-2 .canvas:has(.surface-overlay.is-correcting) { outline:3px solid #9bc7bd; outline-offset:-3px; }

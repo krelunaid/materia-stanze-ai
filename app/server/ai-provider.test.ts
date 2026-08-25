@@ -67,6 +67,7 @@ describe('getAiProvider', () => {
           { name: 'back', kind: 'wall', confidence: .94, points: [{ x: .24, y: .18 }, { x: .76, y: .18 }, { x: .76, y: .62 }, { x: .24, y: .62 }] },
           { name: 'left', kind: 'wall', confidence: .89, points: [{ x: 0, y: 0 }, { x: .24, y: .18 }, { x: .24, y: .62 }, { x: 0, y: 1 }] },
           { name: 'floor', kind: 'floor', confidence: .97, points: [{ x: .24, y: .62 }, { x: .76, y: .62 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+          { name: 'bright opening', kind: 'window', confidence: .35, points: [{ x: .43, y: .25 }, { x: .57, y: .25 }, { x: .57, y: .52 }, { x: .43, y: .52 }] },
         ],
       }) }] }],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
@@ -76,8 +77,9 @@ describe('getAiProvider', () => {
       new File(['room'], 'room.jpg', { type: 'image/jpeg' }),
     );
 
-    expect(result.map((surface) => surface.name)).toEqual(['Muro 1', 'Muro 2', 'Pavimento']);
-    expect(result.at(-1)?.points).toEqual(expect.arrayContaining([{ x: 1, y: 1 }, { x: 0, y: 1 }]));
+    expect(result.map((surface) => surface.name)).toEqual(['Muro 1', 'Muro 2', 'Pavimento', 'Finestra']);
+    expect(result.find((surface) => surface.kind === 'floor')?.points).toEqual(expect.arrayContaining([{ x: 1, y: 1 }, { x: 0, y: 1 }]));
+    expect(result.find((surface) => surface.kind === 'window')?.confidence).toBe(.35);
     const request = fetchMock.mock.calls[0]?.[1];
     const payload = JSON.parse(String(request?.body));
     expect(payload).toMatchObject({

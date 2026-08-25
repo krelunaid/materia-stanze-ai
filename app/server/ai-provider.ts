@@ -224,7 +224,10 @@ function normalizeRoomSurfaces(surfaces: DetectedRoomSurface[]) {
       x: Math.min(1, Math.max(0, Number(point.x))),
       y: Math.min(1, Math.max(0, Number(point.y))),
     })),
-  })).filter((surface) => validKinds.has(surface.kind) && surface.confidence >= .45 && surface.points.length >= 3 && polygonArea(surface.points) > .001);
+  })).filter((surface) => {
+    const minimumConfidence = surface.kind === 'window' || surface.kind === 'door' ? .3 : .45;
+    return validKinds.has(surface.kind) && surface.confidence >= minimumConfidence && surface.points.length >= 3 && polygonArea(surface.points) > .001;
+  });
 
   const kindOrder: Record<DetectedRoomSurface['kind'], number> = { wall: 0, floor: 1, ceiling: 2, door: 3, window: 4, other: 5 };
   cleaned.sort((a, b) => kindOrder[a.kind] - kindOrder[b.kind]);
@@ -247,6 +250,8 @@ export async function detectRoomSurfaces(provider: AiProvider, image: File) {
   const prompt = [
     'Act as a precise architectural image-plane segmentation engine for an interior-design application.',
     'Trace every visible structural planar surface: the complete floor, each distinct wall plane, the ceiling when visible, and visible doors or windows as separate surfaces.',
+    'Before answering, inspect the entire image explicitly for every architectural opening. Do not omit low-contrast, overexposed or partially cropped windows and doors, including white frames on white walls.',
+    'For every visible window or door, trace the outside edge of the complete frame as its own polygon, separate from the wall behind it.',
     'Return polygon vertices as normalized image coordinates where x=0 is the left edge, x=1 the right edge, y=0 the top edge and y=1 the bottom edge.',
     'Follow the real wall-wall, wall-floor and wall-ceiling junctions. Do not use furniture edges, window frames, shadows, tile joints, rugs or decorations as room corners.',
     'Infer each architectural plane continuously behind furniture and other movable objects. A floor polygon must cover the entire floor plane all the way to the bottom and lateral image edges wherever the floor leaves the frame, not only a central trapezoid.',
