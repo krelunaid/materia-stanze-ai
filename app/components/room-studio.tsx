@@ -818,8 +818,17 @@ export function RoomStudio() {
           const detectedWalls = detected.filter((surface) => surface.kind === 'wall');
           const detectedFloors = detected.filter((surface) => surface.kind === 'floor');
           if (detectedWalls.length === 3 && detectedFloors.length === 1) {
+            const edgeTouches = (surface: Surface) => surface.points.filter((point) => point.x <= .025 || point.x >= .975).length;
+            const centralWall = [...detectedWalls].sort((a, b) => edgeTouches(a) - edgeTouches(b))[0];
+            const wallXs = centralWall.points.map((point) => point.x);
+            const aiLeft = Math.min(...wallXs);
+            const aiRight = Math.max(...wallXs);
+            const localBounds = detectRoomBounds(roomImageRef.current);
+            const combinedBounds = aiRight - aiLeft >= .2
+              ? { ...localBounds, left: aiLeft, right: aiRight }
+              : localBounds;
             const architecturalExtras = detected.filter((surface) => !['wall', 'floor'].includes(surface.kind));
-            detected = [...createGuidedSurfaces(detectRoomBounds(roomImageRef.current)), ...architecturalExtras];
+            detected = [...createGuidedSurfaces(combinedBounds), ...architecturalExtras];
           }
         } catch (caught) {
           grokError = caught instanceof Error ? caught : new Error('Grok non ha completato il riconoscimento.');
