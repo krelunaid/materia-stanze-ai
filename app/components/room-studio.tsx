@@ -174,9 +174,9 @@ function refineArchitecturalOpening(image: HTMLImageElement, surface: Surface, r
     }
     return scored;
   };
-  const outerPair = (scored: Array<{ position: number; score: number }>, center: number, fallbackStart: number, fallbackEnd: number) => {
+  const outerPair = (scored: Array<{ position: number; score: number }>, center: number, fallbackStart: number, fallbackEnd: number, reliability = .5) => {
     const bestScore = scored.reduce((best, candidate) => Math.max(best, candidate.score), 0);
-    const reliableScore = Math.max(7, bestScore * .5);
+    const reliableScore = Math.max(6, bestScore * reliability);
     const reliable = scored.filter((candidate) => candidate.score >= reliableScore);
     const before = reliable.filter((candidate) => candidate.position < center - .008).at(0);
     const after = reliable.filter((candidate) => candidate.position > center + .008).at(-1);
@@ -202,7 +202,7 @@ function refineArchitecturalOpening(image: HTMLImageElement, surface: Surface, r
   const left = verticalPair.start;
   const right = verticalPair.end;
   const horizontalEdges = scanBoundaries('y', roomTop + .025, roomFloor - .025, left, right);
-  const horizontalPair = outerPair(horizontalEdges, centerY, original.top, original.bottom);
+  const horizontalPair = outerPair(horizontalEdges, centerY, original.top, original.bottom, .35);
   const top = horizontalPair.start;
   const bottom = horizontalPair.end;
   if (right - left < .025 || bottom - top < .04) return surface;
