@@ -316,6 +316,8 @@ html,body { height:100%; overflow:hidden; overscroll-behavior:none; }
 .app-shell { height:100dvh; min-height:0; overflow-x:hidden; overflow-y:auto; overscroll-behavior-y:contain; -webkit-overflow-scrolling:touch; }
 
 @media (max-width:900px) {
+  /* Safari/WebView ingrandisce automaticamente i campi sotto i 16 px. */
+  .native-app input,.native-app select,.native-app textarea { font-size:16px; }
   .topbar { position:sticky; top:0; grid-template-columns:1fr auto; min-height:68px; padding:0 18px; }
   .project-heading { display:none; }
   .simple-steps { position:sticky; z-index:9; top:68px; }
@@ -330,6 +332,7 @@ html,body { height:100%; overflow:hidden; overscroll-behavior:none; }
   .simple-mode.step-2 .surface-list { display:flex; gap:7px; margin-top:10px; padding-bottom:4px; overflow-x:auto; overscroll-behavior-x:contain; }
   .simple-mode.step-2 .surface-item { min-width:142px; min-height:54px; }
   .simple-mode.step-3 .properties-panel { position:static; order:2; display:block; width:100%; padding:20px; border:0; border-top:1px solid var(--line); overflow:visible; }
+  .product-search-section,.online-search-control,.material-results,.online-results,.custom-color { min-width:0; max-width:100%; }
   .status-bar button { min-height:44px; }
 }
 
@@ -345,6 +348,9 @@ html,body { height:100%; overflow:hidden; overscroll-behavior:none; }
   .simple-mode.step-1 .canvas { min-height:610px; border:5px solid white; border-radius:5px; }
   .empty-room-choice { margin:8px; align-items:stretch; flex-direction:column; }
   .empty-room-choice button { width:100%; min-height:48px; }
+  .online-search-control { grid-template-columns:minmax(0,1fr); }
+  .online-search-control button { min-height:48px; }
+  .custom-color button { min-width:0; padding:8px; white-space:normal; }
   .status-bar { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); align-items:stretch; gap:7px; margin:8px; }
   .status-bar .status-icon { grid-column:1; align-self:center; }
   .status-bar p { grid-column:2 / 4; align-self:center; }

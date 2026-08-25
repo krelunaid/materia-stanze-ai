@@ -137,6 +137,19 @@ function inheritSurfaceState(detected: Surface[], previous: Surface[]) {
   });
 }
 
+export function mergeDetectedSurfaces(detected: Surface[], previous: Surface[]) {
+  const frozenSurfaces = previous.filter((surface) => surface.frozen);
+  const editableSurfaces = previous.filter((surface) => !surface.frozen);
+  const editableDetected = detected.filter((surface) => !frozenSurfaces.some((frozen) => {
+    if (surface.kind !== frozen.kind) return false;
+    if (surface.name.toLocaleLowerCase('it') === frozen.name.toLocaleLowerCase('it')) return true;
+    const center = surfaceCenter(surface);
+    const frozenCenter = surfaceCenter(frozen);
+    return Math.hypot(center.x - frozenCenter.x, center.y - frozenCenter.y) < .22;
+  }));
+  return [...inheritSurfaceState(editableDetected, editableSurfaces), ...frozenSurfaces];
+}
+
 const guidedPresets: Array<Omit<Surface, 'id'>> = [
   { name: 'Muro 1', kind: 'wall', frozen: false, points: [{ x: .25, y: .2 }, { x: .75, y: .2 }, { x: .75, y: .68 }, { x: .25, y: .68 }] },
   { name: 'Muro 2', kind: 'wall', frozen: false, points: [{ x: 0, y: 0 }, { x: .25, y: .2 }, { x: .25, y: .68 }, { x: 0, y: 1 }] },
@@ -986,12 +999,8 @@ export function RoomStudio() {
       if (!detected?.length) detected = createGuidedSurfaces(detectRoomBounds(roomImageRef.current));
 
       const frozenSurfaces = surfaces.filter((surface) => surface.frozen);
-      const frozenKeys = new Set(frozenSurfaces.map((surface) => `${surface.kind}:${surface.name.toLocaleLowerCase('it')}`));
-      const adjusted = inheritSurfaceState(
-        detected.filter((surface) => !frozenKeys.has(`${surface.kind}:${surface.name.toLocaleLowerCase('it')}`)),
-        surfaces.filter((surface) => !surface.frozen),
-      );
-      const nextSurfaces = [...adjusted, ...frozenSurfaces];
+      const nextSurfaces = mergeDetectedSurfaces(detected, surfaces);
+      const adjusted = nextSurfaces.filter((surface) => !surface.frozen);
       commitSurfaces(nextSurfaces);
       const first = adjusted[0] ?? frozenSurfaces[0] ?? null;
       setSelectedId(first?.id ?? null); setRenameDraft(first?.name ?? '');
@@ -1044,13 +1053,28 @@ export function RoomStudio() {
           throw new Error('Grok ha cambiato l’inquadratura della foto: il risultato è stato scartato e l’originale è rimasto intatto. Riprova tra poco.');
         }
 
+        setNotice('Stanza svuotata. Grok sta riconoscendo di nuovo pavimento, muri, soffitto, porte e finestre…');
+        let processedSurfaces = baselineSurfaces;
+        let detectionSucceeded = false;
+        try {
+          const detected = await detectSurfacesForPreview(protectedPreview, room.file.name);
+          if (detected.length) {
+            processedSurfaces = mergeDetectedSurfaces(detected, baselineSurfaces);
+            detectionSucceeded = processedSurfaces.length > 0;
+          }
+        } catch {
+          // La stanza vuota resta utilizzabile anche se la seconda analisi non risponde.
+        }
+
         originalSurfacesRef.current = baselineSurfaces;
-        processedSurfacesRef.current = baselineSurfaces;
-        setSurfaces(baselineSurfaces); setPastSurfaces([]); setFutureSurfaces([]);
-        const preferred = baselineSurfaces.find((surface) => surface.kind === 'floor') ?? baselineSurfaces[0] ?? null;
+        processedSurfacesRef.current = processedSurfaces;
+        setSurfaces(processedSurfaces); setPastSurfaces([]); setFutureSurfaces([]);
+        const preferred = processedSurfaces.find((surface) => surface.kind === 'floor') ?? processedSurfaces[0] ?? null;
         setSelectedId(preferred?.id ?? null); setRenameDraft(preferred?.name ?? '');
         setProcessedPreview(protectedPreview); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
-        setNotice('Stanza vuota pronta: inquadratura verificata. I contorni restano sulla foto originale; usa “Adatta alla foto” se vuoi ricalcolarli.');
+        setNotice(detectionSucceeded
+          ? `Stanza vuota pronta: ${processedSurfaces.length} superfici riconosciute di nuovo e pavimento attivato.`
+          : 'Stanza vuota pronta, ma la seconda analisi non ha risposto: mantengo i contorni precedenti e puoi riprovare con “Adatta alla foto”.');
         return;
       }
     } catch (caught) {

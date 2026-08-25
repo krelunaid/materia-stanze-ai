@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { RoomStudio } from './room-studio';
+import { mergeDetectedSurfaces, RoomStudio } from './room-studio';
 
 beforeAll(() => {
   URL.createObjectURL = vi.fn(() => 'blob:room-preview');
@@ -8,6 +8,25 @@ beforeAll(() => {
 });
 
 describe('RoomStudio', () => {
+  it('replaces editable geometry after emptying while preserving Freeze areas', () => {
+    const previous = [
+      { id: 'old-floor', name: 'Pavimento', kind: 'floor' as const, frozen: false, points: [{ x: 0, y: .6 }, { x: 1, y: .6 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+      { id: 'frozen-wall', name: 'Muro 1', kind: 'wall' as const, frozen: true, points: [{ x: 0, y: 0 }, { x: .4, y: .2 }, { x: .4, y: .7 }, { x: 0, y: 1 }] },
+    ];
+    const detected = [
+      { id: 'new-floor', name: 'Pavimento', kind: 'floor' as const, frozen: false, points: [{ x: 0, y: .55 }, { x: 1, y: .55 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+      { id: 'duplicate-wall', name: 'Parete sinistra', kind: 'wall' as const, frozen: false, points: [{ x: 0, y: 0 }, { x: .42, y: .2 }, { x: .42, y: .7 }, { x: 0, y: 1 }] },
+      { id: 'new-wall', name: 'Muro 2', kind: 'wall' as const, frozen: false, points: [{ x: .4, y: .2 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: .4, y: .7 }] },
+    ];
+
+    const merged = mergeDetectedSurfaces(detected, previous);
+
+    expect(merged.find((surface) => surface.kind === 'floor')).toMatchObject({ id: 'old-floor', points: detected[0].points });
+    expect(merged.find((surface) => surface.id === 'frozen-wall')).toEqual(previous[1]);
+    expect(merged.some((surface) => surface.id === 'duplicate-wall')).toBe(false);
+    expect(merged.some((surface) => surface.id === 'new-wall')).toBe(true);
+  });
+
   it('shows the product-specific import flow', () => {
     render(<RoomStudio />);
     expect(screen.getByRole('heading', { name: 'Cosa vuoi caricare?' })).toBeInTheDocument();
