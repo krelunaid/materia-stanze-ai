@@ -167,6 +167,10 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .online-product strong,.online-product small { display:block; }
 .online-product strong { font-size:9px; }
 .online-product small { margin-top:3px; color:#74807b; font-size:8px; line-height:1.35; }
+.reference-badge { display:inline-flex; width:fit-content; margin-top:4px; padding:3px 6px; border-radius:999px; background:#eef2f0; color:#5f6c67; font-size:7px; font-weight:800; line-height:1.2; }
+.reference-verified-texture,.reference-uploaded-sample { background:#e3f4ec; color:#247561; }
+.reference-official-product-image { background:#e7f1f5; color:#397289; }
+.reference-metadata-only { background:#fff1d9; color:#8a6329; }
 .online-product>a { color:var(--accent); font-size:8px; font-weight:750; }
 .auto-apply-product-button { width:100%; min-height:46px; margin-top:12px; padding:8px 12px; border:0; border-radius:11px; background:var(--accent); color:#fff; font-size:10px; font-weight:800; cursor:pointer; }
 .auto-apply-product-button:disabled { opacity:.45; cursor:not-allowed; }

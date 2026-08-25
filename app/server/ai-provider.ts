@@ -17,7 +17,9 @@ export type MaterialProduct = {
   finish: string;
   description: string;
   sourceUrl: string;
-  imageUrl: string;
+  productImageUrl: string;
+  textureImageUrl: string;
+  roomImageUrls: string[];
   confidence: number;
   official: boolean;
   correction: string;
@@ -62,12 +64,14 @@ const productSchema = {
           finish: { type: 'string' },
           description: { type: 'string' },
           sourceUrl: { type: 'string' },
-          imageUrl: { type: 'string' },
+          productImageUrl: { type: 'string' },
+          textureImageUrl: { type: 'string' },
+          roomImageUrls: { type: 'array', maxItems: 3, items: { type: 'string' } },
           confidence: { type: 'number', minimum: 0, maximum: 1 },
           official: { type: 'boolean' },
           correction: { type: 'string' },
         },
-        required: ['name', 'brand', 'collection', 'category', 'color', 'effect', 'format', 'finish', 'description', 'sourceUrl', 'imageUrl', 'confidence', 'official', 'correction'],
+        required: ['name', 'brand', 'collection', 'category', 'color', 'effect', 'format', 'finish', 'description', 'sourceUrl', 'productImageUrl', 'textureImageUrl', 'roomImageUrls', 'confidence', 'official', 'correction'],
       },
     },
   },
@@ -152,7 +156,11 @@ function normalizeProducts(products: MaterialProduct[]) {
     return Boolean(item.name && item.brand && source && item.confidence >= .55);
   }).map((item) => ({
     ...item,
-    imageUrl: validPublicUrl(item.imageUrl)?.toString() ?? '',
+    productImageUrl: validPublicUrl(item.productImageUrl)?.toString() ?? '',
+    textureImageUrl: validPublicUrl(item.textureImageUrl)?.toString() ?? '',
+    roomImageUrls: (Array.isArray(item.roomImageUrls) ? item.roomImageUrls : []).slice(0, 3)
+      .map((url) => validPublicUrl(url)?.toString() ?? '')
+      .filter(Boolean),
     confidence: Math.min(1, Math.max(0, item.confidence)),
   }));
 }
@@ -165,7 +173,10 @@ export async function searchMaterials(provider: AiProvider, query: string) {
     'Keep this lookup fast: perform one focused web search, open at most one promising official page, then answer immediately.',
     'Search official manufacturer pages and official catalogs first. Never invent a collection, color, format, finish, URL or image.',
     'If the requested color is not official, use correction to explain the nearest verified official alternative in Italian.',
-    'The product source URL must support the exact association. Use an image URL only when it can be associated confidently with that same product; otherwise use an empty string.',
+    'The product source URL must support the exact association.',
+    'Classify images strictly: productImageUrl is a verified product sample or swatch; textureImageUrl is only a verified flat/front-facing texture suitable for surface rendering; roomImageUrls contains only room scenes or installed-product photos.',
+    'Never use a room scene, catalog cover, logo or generic collection photo as a product image or texture. Never classify the same URL as more than one image type.',
+    'Use only manufacturer-owned image assets that are confidently associated with the exact product and color. When an image type is unavailable, return an empty string or empty array.',
     'Set official=true only for a manufacturer-owned source and confidence from 0 to 1. Return at most six results and an empty array when no reliable match exists.',
     `User query: ${query}`,
   ].join('\n');

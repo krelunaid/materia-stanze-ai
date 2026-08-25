@@ -38,7 +38,9 @@ describe('getAiProvider', () => {
       finish: 'Naturale',
       description: 'Gres porcellanato chiaro',
       sourceUrl: 'https://www.leaceramiche.com/products/collection/intense',
-      imageUrl: '',
+      productImageUrl: 'https://www.leaceramiche.com/images/intense-clair-sample.jpg',
+      textureImageUrl: '',
+      roomImageUrls: ['https://www.leaceramiche.com/images/intense-clair-room.jpg'],
       confidence: 0.95,
       official: true,
       correction: '',
@@ -57,7 +59,29 @@ describe('getAiProvider', () => {
       max_output_tokens: 1800,
       reasoning: { effort: 'low' },
       tools: [{ type: 'web_search' }],
+      text: { format: { schema: { properties: { products: { items: { required: expect.arrayContaining(['productImageUrl', 'textureImageUrl', 'roomImageUrls']) } } } } } },
     });
+  });
+
+  it('drops unsafe material image URLs without discarding verified metadata', async () => {
+    const product = {
+      name: 'Intense Perle', brand: 'Lea Ceramiche', collection: 'Intense', category: 'Pavimenti' as const,
+      color: 'Perle', effect: 'Pietra', format: '', finish: '', description: 'Gres porcellanato',
+      sourceUrl: 'https://www.leaceramiche.com/products/collection/intense',
+      productImageUrl: 'http://127.0.0.1/private.jpg', textureImageUrl: 'not-a-url',
+      roomImageUrls: ['https://www.leaceramiche.com/images/perle-room.jpg', 'http://localhost/private.jpg'],
+      confidence: .8, official: true, correction: '',
+    };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({ products: [product] }) }] }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await expect(searchMaterials({ id: 'grok', label: 'Grok', apiKey: 'xai-test' }, 'Intense Perle')).resolves.toEqual([{
+      ...product,
+      productImageUrl: '',
+      textureImageUrl: '',
+      roomImageUrls: ['https://www.leaceramiche.com/images/perle-room.jpg'],
+    }]);
   });
 
   it('asks Grok vision for normalized architectural polygons', async () => {

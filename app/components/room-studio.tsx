@@ -25,6 +25,7 @@ import {
 
 type SourceType = 'photo' | 'floorplan';
 type ImportedRoom = AcceptedRoomFile & { previewUrl?: string; sourceType: SourceType };
+type MaterialReferenceKind = 'verified-texture' | 'official-product-image' | 'metadata-only' | 'uploaded-sample';
 type StudioMaterial = {
   id: string;
   name: string;
@@ -33,6 +34,12 @@ type StudioMaterial = {
   color?: string;
   pattern?: 'wood' | 'stone' | 'tile';
   previewUrl?: string;
+  textureUrl?: string;
+  productImageUrl?: string;
+  roomImageUrls?: string[];
+  referenceKind?: MaterialReferenceKind;
+  official?: boolean;
+  confidence?: number;
   brand?: string;
   sourceUrl?: string;
 };
@@ -67,6 +74,13 @@ const furnitureCatalog = [
 const kindColors: Record<SurfaceKind, string> = {
   wall: '#4f8f84', floor: '#bf8d58', ceiling: '#8ab8c2', door: '#8b6d9c', window: '#5d93b4', other: '#7f8985',
 };
+
+function materialReferenceLabel(item: StudioMaterial) {
+  if (item.referenceKind === 'verified-texture') return 'Texture ufficiale verificata';
+  if (item.referenceKind === 'official-product-image') return 'Foto prodotto ufficiale';
+  if (item.referenceKind === 'uploaded-sample') return 'Campione caricato da te';
+  return item.sourceUrl ? 'Solo dati ufficiali · resa indicativa' : 'Campione incluso';
+}
 
 const guidedPresets: Array<Omit<Surface, 'id'>> = [
   { name: 'Muro 1', kind: 'wall', frozen: false, points: [{ x: .25, y: .2 }, { x: .75, y: .2 }, { x: .75, y: .68 }, { x: .25, y: .68 }] },
@@ -618,7 +632,7 @@ export function RoomStudio() {
     if (materialBlobRef.current) URL.revokeObjectURL(materialBlobRef.current);
     const previewUrl = URL.createObjectURL(file);
     materialBlobRef.current = previewUrl;
-    const next: StudioMaterial = { id: `material-${Date.now()}`, name: file.name.replace(/\.[^.]+$/, ''), category: 'Rivestimenti', description: 'Campione fotografico personale', previewUrl };
+    const next: StudioMaterial = { id: `material-${Date.now()}`, name: file.name.replace(/\.[^.]+$/, ''), category: 'Rivestimenti', description: 'Campione fotografico personale', previewUrl, textureUrl: previewUrl, referenceKind: 'uploaded-sample' };
     setMaterial(next); setError(null); setNotice(`Campione “${next.name}” pronto. Seleziona una superficie e applicalo.`);
   }
 
@@ -652,7 +666,7 @@ export function RoomStudio() {
     }
     setIsSearchingProducts(true); setError(null); setNotice(`Cerco “${query}” nei cataloghi online…`); setOnlineMaterials([]);
     try {
-      const { response, result } = await requestJson<{ products?: Array<{ name: string; brand: string; collection?: string; category: StudioMaterial['category']; color?: string; effect?: string; format?: string; finish?: string; description: string; sourceUrl: string; imageUrl?: string; confidence?: number; official?: boolean; correction?: string }>; message?: string }>(endpoint('/api/search-products'), {
+      const { response, result } = await requestJson<{ products?: Array<{ name: string; brand: string; collection?: string; category: StudioMaterial['category']; color?: string; effect?: string; format?: string; finish?: string; description: string; sourceUrl: string; productImageUrl?: string; textureImageUrl?: string; roomImageUrls?: string[]; confidence?: number; official?: boolean; correction?: string }>; message?: string }>(endpoint('/api/search-products'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }),
       }, 60000);
       if (!response.ok) throw new Error(result.message ?? 'Ricerca non disponibile.');
@@ -667,6 +681,9 @@ export function RoomStudio() {
           item.description,
           typeof item.confidence === 'number' ? `${item.official ? 'Fonte ufficiale' : 'Fonte verificata'} · ${Math.round(item.confidence * 100)}%` : null,
         ].filter(Boolean).join(' · ');
+        const textureUrl = item.textureImageUrl || undefined;
+        const productImageUrl = item.productImageUrl || undefined;
+        const referenceKind: MaterialReferenceKind = textureUrl ? 'verified-texture' : productImageUrl ? 'official-product-image' : 'metadata-only';
         return {
           id: `online-${Date.now()}-${index}`,
           name: item.name,
@@ -674,11 +691,17 @@ export function RoomStudio() {
           category: item.category,
           description: technicalDetails,
           sourceUrl: item.sourceUrl,
-          previewUrl: item.imageUrl || undefined,
+          previewUrl: textureUrl ?? productImageUrl,
+          textureUrl,
+          productImageUrl,
+          roomImageUrls: item.roomImageUrls ?? [],
+          referenceKind,
+          official: item.official,
+          confidence: item.confidence,
         };
       });
       setOnlineMaterials(found);
-      setNotice(found.length ? `${found.length} prodotti reali verificati da Grok. Scegline uno e premi “Applica automaticamente”.` : 'Nessun prodotto affidabile trovato. Prova con marca e collezione più precise.');
+      setNotice(found.length ? `${found.length} prodotti verificati. L’app indica chiaramente se ha trovato anche una texture ufficiale oppure soltanto i dati del catalogo.` : 'Nessun prodotto affidabile trovato. Prova con marca e collezione più precise.');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Ricerca non disponibile.'); setNotice(null);
     } finally { setIsSearchingProducts(false); }
@@ -818,13 +841,17 @@ export function RoomStudio() {
       form.append('productDescription', `${material.description} · fonte: ${material.sourceUrl}`);
       form.append('targetName', target.name);
       form.append('protectedAreas', surfaces.filter((surface) => surface.frozen).map((surface) => surface.name).join(', '));
-      if (material.previewUrl) form.append('imageUrl', material.previewUrl);
+      const referenceUrl = material.textureUrl ?? material.productImageUrl;
+      if (referenceUrl) form.append('imageUrl', referenceUrl);
+      form.append('referenceType', material.referenceKind ?? 'metadata-only');
       const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/apply-product'), { method: 'POST', body: form }, 180000);
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Render non disponibile.');
       const protectedPreview = await protectAiResult(result.image, { editableSurface: target });
       commitSurfaces(surfaces.map((surface) => surface.id === target.id ? { ...surface, materialId: material.id } : surface));
       setProcessedPreview(protectedPreview); setProcessedLabel(material.name); setShowProcessedPreview(true);
-      setNotice(`${material.name} adattato a ${target.name}. Fuori dal contorno restano i pixel della foto originale.`);
+      setNotice(material.referenceKind === 'verified-texture' || material.referenceKind === 'uploaded-sample'
+        ? `${material.name} adattato a ${target.name} usando il campione visivo. Fuori dal contorno restano i pixel originali.`
+        : `${material.name} applicato in modo indicativo a ${target.name}: manca una texture ufficiale verificata. Fuori dal contorno restano i pixel originali.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Non sono riuscito ad applicare il prodotto.'); setNotice(null);
     } finally { setIsApplyingProduct(false); }
@@ -1009,7 +1036,7 @@ export function RoomStudio() {
     const sourceUrl = showProcessedPreview && processedPreview ? processedPreview : room.previewUrl;
     const materialAssignments = surfaces.filter((surface) => surface.materialId).map((surface) => {
       const assigned = materialMap.get(surface.materialId!);
-      return `${surface.name}: ${assigned?.brand ? `${assigned.brand} ` : ''}${assigned?.name ?? 'materiale scelto'} (${assigned?.description ?? 'mantieni il campione selezionato'})`;
+      return `${surface.name}: ${assigned?.brand ? `${assigned.brand} ` : ''}${assigned?.name ?? 'materiale scelto'} (${assigned?.description ?? 'mantieni il campione selezionato'}; ${assigned ? materialReferenceLabel(assigned) : 'riferimento non disponibile'})`;
     });
 
     setIsRendering(true); setError(null); setRenderSummaryOpen(false);
@@ -1023,7 +1050,9 @@ export function RoomStudio() {
       form.append('furniture', furniture.join(', '));
       form.append('requests', customRequests.join(', '));
       form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
-      if (material?.previewUrl && materialAssignments.length) form.append('imageUrl', material.previewUrl);
+      const referenceUrl = material?.textureUrl ?? material?.productImageUrl;
+      if (referenceUrl && materialAssignments.length) form.append('imageUrl', referenceUrl);
+      if (materialAssignments.length) form.append('referenceType', material?.referenceKind ?? 'metadata-only');
       const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/render-room'), { method: 'POST', body: form }, 240000);
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Render non disponibile.');
       const protectedPreview = await protectAiResult(result.image, { frozenSurfaces });
@@ -1120,13 +1149,13 @@ export function RoomStudio() {
               {aiStatus !== 'ready' && <div className="ai-setup-banner"><strong>Grok pronto da collegare</strong><span>Puoi provare i campioni inclusi. Ricerca web, stanza vuota e render reali richiedono la chiave xAI protetta sul server.</span></div>}
               <div className="online-search-control"><input className="material-search" aria-label="Cerca materiali, colori o mobili" value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchProductsOnline(); }} placeholder="Es. Intense Lea white materico" /><button type="button" onClick={() => void searchProductsOnline()} disabled={isSearchingProducts}>{isSearchingProducts ? 'Cerco…' : aiStatus === 'ready' ? `Cerca con ${aiProviderLabel ?? 'IA'}` : 'Grok non attivo'}</button></div>
               <div className="search-scope"><span>Materiali</span><span>Colori</span><span>Arredi</span><span className="internet-ready">Prodotti reali con fonte</span></div>
-              {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt="" /> : <span className="catalog-swatch tile" /> }<button type="button" onClick={() => chooseMaterial(item)}><strong>{item.brand} · {item.name}</strong><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a></div>)}</div>}
+              {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={`Riferimento ${item.name}`} /> : <span className="catalog-swatch tile" /> }<button type="button" onClick={() => chooseMaterial(item)}><strong>{item.brand} · {item.name}</strong><span className={`reference-badge reference-${item.referenceKind ?? 'metadata-only'}`}>{materialReferenceLabel(item)}</span><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a></div>)}</div>}
               <div className="material-results">{filteredMaterials.map((item) => <button type="button" key={item.id} className={`material-result ${material?.id === item.id ? 'is-selected' : ''}`} onClick={() => chooseMaterial(item)}><span className={`catalog-swatch ${item.pattern ?? 'color'}`} style={{ '--swatch-color': item.color } as CSSProperties} /><span><strong>{item.name}</strong><small>{item.category} · {item.description}</small></span></button>)}{filteredFurniture.map((item) => <button type="button" key={item.name} className={`material-result furniture-result ${furniture.includes(item.name) ? 'is-selected' : ''}`} onClick={() => toggleFurniture(item.name)}><span className="furniture-icon">{furniture.includes(item.name) ? '✓' : '+'}</span><span><strong>{item.name}</strong><small>Mobili · {item.description}</small></span></button>)}{filteredMaterials.length === 0 && filteredFurniture.length === 0 && onlineMaterials.length === 0 && <div className="custom-search-result"><p>Nessun campione incluso corrisponde. Per trovare marca e prodotto esatti serve la ricerca IA attiva.</p><button type="button" onClick={addCustomRequest}>Aggiungi “{materialQuery.trim()}” alla richiesta</button></div>}</div>
               <div className="custom-color"><input type="color" aria-label="Scegli colore personalizzato" value={customColor} onChange={(event) => setCustomColor(event.target.value)} /><button type="button" onClick={chooseCustomColor}>Usa questo colore</button></div>
-              {material?.previewUrl && <div className="loaded-material"><img src={material.previewUrl} alt="Campione materiale" /><div><strong>{material.name}</strong><small>{material.description}</small></div></div>}
-              <button className="auto-apply-product-button" type="button" onClick={() => void applyMaterialAutomatically()} disabled={!material || isApplyingProduct}>{isApplyingProduct ? 'Adatto il prodotto alla stanza…' : `Applica automaticamente ${material?.name ?? 'il prodotto'}`}</button>
+              {material && <div className="loaded-material">{material.previewUrl ? <img src={material.previewUrl} alt={`Campione ${material.name}`} /> : <span className="catalog-swatch tile" />}<div><strong>{material.name}</strong><small>{materialReferenceLabel(material)}</small></div></div>}
+              <button className="auto-apply-product-button" type="button" onClick={() => void applyMaterialAutomatically()} disabled={!material || isApplyingProduct}>{isApplyingProduct ? 'Adatto il prodotto alla stanza…' : material?.referenceKind === 'metadata-only' ? `Prova resa indicativa di ${material.name}` : `Applica automaticamente ${material?.name ?? 'il prodotto'}`}</button>
               <button className="apply-button secondary-apply" type="button" aria-label={`Applica a ${selected.name}`} onClick={applyMaterial} disabled={!material || selected.frozen}>Oppure applica solo a {selected.name}</button>
-              <p className="material-search-note">L’app sceglie pavimento o muro, corregge prospettiva e scala, e lascia identiche tutte le zone Freeze.</p>
+              <p className="material-search-note">L’app sceglie pavimento o muro, corregge prospettiva e scala, e lascia identiche tutte le zone Freeze. La resa è fedele al prodotto solo quando compare “Texture ufficiale verificata” o usi un tuo campione.</p>
             </div>
             <div className="property-section"><div className="property-title"><span>Elementi nel render</span><span className="editable-badge">{furniture.length + customRequests.length} scelti</span></div>{furniture.length || customRequests.length ? <div className="selected-assets">{furniture.map((item) => <button type="button" key={item} onClick={() => toggleFurniture(item)}>{item}<span>×</span></button>)}{customRequests.map((item) => <button type="button" key={item} onClick={() => setCustomRequests((current) => current.filter((name) => name !== item))}>{item}<span>×</span></button>)}</div> : <p className="no-results">Cerca un mobile o scrivi liberamente ciò che vuoi inserire.</p>}<p className="material-search-note">Con il motore AI potrai caricare anche la foto esatta del mobile e indicarne la posizione.</p></div>
             <div className="property-section metrics"><div><span>Vertici</span><strong>{selected.points.length}</strong></div><div><span>Stato</span><strong>{selected.frozen ? 'Lock' : 'Edit'}</strong></div><div><span>Texture</span><strong>{selected.materialId ? 'Sì' : 'No'}</strong></div></div><button className="remove-button" type="button" onClick={deleteSelected} disabled={selected.frozen}>Elimina superficie</button></> : room ? <div className="empty-properties"><strong>Seleziona un contorno</strong><p>Tocca una superficie sulla foto o sceglila dall’elenco. Puoi anche disegnarne una nuova.</p></div> : null}

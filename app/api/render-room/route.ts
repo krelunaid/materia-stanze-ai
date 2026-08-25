@@ -29,6 +29,10 @@ export async function POST(request: Request) {
     const requests = String(incoming.get('requests') ?? '').slice(0, 2000);
     const protectedAreas = String(incoming.get('protectedAreas') ?? '').slice(0, 1000);
     const imageUrl = String(incoming.get('imageUrl') ?? '').slice(0, 2000);
+    const incomingReferenceType = String(incoming.get('referenceType') ?? 'metadata-only');
+    const referenceType = ['verified-texture', 'official-product-image', 'uploaded-sample'].includes(incomingReferenceType)
+      ? incomingReferenceType
+      : 'metadata-only';
     if (!(image instanceof File) || !image.type.startsWith('image/')) {
       return json({ message: 'La fotografia da renderizzare non è valida.' }, 400);
     }
@@ -39,6 +43,10 @@ export async function POST(request: Request) {
       'Create the final photorealistic interior render by editing this exact room photograph.',
       'Preserve the camera position, lens, crop, room geometry, walls, ceiling, floor, windows, doors, structural openings and lighting direction.',
       materials ? `Apply these user-selected products to their named surfaces, respecting real scale, joints, laying direction, perspective and finish:\n${materials}` : 'Keep every existing architectural material unchanged.',
+      imageUrl && referenceType === 'verified-texture' ? 'Use the supplied verified flat texture as the exact material reference.' : '',
+      imageUrl && referenceType === 'official-product-image' ? 'Use the supplied official product image as a color and finish reference; reconstruct scale and repetition conservatively.' : '',
+      imageUrl && referenceType === 'uploaded-sample' ? 'Use the supplied user sample as the material reference.' : '',
+      materials && referenceType === 'metadata-only' ? 'No verified texture is supplied. Keep any product visualization restrained and approximate; do not invent distinctive graphics or claim exact visual fidelity.' : '',
       furniture ? `Insert these furniture elements naturally and at realistic scale: ${furniture}.` : '',
       requests ? `Also follow these user requests: ${requests}.` : '',
       protectedAreas ? `These Freeze areas must remain unchanged: ${protectedAreas}.` : '',
