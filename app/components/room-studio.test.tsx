@@ -49,6 +49,8 @@ describe('RoomStudio', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
     expect(screen.getAllByText('Muro 1').length).toBeGreaterThan(0);
+    const polygons = document.querySelectorAll('.surface-overlay polygon');
+    expect(polygons[3]).toHaveAttribute('points', expect.stringContaining('1000,625 0,625'));
     fireEvent.click(screen.getByRole('button', { name: 'Mantieni identico Muro 1' }));
     expect(screen.getByText('Frozen')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Consenti modifiche a Muro 1' })).toBeInTheDocument();

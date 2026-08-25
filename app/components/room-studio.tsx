@@ -70,21 +70,21 @@ const kindColors: Record<SurfaceKind, string> = {
 
 const guidedPresets: Array<Omit<Surface, 'id'>> = [
   { name: 'Muro 1', kind: 'wall', frozen: false, points: [{ x: .25, y: .2 }, { x: .75, y: .2 }, { x: .75, y: .68 }, { x: .25, y: .68 }] },
-  { name: 'Muro 2', kind: 'wall', frozen: false, points: [{ x: .03, y: .05 }, { x: .25, y: .2 }, { x: .25, y: .68 }, { x: .03, y: .95 }] },
-  { name: 'Muro 3', kind: 'wall', frozen: false, points: [{ x: .75, y: .2 }, { x: .97, y: .05 }, { x: .97, y: .95 }, { x: .75, y: .68 }] },
-  { name: 'Pavimento', kind: 'floor', frozen: false, points: [{ x: .25, y: .68 }, { x: .75, y: .68 }, { x: .97, y: .95 }, { x: .03, y: .95 }] },
+  { name: 'Muro 2', kind: 'wall', frozen: false, points: [{ x: 0, y: .05 }, { x: .25, y: .2 }, { x: .25, y: .68 }, { x: 0, y: 1 }] },
+  { name: 'Muro 3', kind: 'wall', frozen: false, points: [{ x: .75, y: .2 }, { x: 1, y: .05 }, { x: 1, y: 1 }, { x: .75, y: .68 }] },
+  { name: 'Pavimento', kind: 'floor', frozen: false, points: [{ x: .25, y: .68 }, { x: .75, y: .68 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
 ];
 
 function createGuidedSurfaces(bounds?: { left: number; right: number; top: number; floor: number }) {
   if (!bounds) return guidedPresets.map((surface, index) => ({ ...surface, id: `guided-${Date.now()}-${index}` }));
   const { left, right, top, floor } = bounds;
   const outerTop = Math.max(.025, top - .16);
-  const bottom = .965;
+  const bottom = 1;
   const presets: Array<Omit<Surface, 'id'>> = [
     { name: 'Muro 1', kind: 'wall', frozen: false, points: [{ x: left, y: top }, { x: right, y: top }, { x: right, y: floor }, { x: left, y: floor }] },
-    { name: 'Muro 2', kind: 'wall', frozen: false, points: [{ x: .02, y: outerTop }, { x: left, y: top }, { x: left, y: floor }, { x: .02, y: bottom }] },
-    { name: 'Muro 3', kind: 'wall', frozen: false, points: [{ x: right, y: top }, { x: .98, y: outerTop }, { x: .98, y: bottom }, { x: right, y: floor }] },
-    { name: 'Pavimento', kind: 'floor', frozen: false, points: [{ x: left, y: floor }, { x: right, y: floor }, { x: .98, y: bottom }, { x: .02, y: bottom }] },
+    { name: 'Muro 2', kind: 'wall', frozen: false, points: [{ x: 0, y: outerTop }, { x: left, y: top }, { x: left, y: floor }, { x: 0, y: bottom }] },
+    { name: 'Muro 3', kind: 'wall', frozen: false, points: [{ x: right, y: top }, { x: 1, y: outerTop }, { x: 1, y: bottom }, { x: right, y: floor }] },
+    { name: 'Pavimento', kind: 'floor', frozen: false, points: [{ x: left, y: floor }, { x: right, y: floor }, { x: 1, y: bottom }, { x: 0, y: bottom }] },
   ];
   return presets.map((surface, index) => ({ ...surface, id: `guided-${Date.now()}-${index}` }));
 }
@@ -815,6 +815,12 @@ export function RoomStudio() {
             frozen: false,
           }));
           usedGrok = detected.length > 0;
+          const detectedWalls = detected.filter((surface) => surface.kind === 'wall');
+          const detectedFloors = detected.filter((surface) => surface.kind === 'floor');
+          if (detectedWalls.length === 3 && detectedFloors.length === 1) {
+            const architecturalExtras = detected.filter((surface) => !['wall', 'floor'].includes(surface.kind));
+            detected = [...createGuidedSurfaces(detectRoomBounds(roomImageRef.current)), ...architecturalExtras];
+          }
         } catch (caught) {
           grokError = caught instanceof Error ? caught : new Error('Grok non ha completato il riconoscimento.');
         }
@@ -835,7 +841,7 @@ export function RoomStudio() {
       setSelectedId(first?.id ?? null); setRenameDraft(first?.name ?? '');
       setIsCorrectingEdges(false);
       setNotice(usedGrok
-        ? `Grok ha riconosciuto ${nextSurfaces.length} superfici e adattato gli angoli alla foto. Correggi i bordi solo se serve.`
+        ? `Grok ha riconosciuto ${nextSurfaces.length} superfici e l’app ha agganciato gli angoli ai bordi della foto. Correggi solo se serve.`
         : `${grokError ? 'Grok non ha risposto: ' : ''}ho inserito una base locale. Puoi riprovare l’analisi IA o correggere i bordi.`);
     } catch {
       if (surfaces.length === 0) seedGuidedSurfaces();
