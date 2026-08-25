@@ -53,6 +53,10 @@ describe('RoomStudio', () => {
     expect(polygons[1]).toHaveAttribute('points', expect.stringContaining('0,0'));
     expect(polygons[2]).toHaveAttribute('points', expect.stringContaining('1000,0'));
     expect(polygons[3]).toHaveAttribute('points', expect.stringContaining('1000,625 0,625'));
+    expect(polygons).toHaveLength(6);
+    expect(screen.getByRole('button', { name: /^Finestra/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Soffitto/ })).toBeInTheDocument();
+    expect(polygons[5]).toHaveAttribute('points', expect.stringContaining('334,112.5 667,112.5 667,345'));
     fireEvent.click(screen.getByRole('button', { name: 'Mantieni identico Muro 1' }));
     expect(screen.getByText('Frozen')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Consenti modifiche a Muro 1' })).toBeInTheDocument();

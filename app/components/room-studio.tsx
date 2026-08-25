@@ -82,6 +82,10 @@ function materialReferenceLabel(item: StudioMaterial) {
   return item.sourceUrl ? 'Solo dati ufficiali · resa indicativa' : 'Campione incluso';
 }
 
+function surfaceLabelPoint(surface: Surface) {
+  return surface.points.reduce((center, point) => ({ x: center.x + point.x / surface.points.length, y: center.y + point.y / surface.points.length }), { x: 0, y: 0 });
+}
+
 const guidedPresets: Array<Omit<Surface, 'id'>> = [
   { name: 'Muro 1', kind: 'wall', frozen: false, points: [{ x: .25, y: .2 }, { x: .75, y: .2 }, { x: .75, y: .68 }, { x: .25, y: .68 }] },
   { name: 'Muro 2', kind: 'wall', frozen: false, points: [{ x: 0, y: 0 }, { x: .25, y: .2 }, { x: .25, y: .68 }, { x: 0, y: 1 }] },
@@ -101,6 +105,18 @@ function createGuidedSurfaces(bounds?: { left: number; right: number; top: numbe
     { name: 'Pavimento', kind: 'floor', frozen: false, points: [{ x: left, y: floor }, { x: right, y: floor }, { x: 1, y: bottom }, { x: 0, y: bottom }] },
   ];
   return presets.map((surface, index) => ({ ...surface, id: `guided-${Date.now()}-${index}` }));
+}
+
+function createDemoSurfaces() {
+  const presets: Array<Omit<Surface, 'id'>> = [
+    { name: 'Muro 1', kind: 'wall', frozen: false, points: [{ x: .218, y: .13 }, { x: .785, y: .13 }, { x: .785, y: .695 }, { x: .218, y: .695 }] },
+    { name: 'Muro 2', kind: 'wall', frozen: false, points: [{ x: 0, y: 0 }, { x: .218, y: .13 }, { x: .218, y: .695 }, { x: 0, y: .86 }] },
+    { name: 'Muro 3', kind: 'wall', frozen: false, points: [{ x: .785, y: .13 }, { x: 1, y: 0 }, { x: 1, y: .86 }, { x: .785, y: .695 }] },
+    { name: 'Pavimento', kind: 'floor', frozen: false, points: [{ x: .218, y: .695 }, { x: .785, y: .695 }, { x: 1, y: .86 }, { x: 1, y: 1 }, { x: 0, y: 1 }, { x: 0, y: .86 }] },
+    { name: 'Soffitto', kind: 'ceiling', frozen: false, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: .785, y: .13 }, { x: .218, y: .13 }] },
+    { name: 'Finestra', kind: 'window', frozen: false, points: [{ x: .334, y: .18 }, { x: .667, y: .18 }, { x: .667, y: .552 }, { x: .334, y: .552 }] },
+  ];
+  return presets.map((surface, index) => ({ ...surface, id: `demo-${Date.now()}-${index}` }));
 }
 
 function strongestEdge(scores: number[], start: number, end: number, fallback: number) {
@@ -1070,12 +1086,12 @@ export function RoomStudio() {
   function loadDemoRoom() {
     if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
     processedBlobRef.current = null;
-    const file = new File(['demo'], 'stanza-esempio.png', { type: 'image/png' });
-    const created = createGuidedSurfaces();
-    setRoom({ file, kind: 'image', canPreview: true, displaySize: 'esempio incluso', projectName: 'Stanza esempio', previewUrl: '/og.png', sourceType: 'photo' });
-    setRoomRatio(16 / 9); setSurfaces(created); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(created[0].id); setRenameDraft(created[0].name); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setError(null);
+    const file = new File(['demo'], 'stanza-vuota-con-finestra.jpg', { type: 'image/jpeg' });
+    const created = createDemoSurfaces();
+    setRoom({ file, kind: 'image', canPreview: true, displaySize: 'esempio incluso', projectName: 'Stanza vuota con finestra', previewUrl: '/demo-room.jpg', sourceType: 'photo' });
+    setRoomRatio(16 / 10); setSurfaces(created); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(created[0].id); setRenameDraft(created[0].name); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setError(null);
     setIsCorrectingEdges(false);
-    setNotice('Esempio pronto. L’allineamento è automatico: correggi i bordi solo se serve.');
+    setNotice('Esempio pronto: finestra, soffitto, pavimento e tre muri sono già riconosciuti fino ai bordi reali.');
     setActiveStep(2);
   }
 
@@ -1128,7 +1144,11 @@ export function RoomStudio() {
                   {catalogMaterials.filter((item) => item.pattern).map((item) => <pattern id={`catalog-material-${item.id}`} key={item.id} width={item.pattern === 'wood' ? 180 : 120} height={item.pattern === 'wood' ? 42 : 120} patternUnits="userSpaceOnUse"><rect width="100%" height="100%" fill={item.color} /><path d={item.pattern === 'wood' ? 'M0 2H180 M0 40H180 M45 2V40 M135 2V40' : 'M0 1H120 M1 0V120'} stroke="rgba(67,55,43,.22)" strokeWidth="3" /><path d={item.pattern === 'stone' ? 'M8 38 C38 17 64 55 110 25 M14 92 C45 68 77 106 116 74' : ''} fill="none" stroke="rgba(255,255,255,.24)" strokeWidth="5" /></pattern>)}
                   {material?.previewUrl && <pattern id={`uploaded-material-${material.id}`} width="140" height="140" patternUnits="userSpaceOnUse"><image href={material.previewUrl} width="140" height="140" preserveAspectRatio="xMidYMid slice" /></pattern>}
                 </defs>
-                {surfaces.map((surface) => <g key={surface.id} className={`surface-kind-${surface.kind} ${surface.frozen ? 'is-frozen ' : ''}${surface.id === selectedId ? 'is-selected-surface' : ''}`}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{isCorrectingEdges && !surface.frozen && surface.id === selectedId && surface.points.map((point, index) => <g key={`${surface.id}-${index}`}><circle cx={point.x * 1000} cy={point.y * 625} r="32" className="surface-vertex-hit" onPointerDown={(event) => beginVertexDrag(event, surface.id, index)} /><circle cx={point.x * 1000} cy={point.y * 625} r="14" className="surface-vertex" aria-hidden="true" /></g>)}</g>)}
+                {surfaces.map((surface) => {
+                  const labelPoint = surfaceLabelPoint(surface);
+                  const showLabel = surface.id === selectedId || surface.kind === 'window' || surface.kind === 'door';
+                  return <g key={surface.id} className={`surface-kind-${surface.kind} ${surface.frozen ? 'is-frozen ' : ''}${surface.id === selectedId ? 'is-selected-surface' : ''}`}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{showLabel && <text className="surface-name" x={labelPoint.x * 1000} y={labelPoint.y * 625}>{surface.name}</text>}{isCorrectingEdges && !surface.frozen && surface.id === selectedId && surface.points.map((point, index) => <g key={`${surface.id}-${index}`}><circle cx={point.x * 1000} cy={point.y * 625} r="32" className="surface-vertex-hit" onPointerDown={(event) => beginVertexDrag(event, surface.id, index)} /><circle cx={point.x * 1000} cy={point.y * 625} r="14" className="surface-vertex" aria-hidden="true" /></g>)}</g>;
+                })}
                 {draft.length > 0 && <><polyline points={pointsToSvg(draft)} fill="none" stroke="#d7f05c" strokeWidth="5" vectorEffect="non-scaling-stroke" />{draft.map((point, index) => <circle key={index} cx={point.x * 1000} cy={point.y * 625} r="9" className="draft-vertex" />)}</>}
               </svg><div className="import-status"><span className="status-dot" /><div><strong>{showProcessedPreview ? processedLabel : 'Originale intatto'}</strong><small>{showProcessedPreview ? 'Elaborazione IA · originale sempre disponibile' : importedCaption}</small></div></div>
               {processedPreview && <div className="before-after-toggle" aria-label="Confronta originale e risultato"><button type="button" className={!showProcessedPreview ? 'is-active' : ''} onClick={() => setShowProcessedPreview(false)}>Originale</button><button type="button" className={showProcessedPreview ? 'is-active' : ''} onClick={() => setShowProcessedPreview(true)}>{processedLabel}</button></div>}

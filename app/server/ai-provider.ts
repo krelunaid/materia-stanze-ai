@@ -264,6 +264,8 @@ export async function detectRoomSurfaces(provider: AiProvider, image: File) {
     'Before answering, inspect the entire image explicitly for every architectural opening. Do not omit low-contrast, overexposed or partially cropped windows and doors, including white frames on white walls.',
     'For every visible window or door, trace the outside edge of the complete frame as its own polygon, separate from the wall behind it.',
     'Treat a multi-pane window as one complete opening: include every upper and lower pane inside the outer frame, never return only one sash or one bright section.',
+    'A window polygon must reach the outside edge of the head, both jambs and the complete sill. Never stop at an internal mullion, transom, glazing edge or only the bright glass area.',
+    'When the frame is white on a white wall, use the frame shadow and sill boundary; include a small amount of outer trim rather than cutting off part of the opening.',
     'If any floor area is visible, a complete floor polygon is mandatory even when the floor is white, glossy or low contrast.',
     'Return polygon vertices as normalized image coordinates where x=0 is the left edge, x=1 the right edge, y=0 the top edge and y=1 the bottom edge.',
     'Follow the real wall-wall, wall-floor and wall-ceiling junctions. Do not use furniture edges, window frames, shadows, tile joints, rugs or decorations as room corners.',
