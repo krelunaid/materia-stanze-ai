@@ -95,7 +95,7 @@ const roomGeometrySchema = {
           points: {
             type: 'array',
             minItems: 3,
-            maxItems: 12,
+            maxItems: 24,
             items: {
               type: 'object',
               additionalProperties: false,
@@ -218,6 +218,63 @@ async function fileToDataUri(file: File) {
   return `data:${file.type || 'image/png'};base64,${bytesToBase64(new Uint8Array(await file.arrayBuffer()))}`;
 }
 
+type SupportedImageAspectRatio = '1:1' | '16:9' | '9:16' | '4:3' | '3:4' | '3:2' | '2:3' | '2:1' | '1:2' | 'auto';
+
+export function chooseSupportedImageAspectRatio(width: number, height: number): SupportedImageAspectRatio {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return 'auto';
+  const ratio = width / height;
+  const supported: Array<{ name: Exclude<SupportedImageAspectRatio, 'auto'>; ratio: number }> = [
+    { name: '1:1', ratio: 1 },
+    { name: '16:9', ratio: 16 / 9 },
+    { name: '9:16', ratio: 9 / 16 },
+    { name: '4:3', ratio: 4 / 3 },
+    { name: '3:4', ratio: 3 / 4 },
+    { name: '3:2', ratio: 3 / 2 },
+    { name: '2:3', ratio: 2 / 3 },
+    { name: '2:1', ratio: 2 },
+    { name: '1:2', ratio: .5 },
+  ];
+  return [...supported].sort((left, right) => (
+    Math.abs(Math.log(ratio / left.ratio)) - Math.abs(Math.log(ratio / right.ratio))
+  ))[0].name;
+}
+
+function imageDimensions(bytes: Uint8Array) {
+  const isPng = bytes.length >= 24
+    && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+  if (isPng) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return { width: view.getUint32(16), height: view.getUint32(20) };
+  }
+
+  if (bytes.length >= 10 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    const startOfFrame = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+    let offset = 2;
+    while (offset + 8 < bytes.length) {
+      if (bytes[offset] !== 0xff) { offset += 1; continue; }
+      const marker = bytes[offset + 1];
+      offset += 2;
+      if (marker === 0xd8 || marker === 0xd9) continue;
+      if (offset + 1 >= bytes.length) break;
+      const segmentLength = (bytes[offset] << 8) | bytes[offset + 1];
+      if (segmentLength < 2 || offset + segmentLength > bytes.length) break;
+      if (startOfFrame.has(marker) && segmentLength >= 7) {
+        return {
+          height: (bytes[offset + 3] << 8) | bytes[offset + 4],
+          width: (bytes[offset + 5] << 8) | bytes[offset + 6],
+        };
+      }
+      offset += segmentLength;
+    }
+  }
+  return null;
+}
+
+async function sourceImageAspectRatio(file: File) {
+  const dimensions = imageDimensions(new Uint8Array(await file.arrayBuffer()));
+  return dimensions ? chooseSupportedImageAspectRatio(dimensions.width, dimensions.height) : 'auto';
+}
+
 function polygonArea(points: Array<{ x: number; y: number }>) {
   return Math.abs(points.reduce((sum, point, index) => {
     const next = points[(index + 1) % points.length];
@@ -225,13 +282,75 @@ function polygonArea(points: Array<{ x: number; y: number }>) {
   }, 0) / 2);
 }
 
-function normalizeRoomSurfaces(surfaces: DetectedRoomSurface[]) {
+function looksLikeFrontalWallStrip(surface: DetectedRoomSurface) {
+  if (surface.kind !== 'wall' || surface.points.length !== 4) return false;
+  const orderedByY = [...surface.points].sort((a, b) => a.y - b.y);
+  const top = orderedByY.slice(0, 2);
+  const bottom = orderedByY.slice(2);
+  const topSpread = Math.abs(top[0].y - top[1].y);
+  const bottomSpread = Math.abs(bottom[0].y - bottom[1].y);
+  const height = Math.min(...bottom.map((point) => point.y)) - Math.max(...top.map((point) => point.y));
+  return topSpread <= .04 && bottomSpread <= .08 && height >= .24;
+}
+
+function mergeFrontalWallStrips(surfaces: DetectedRoomSurface[]) {
+  const strips = surfaces.filter(looksLikeFrontalWallStrip);
+  if (strips.length < 2) return surfaces;
+
+  const intervals = strips.map((surface) => {
+    const xs = surface.points.map((point) => point.x);
+    return { left: Math.min(...xs), right: Math.max(...xs) };
+  }).sort((a, b) => a.left - b.left);
+  const coveredLeft = intervals[0].left;
+  const coveredRight = intervals.at(-1)?.right ?? coveredLeft;
+  const hasLargeGap = intervals.slice(1).some((interval, index) => interval.left - intervals[index].right > .045);
+  if (hasLargeGap || coveredRight - coveredLeft < .55) return surfaces;
+
+  const floor = surfaces.find((surface) => surface.kind === 'floor');
+  const floorBoundary = floor?.points
+    .filter((point) => point.y < .92 && point.x >= coveredLeft - .03 && point.x <= coveredRight + .03)
+    .sort((a, b) => a.x - b.x) ?? [];
+  if (floorBoundary.length < 2) return surfaces;
+
+  const leftFloor = floorBoundary[0];
+  const rightFloor = floorBoundary[floorBoundary.length - 1];
+  const lowerEdge = [
+    ...(coveredRight - rightFloor.x > .01 ? [{ x: coveredRight, y: rightFloor.y }] : []),
+    ...[...floorBoundary].reverse(),
+    ...(leftFloor.x - coveredLeft > .01 ? [{ x: coveredLeft, y: leftFloor.y }] : []),
+  ];
+  const top = Math.min(...strips.flatMap((surface) => surface.points.map((point) => point.y)));
+  const merged: DetectedRoomSurface = {
+    name: 'Muro principale',
+    kind: 'wall',
+    confidence: Math.min(...strips.map((surface) => surface.confidence)),
+    points: [{ x: coveredLeft, y: top }, { x: coveredRight, y: top }, ...lowerEdge].slice(0, 24),
+  };
+  const stripSet = new Set(strips);
+  return [merged, ...surfaces.filter((surface) => !stripSet.has(surface))];
+}
+
+function extendSingleFrontalWallToImageTop(surfaces: DetectedRoomSurface[]) {
+  if (surfaces.some((surface) => surface.kind === 'ceiling')) return surfaces;
+  const walls = surfaces.filter((surface) => surface.kind === 'wall');
+  if (walls.length !== 1) return surfaces;
+  const wall = walls[0];
+  const xs = wall.points.map((point) => point.x);
+  const top = Math.min(...wall.points.map((point) => point.y));
+  if (Math.max(...xs) - Math.min(...xs) < .9 || top < .025 || top > .2) return surfaces;
+  return surfaces.map((surface) => surface === wall ? {
+    ...surface,
+    points: surface.points.map((point) => point.y <= top + .04 ? { ...point, y: 0 } : point),
+  } : surface);
+}
+
+export function normalizeRoomSurfaces(surfaces: DetectedRoomSurface[]) {
   const validKinds = new Set<DetectedRoomSurface['kind']>(['wall', 'floor', 'ceiling', 'door', 'window', 'other']);
   const cleaned = surfaces.slice(0, 16).map((surface) => ({
     ...surface,
     name: String(surface.name ?? '').trim().slice(0, 80),
     confidence: Math.min(1, Math.max(0, Number(surface.confidence) || 0)),
-    points: (surface.points ?? []).slice(0, 12).map((point) => ({
+    points: (surface.points ?? []).slice(0, 24).map((point) => ({
       x: Math.min(1, Math.max(0, Number(point.x))),
       y: Math.min(1, Math.max(0, Number(point.y))),
     })),
@@ -240,10 +359,16 @@ function normalizeRoomSurfaces(surfaces: DetectedRoomSurface[]) {
     return validKinds.has(surface.kind) && surface.confidence >= minimumConfidence && surface.points.length >= 3 && polygonArea(surface.points) > .001;
   });
 
+  const withoutFalseCeiling = cleaned.filter((surface) => {
+    if (surface.kind !== 'ceiling') return true;
+    const ys = surface.points.map((point) => point.y);
+    return Math.max(...ys) - Math.min(...ys) >= .08;
+  });
+  const merged = extendSingleFrontalWallToImageTop(mergeFrontalWallStrips(withoutFalseCeiling));
   const kindOrder: Record<DetectedRoomSurface['kind'], number> = { wall: 0, floor: 1, ceiling: 2, door: 3, window: 4, other: 5 };
-  cleaned.sort((a, b) => kindOrder[a.kind] - kindOrder[b.kind]);
+  merged.sort((a, b) => kindOrder[a.kind] - kindOrder[b.kind]);
   const counters: Partial<Record<DetectedRoomSurface['kind'], number>> = {};
-  return cleaned.map((surface) => {
+  return merged.map((surface) => {
     counters[surface.kind] = (counters[surface.kind] ?? 0) + 1;
     const count = counters[surface.kind] as number;
     const base = surface.kind === 'wall' ? 'Muro'
@@ -252,51 +377,221 @@ function normalizeRoomSurfaces(surfaces: DetectedRoomSurface[]) {
           : surface.kind === 'door' ? 'Porta'
             : surface.kind === 'window' ? 'Finestra'
               : 'Superficie';
-    const repeatedKind = cleaned.filter((candidate) => candidate.kind === surface.kind).length > 1;
+    const repeatedKind = merged.filter((candidate) => candidate.kind === surface.kind).length > 1;
     return { ...surface, name: repeatedKind || surface.kind === 'wall' ? `${base} ${count}` : base };
   });
+}
+
+function surfaceBounds(surface: DetectedRoomSurface) {
+  const xs = surface.points.map((point) => point.x);
+  const ys = surface.points.map((point) => point.y);
+  return {
+    left: Math.min(...xs),
+    right: Math.max(...xs),
+    top: Math.min(...ys),
+    bottom: Math.max(...ys),
+  };
+}
+
+function floorBoundaryAtX(floor: DetectedRoomSurface | undefined, x: number) {
+  if (!floor) return null;
+  const intersections: number[] = [];
+  floor.points.forEach((point, index) => {
+    const next = floor.points[(index + 1) % floor.points.length];
+    const minimum = Math.min(point.x, next.x) - .0001;
+    const maximum = Math.max(point.x, next.x) + .0001;
+    if (x < minimum || x > maximum) return;
+    if (Math.abs(next.x - point.x) < .0001) {
+      intersections.push(Math.min(point.y, next.y));
+      return;
+    }
+    const ratio = (x - point.x) / (next.x - point.x);
+    if (ratio >= 0 && ratio <= 1) intersections.push(point.y + (next.y - point.y) * ratio);
+  });
+  return intersections.length ? Math.min(...intersections) : null;
+}
+
+function openingOverlap(left: DetectedRoomSurface, right: DetectedRoomSurface) {
+  const a = surfaceBounds(left);
+  const b = surfaceBounds(right);
+  const intersectionWidth = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+  const intersectionHeight = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+  const intersection = intersectionWidth * intersectionHeight;
+  const areaA = Math.max(.0001, (a.right - a.left) * (a.bottom - a.top));
+  const areaB = Math.max(.0001, (b.right - b.left) * (b.bottom - b.top));
+  return intersection / (areaA + areaB - intersection);
+}
+
+function geometryScore(candidate: DetectedRoomSurface[]) {
+  const floor = candidate.find((surface) => surface.kind === 'floor');
+  const openings = candidate.filter((surface) => surface.kind === 'door' || surface.kind === 'window');
+  const walls = candidate.filter((surface) => surface.kind === 'wall');
+  return candidate.reduce((total, surface) => total + surface.confidence, 0)
+    + Math.min(walls.length, 5) * 1.2
+    + (floor ? 4 + Math.min(floor.points.length, 12) * .12 : 0)
+    + openings.reduce((total, opening) => total + (opening.points.length === 4 ? 2 : 0), 0);
+}
+
+function floorQuality(surface: DetectedRoomSurface) {
+  const bounds = surfaceBounds(surface);
+  const touchesBottom = bounds.bottom >= .985;
+  const touchesSide = bounds.left <= .015 || bounds.right >= .985;
+  return surface.confidence + Math.min(surface.points.length, 12) * .08 + (touchesBottom ? 1 : 0) + (touchesSide ? .4 : 0);
+}
+
+function normalizeOpeningKind(surface: DetectedRoomSurface, floor: DetectedRoomSurface | undefined) {
+  const bounds = surfaceBounds(surface);
+  const centerX = (bounds.left + bounds.right) / 2;
+  const floorY = floorBoundaryAtX(floor, centerX);
+  if (floorY === null) return surface;
+  if (bounds.bottom <= floorY - .045) return { ...surface, kind: 'window' as const };
+  if (bounds.bottom >= floorY - .035) return { ...surface, kind: 'door' as const };
+  return surface;
+}
+
+function openingQuality(surface: DetectedRoomSurface, floor: DetectedRoomSurface | undefined) {
+  const bounds = surfaceBounds(surface);
+  const centerX = (bounds.left + bounds.right) / 2;
+  const floorY = floorBoundaryAtX(floor, centerX);
+  let score = surface.confidence + (surface.points.length === 4 ? 1 : 0);
+  if (floorY !== null) {
+    const isAboveFloor = bounds.bottom <= floorY - .045;
+    if (surface.kind === 'window') score += isAboveFloor ? 1 : -1.5;
+    if (surface.kind === 'door') score += Math.abs(bounds.bottom - floorY) <= .08 ? 1 : -1;
+  }
+  return score;
+}
+
+export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[][]) {
+  const normalized = candidates.map(normalizeRoomSurfaces).filter((candidate) => candidate.length > 0);
+  if (!normalized.length) return [];
+  const ranked = [...normalized].sort((left, right) => geometryScore(right) - geometryScore(left));
+  const base = [...ranked[0]];
+
+  const floor = normalized.flatMap((candidate) => candidate.filter((surface) => surface.kind === 'floor'))
+    .sort((left, right) => floorQuality(right) - floorQuality(left))[0];
+  if (floor) {
+    const index = base.findIndex((surface) => surface.kind === 'floor');
+    if (index >= 0) base[index] = floor;
+    else base.push(floor);
+  }
+
+  const openings = normalized.flatMap((candidate) => candidate.filter((surface) => surface.kind === 'door' || surface.kind === 'window'));
+  const groups: DetectedRoomSurface[][] = [];
+  openings.forEach((opening) => {
+    // The two independent vision passes often return a tighter glass polygon
+    // and a wider outer-frame polygon for the same physical opening. Their IoU
+    // can be close to .25 even though they clearly overlap; merge those instead
+    // of presenting "Finestra 1" and "Finestra 2" for one real window.
+    const group = groups.find((items) => items.some((item) => openingOverlap(item, opening) >= .24));
+    if (group) group.push(opening);
+    else groups.push([opening]);
+  });
+  const bestOpenings = groups.map((group) => {
+    const best = [...group].sort((left, right) => openingQuality(right, floor) - openingQuality(left, floor))[0];
+    return normalizeOpeningKind(best, floor);
+  });
+
+  return normalizeRoomSurfaces([
+    ...base.filter((surface) => surface.kind !== 'door' && surface.kind !== 'window'),
+    ...bestOpenings,
+  ]);
 }
 
 export async function detectRoomSurfaces(provider: AiProvider, image: File) {
   const prompt = [
     'Act as a precise architectural image-plane segmentation engine for an interior-design application.',
-    'Trace every visible structural planar surface: the complete floor, each distinct wall plane, the ceiling when visible, and visible doors or windows as separate surfaces.',
+    'Trace every visible structural planar surface: the complete floor, each genuinely distinct wall plane, the ceiling only when its plane is actually visible, and visible doors or windows as separate surfaces.',
+    'A wall is one continuous architectural plane. Never split the same wall at a door, window, picture, cabinet, chair, color change, wall covering, tile joint, shadow or furniture edge. Infer that wall continuously behind all openings and objects, then return each door or window separately on top of it.',
+    'For a mostly frontal wall with several doors, return one wall polygon spanning behind all those doors; never return narrow vertical wall strips aligned to door jambs or furniture.',
+    'Do not label the upper part of a wall as ceiling. If the photograph begins on the wall and no ceiling plane is visible, omit the ceiling entirely.',
+    'When no ceiling plane is visible, every full-width frontal wall that reaches the top crop must use y=0 for its upper boundary; do not leave an unexplained horizontal gap above it.',
     'Before answering, inspect the entire image explicitly for every architectural opening. Do not omit low-contrast, overexposed or partially cropped windows and doors, including white frames on white walls.',
-    'For every visible window or door, trace the outside edge of the complete frame as its own polygon, separate from the wall behind it.',
+    'A black or dark metal frame on a white wall is an unmistakable opening candidate: inspect all four external frame edges before tracing other details.',
+    'For every visible window or door, trace only the outside edge of the complete architectural frame as its own polygon, separate from the wall behind it. Use exactly four perspective-correct outer corners: top-left, top-right, bottom-right and bottom-left.',
+    'Return one door surface per physical framed opening. Do not return a door leaf, corridor seen through a doorway, cabinet, wall recess or furniture as another door. Never extend a door polygon beyond its outer jambs to a nearby wall edge or object.',
+    'A framed opening that reaches the floor and can be used for passage is a door, including glazed or frosted doors. Call an opening a window only when its complete sill is visibly above the floor.',
+    'Never extend the vertical sides of a window down the wall to the floor. The visible horizontal lower frame or sill is the mandatory bottom edge, even when the wall below it is plain and the side jambs visually align with other edges.',
+    'Never classify wall-hung pictures, grouped photo frames, mirrors, television screens, shelving units or tall cabinets as doors or windows.',
     'Treat a multi-pane window as one complete opening: include every upper and lower pane inside the outer frame, never return only one sash or one bright section.',
     'A window polygon must reach the outside edge of the head, both jambs and the complete sill. Never stop at an internal mullion, transom, glazing edge or only the bright glass area.',
     'When the frame is white on a white wall, use the frame shadow and sill boundary; include a small amount of outer trim rather than cutting off part of the opening.',
     'If any floor area is visible, a complete floor polygon is mandatory even when the floor is white, glossy or low contrast.',
+    'For the floor, trace the wall-floor junction, skirting-board lower edge and every door threshold point by point. Add a vertex at every change of direction instead of replacing the boundary with one approximate straight line. Use up to 24 vertices when needed.',
     'Return polygon vertices as normalized image coordinates where x=0 is the left edge, x=1 the right edge, y=0 the top edge and y=1 the bottom edge.',
     'Follow the real wall-wall, wall-floor and wall-ceiling junctions. Do not use furniture edges, window frames, shadows, tile joints, rugs or decorations as room corners.',
     'Infer each architectural plane continuously behind furniture and other movable objects. A floor polygon must cover the entire floor plane all the way to the bottom and lateral image edges wherever the floor leaves the frame, not only a central trapezoid.',
-    'Use the image-edge coordinate 0 or 1 when a surface continues outside the crop. Keep points in clockwise boundary order, with no self-intersections and only the vertices needed to follow the real outline.',
+    'Use the image-edge coordinate 0 or 1 when a surface continues outside the crop. Keep points in clockwise boundary order, with no self-intersections. Architectural accuracy is more important than minimizing the number of vertices.',
     'Do not invent a plane that is not visible. Confidence measures the geometric accuracy of each polygon, not object-recognition confidence.',
     'Names may be short Italian labels; they will be normalized by the application.',
   ].join('\n');
-  const input = [{
-    role: 'user',
-    content: [
-      { type: 'input_image', image_url: await fileToDataUri(image), detail: 'high' },
-      { type: 'input_text', text: prompt },
-    ],
-  }];
-  const response = await fetch(provider.id === 'grok' ? 'https://api.x.ai/v1/responses' : 'https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: provider.id === 'grok' ? 'grok-4.3' : 'gpt-5.4-mini',
-      input,
-      max_output_tokens: 1800,
-      reasoning: { effort: provider.id === 'grok' ? 'none' : 'low' },
-      text: { format: { type: 'json_schema', name: 'room_surface_geometry', schema: roomGeometrySchema, strict: true } },
-      store: false,
-    }),
-  });
-  const payload = await response.json() as ResponsesPayload;
-  if (!response.ok) throw new Error(payload.error?.message ?? 'Riconoscimento della stanza non disponibile.');
-  const parsed = JSON.parse(responseText(payload).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) as { surfaces?: DetectedRoomSurface[] };
-  const surfaces = normalizeRoomSurfaces(parsed.surfaces ?? []);
+  const imageUrl = await fileToDataUri(image);
+  const requestGeometry = async (
+    instruction: string,
+    effort: 'low' | 'medium' | 'high',
+    maxOutputTokens: number,
+    timeoutMs: number,
+  ) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(provider.id === 'grok' ? 'https://api.x.ai/v1/responses' : 'https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: provider.id === 'grok' ? 'grok-4.6' : 'gpt-5.4-mini',
+          input: [{
+            role: 'user',
+            content: [
+              { type: 'input_image', image_url: imageUrl, detail: 'high' },
+              { type: 'input_text', text: instruction },
+            ],
+          }],
+          max_output_tokens: maxOutputTokens,
+          reasoning: { effort },
+          text: { format: { type: 'json_schema', name: 'room_surface_geometry', schema: roomGeometrySchema, strict: true } },
+          store: false,
+        }),
+        signal: controller.signal,
+      });
+      const payload = await response.json() as ResponsesPayload;
+      if (!response.ok) throw new Error(payload.error?.message ?? 'Riconoscimento della stanza non disponibile.');
+      const parsed = JSON.parse(responseText(payload).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) as { surfaces?: DetectedRoomSurface[] };
+      return parsed.surfaces ?? [];
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
+  const auditPrompt = [
+    'Perform an independent second architectural segmentation of the complete image. Work at pixel accuracy and return the full geometry.',
+    'Reject false walls, doors and windows caused by furniture, wall pictures, cabinets, reflections or shadows. Include every real architectural opening.',
+    'Check every floor-boundary vertex against the visible skirting-board lower edge, wall-floor junction and door thresholds. Add vertices wherever that boundary changes direction; do not simplify several planes into one diagonal line.',
+    'For each door or window return exactly four tight outer-frame corners in clockwise order. A door must terminate at its real threshold and must not include adjacent wall, corridor or furniture. A window must terminate at its sill.',
+    'Check the left and right image edges and every visible room corner at high zoom. Coordinates must be normalized to the complete source image, not a crop.',
+    'Return the entire surface list and no comments.',
+  ].join('\n');
+  const attempts = await Promise.allSettled([
+    requestGeometry(prompt, 'low', 3000, 50000),
+    requestGeometry(`${prompt}\n\n${auditPrompt}`, 'low', 3000, 50000),
+  ]);
+  const candidates = attempts
+    .filter((attempt): attempt is PromiseFulfilledResult<DetectedRoomSurface[]> => attempt.status === 'fulfilled' && attempt.value.length > 0)
+    .map((attempt) => attempt.value);
+  if (!candidates.length) {
+    const recoveryPrompt = [
+      prompt,
+      'Recovery pass: respond quickly but inspect the complete image. Return the main wall planes, the complete floor, and every clearly framed door or window. A dark rectangular frame above the floor must end at its sill and is a window.',
+    ].join('\n\n');
+    try {
+      const recovered = await requestGeometry(recoveryPrompt, 'low', 2600, 35000);
+      if (recovered.length) candidates.push(recovered);
+    } catch {
+      const failure = attempts.find((attempt): attempt is PromiseRejectedResult => attempt.status === 'rejected');
+      throw failure?.reason instanceof Error ? failure.reason : new Error('Riconoscimento della stanza non disponibile.');
+    }
+  }
+  const surfaces = reconcileRoomSurfaceCandidates(candidates);
   if (!surfaces.length) throw new Error('Non ho riconosciuto superfici affidabili in questa foto.');
   return surfaces;
 }
@@ -332,6 +627,7 @@ export async function editImage(provider: AiProvider, input: {
   maskExplanation?: string;
 }) {
   if (provider.id === 'grok') {
+    const aspectRatio = await sourceImageAspectRatio(input.source);
     const images: Array<{ type: 'image_url'; url: string }> = [
       { type: 'image_url', url: await fileToDataUri(input.source) },
     ];
@@ -349,6 +645,7 @@ export async function editImage(provider: AiProvider, input: {
       body: JSON.stringify({
         model: 'grok-imagine-image-2.0',
         prompt,
+        aspect_ratio: aspectRatio,
         ...(images.length === 1 ? { image: images[0] } : { images }),
       }),
     });

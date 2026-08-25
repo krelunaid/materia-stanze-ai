@@ -45,6 +45,7 @@ type StudioMaterial = {
 };
 type DragVertex = { surfaceId: string; vertexIndex: number; pointerId: number; origin: Point };
 type AiStatus = 'checking' | 'ready' | 'missing' | 'unreachable';
+type DetectedSurface = { name: string; kind: SurfaceKind; points: Point[]; confidence: number };
 
 const catalogMaterials: StudioMaterial[] = [
   { id: 'oak-natural', name: 'Rovere naturale', category: 'Pavimenti', description: 'Doghe grandi · effetto legno', color: '#b88d5f', pattern: 'wood' },
@@ -84,6 +85,67 @@ function materialReferenceLabel(item: StudioMaterial) {
 
 function surfaceLabelPoint(surface: Surface) {
   return surface.points.reduce((center, point) => ({ x: center.x + point.x / surface.points.length, y: center.y + point.y / surface.points.length }), { x: 0, y: 0 });
+}
+
+function surfaceCenter(surface: Surface) {
+  return surfaceLabelPoint(surface);
+}
+
+function inheritSurfaceState(detected: Surface[], previous: Surface[]) {
+  const unmatched = [...previous];
+  return detected.map((surface) => {
+    const exactIndex = unmatched.findIndex((candidate) => candidate.kind === surface.kind
+      && candidate.name.toLocaleLowerCase('it') === surface.name.toLocaleLowerCase('it'));
+    const center = surfaceCenter(surface);
+    let matchIndex = exactIndex;
+    if (matchIndex < 0) {
+      let bestDistance = Number.POSITIVE_INFINITY;
+      unmatched.forEach((candidate, index) => {
+        if (candidate.kind !== surface.kind) return;
+        const candidateCenter = surfaceCenter(candidate);
+        const distance = Math.hypot(center.x - candidateCenter.x, center.y - candidateCenter.y);
+        if (distance < bestDistance) { bestDistance = distance; matchIndex = index; }
+      });
+      if (bestDistance > .3) matchIndex = -1;
+    }
+    if (matchIndex < 0) return surface;
+    const match = unmatched.splice(matchIndex, 1)[0];
+    return { ...surface, id: match.id, frozen: match.frozen, materialId: match.materialId };
+  });
+}
+
+function surfaceBounds(surface: Surface) {
+  const xs = surface.points.map((point) => point.x);
+  const ys = surface.points.map((point) => point.y);
+  const left = Math.min(...xs); const right = Math.max(...xs);
+  const top = Math.min(...ys); const bottom = Math.max(...ys);
+  return { left, right, top, bottom, width: right - left, height: bottom - top };
+}
+
+function roomStructurePreserved(before: Surface[], after: Surface[]) {
+  const previousFloor = before.find((surface) => surface.kind === 'floor');
+  const nextFloor = after.find((surface) => surface.kind === 'floor');
+  if (previousFloor && nextFloor) {
+    const previousTop = surfaceBounds(previousFloor).top;
+    const nextTop = surfaceBounds(nextFloor).top;
+    if (Math.abs(previousTop - nextTop) > .16) return false;
+  }
+
+  const openings = before.filter((surface) => surface.kind === 'door' || surface.kind === 'window');
+  return openings.every((opening) => {
+    const center = surfaceCenter(opening);
+    const bounds = surfaceBounds(opening);
+    return after.some((candidate) => {
+      if (candidate.kind !== opening.kind) return false;
+      const candidateCenter = surfaceCenter(candidate);
+      const candidateBounds = surfaceBounds(candidate);
+      const widthRatio = candidateBounds.width / Math.max(.001, bounds.width);
+      const heightRatio = candidateBounds.height / Math.max(.001, bounds.height);
+      return Math.hypot(center.x - candidateCenter.x, center.y - candidateCenter.y) <= .14
+        && widthRatio >= .55 && widthRatio <= 1.8
+        && heightRatio >= .55 && heightRatio <= 1.8;
+    });
+  });
 }
 
 const guidedPresets: Array<Omit<Surface, 'id'>> = [
@@ -161,84 +223,6 @@ function detectRoomBounds(image: HTMLImageElement) {
   return { left, right, top, floor };
 }
 
-function refineArchitecturalOpening(image: HTMLImageElement, surface: Surface, roomBounds?: { left: number; right: number; top: number; floor: number }) {
-  if (!['window', 'door'].includes(surface.kind) || surface.points.length < 3) return surface;
-  const width = 360;
-  const height = Math.max(220, Math.round(width * image.naturalHeight / image.naturalWidth));
-  const canvas = document.createElement('canvas');
-  canvas.width = width; canvas.height = height;
-  const context = canvas.getContext('2d', { willReadFrequently: true });
-  if (!context) return surface;
-  context.drawImage(image, 0, 0, width, height);
-  const pixels = context.getImageData(0, 0, width, height).data;
-  const luminance = (x: number, y: number) => {
-    const safeX = Math.min(width - 1, Math.max(0, x));
-    const safeY = Math.min(height - 1, Math.max(0, y));
-    const offset = (safeY * width + safeX) * 4;
-    return pixels[offset] * .299 + pixels[offset + 1] * .587 + pixels[offset + 2] * .114;
-  };
-  const xs = surface.points.map((point) => point.x);
-  const ys = surface.points.map((point) => point.y);
-  const original = { left: Math.min(...xs), right: Math.max(...xs), top: Math.min(...ys), bottom: Math.max(...ys) };
-  const openingWidth = Math.max(.035, original.right - original.left);
-  const openingHeight = Math.max(.05, original.bottom - original.top);
-  const scanBoundaries = (axis: 'x' | 'y', from: number, to: number, crossFrom: number, crossTo: number) => {
-    const size = axis === 'x' ? width : height;
-    const crossSize = axis === 'x' ? height : width;
-    const start = Math.max(2, Math.round(from * size));
-    const end = Math.min(size - 3, Math.round(to * size));
-    const crossStart = Math.max(0, Math.round(crossFrom * crossSize));
-    const crossEnd = Math.min(crossSize - 1, Math.round(crossTo * crossSize));
-    const scored: Array<{ position: number; score: number }> = [];
-    for (let index = start; index <= end; index += 1) {
-      let score = 0;
-      let samples = 0;
-      for (let cross = crossStart; cross <= crossEnd; cross += 2) {
-        score += axis === 'x'
-          ? Math.abs(luminance(index + 2, cross) - luminance(index - 2, cross))
-          : Math.abs(luminance(cross, index + 2) - luminance(cross, index - 2));
-        samples += 1;
-      }
-      score /= Math.max(1, samples);
-      scored.push({ position: index / size, score });
-    }
-    return scored;
-  };
-  const outerPair = (scored: Array<{ position: number; score: number }>, center: number, fallbackStart: number, fallbackEnd: number, reliability = .5) => {
-    const bestScore = scored.reduce((best, candidate) => Math.max(best, candidate.score), 0);
-    const reliableScore = Math.max(6, bestScore * reliability);
-    const reliable = scored.filter((candidate) => candidate.score >= reliableScore);
-    const before = reliable.filter((candidate) => candidate.position < center - .008).at(0);
-    const after = reliable.filter((candidate) => candidate.position > center + .008).at(-1);
-    return { start: before?.position ?? fallbackStart, end: after?.position ?? fallbackEnd };
-  };
-
-  const roomLeft = roomBounds?.left ?? Math.max(0, original.left - openingWidth * 1.5);
-  const roomRight = roomBounds?.right ?? Math.min(1, original.right + openingWidth * 1.5);
-  const roomTop = roomBounds?.top ?? Math.max(0, original.top - openingHeight * 1.5);
-  const roomFloor = roomBounds?.floor ?? Math.min(1, original.bottom + openingHeight * 2);
-  const roomWidth = Math.max(.2, roomRight - roomLeft);
-  const centerX = (original.left + original.right) / 2;
-  const centerY = (original.top + original.bottom) / 2;
-  const horizontalRadius = Math.min(roomWidth * .48, Math.max(.18, openingWidth * 1.5));
-  const verticalEdges = scanBoundaries(
-    'x',
-    Math.max(roomLeft + roomWidth * .06, centerX - horizontalRadius),
-    Math.min(roomRight - roomWidth * .06, centerX + horizontalRadius),
-    Math.max(roomTop + .015, original.top - openingHeight * .5),
-    Math.min(roomFloor - .02, original.bottom + Math.max(.2, openingHeight * 2.5)),
-  );
-  const verticalPair = outerPair(verticalEdges, centerX, original.left, original.right);
-  const left = verticalPair.start;
-  const right = verticalPair.end;
-  const horizontalEdges = scanBoundaries('y', roomTop + .025, roomFloor - .025, left, right);
-  const horizontalPair = outerPair(horizontalEdges, centerY, original.top, original.bottom, .35);
-  const top = horizontalPair.start;
-  const bottom = horizontalPair.end;
-  if (right - left < .025 || bottom - top < .04) return surface;
-  return { ...surface, points: [{ x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom }] };
-}
-
 function createFloorplanOutline(): Surface[] {
   return [{
     id: `floorplan-${Date.now()}`,
@@ -311,6 +295,42 @@ function loadImageSource(source: string) {
     image.onerror = () => { window.clearTimeout(timer); reject(new Error('Non riesco a leggere una delle immagini.')); };
     image.src = source;
   });
+}
+
+async function framingSimilarity(originalSource: string, generatedSource: string) {
+  const [original, generated] = await Promise.all([
+    loadImageSource(originalSource),
+    loadImageSource(generatedSource),
+  ]);
+  const width = 96; const height = 64;
+  const originalCanvas = document.createElement('canvas');
+  const generatedCanvas = document.createElement('canvas');
+  originalCanvas.width = generatedCanvas.width = width;
+  originalCanvas.height = generatedCanvas.height = height;
+  const originalContext = originalCanvas.getContext('2d', { willReadFrequently: true });
+  const generatedContext = generatedCanvas.getContext('2d', { willReadFrequently: true });
+  if (!originalContext || !generatedContext) return 0;
+  originalContext.drawImage(original, 0, 0, width, height);
+  generatedContext.drawImage(generated, 0, 0, width, height);
+  const originalPixels = originalContext.getImageData(0, 0, width, height).data;
+  const generatedPixels = generatedContext.getImageData(0, 0, width, height).data;
+  let difference = 0; let samples = 0;
+
+  // Furniture usually occupies the lower centre. The top and outside borders
+  // instead contain the architectural anchors that must not move or disappear.
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (y >= height * .38 && x >= width * .1 && x <= width * .9) continue;
+      const offset = (y * width + x) * 4;
+      difference += (
+        Math.abs(originalPixels[offset] - generatedPixels[offset])
+        + Math.abs(originalPixels[offset + 1] - generatedPixels[offset + 1])
+        + Math.abs(originalPixels[offset + 2] - generatedPixels[offset + 2])
+      ) / (3 * 255);
+      samples += 1;
+    }
+  }
+  return samples ? 1 - difference / samples : 0;
 }
 
 async function createGeometryInput(source: string) {
@@ -404,6 +424,8 @@ export function RoomStudio() {
   const dragStartRef = useRef<Surface[] | null>(null);
   const roomImageRef = useRef<HTMLImageElement>(null);
   const autoFitPreviewRef = useRef<string | null>(null);
+  const originalSurfacesRef = useRef<Surface[]>([]);
+  const processedSurfacesRef = useRef<Surface[] | null>(null);
 
   useEffect(() => {
     shellRef.current?.setAttribute('data-hydrated', 'true');
@@ -439,6 +461,12 @@ export function RoomStudio() {
   useEffect(() => {
     shellRef.current?.scrollTo?.({ top: 0, left: 0, behavior: 'auto' });
   }, [activeStep]);
+
+  useEffect(() => {
+    if (!room || room.sourceType !== 'photo') return;
+    if (showProcessedPreview && processedPreview) processedSurfacesRef.current = surfaces;
+    else originalSurfacesRef.current = surfaces;
+  }, [processedPreview, room, showProcessedPreview, surfaces]);
 
   useEffect(() => {
     if (!dragVertex) return;
@@ -507,6 +535,8 @@ export function RoomStudio() {
       setRoom({ ...result.value, previewUrl, sourceType });
       setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]);
       autoFitPreviewRef.current = null;
+      originalSurfacesRef.current = initialSurfaces;
+      processedSurfacesRef.current = null;
       setSurfaces(initialSurfaces); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(initialSurfaces[0]?.id ?? null); setRenameDraft(initialSurfaces[0]?.name ?? ''); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setError(null);
       setIsCorrectingEdges(false);
       setNotice(sourceType === 'floorplan'
@@ -543,6 +573,8 @@ export function RoomStudio() {
     if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
     roomBlobRef.current = null;
     processedBlobRef.current = null;
+    originalSurfacesRef.current = [];
+    processedSurfacesRef.current = null;
     setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]); setNotice(null); setIsCorrectingEdges(false);
   }
 
@@ -862,7 +894,9 @@ export function RoomStudio() {
       const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/apply-product'), { method: 'POST', body: form }, 180000);
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Render non disponibile.');
       const protectedPreview = await protectAiResult(result.image, { editableSurface: target });
-      commitSurfaces(surfaces.map((surface) => surface.id === target.id ? { ...surface, materialId: material.id } : surface));
+      const updatedSurfaces = surfaces.map((surface) => surface.id === target.id ? { ...surface, materialId: material.id } : surface);
+      commitSurfaces(updatedSurfaces);
+      processedSurfacesRef.current = updatedSurfaces;
       setProcessedPreview(protectedPreview); setProcessedLabel(material.name); setShowProcessedPreview(true);
       setNotice(material.referenceKind === 'verified-texture' || material.referenceKind === 'uploaded-sample'
         ? `${material.name} adattato a ${target.name} usando il campione visivo. Fuori dal contorno restano i pixel originali.`
@@ -908,6 +942,25 @@ export function RoomStudio() {
     setNotice('Tracciatura guidata inserita. Adatta ogni vertice alla fotografia trascinandolo.');
   }
 
+  async function detectSurfacesForPreview(source: string, fileName: string) {
+    const inputImage = await createGeometryInput(source);
+    const form = new FormData();
+    form.append('image', inputImage, fileName.replace(/\.(heic|heif|png)$/i, '.jpg'));
+    const { response, result } = await requestJson<{ surfaces?: DetectedSurface[]; message?: string }>(
+      endpoint('/api/detect-surfaces'),
+      { method: 'POST', body: form },
+      150000,
+    );
+    if (!response.ok || !result.surfaces?.length) throw new Error(result.message ?? 'Grok non ha trovato superfici affidabili.');
+    return result.surfaces.filter((surface) => isValidPolygon(surface.points)).map((surface, index) => ({
+      id: `grok-${Date.now()}-${index}`,
+      name: surface.name,
+      kind: surface.kind,
+      points: surface.points,
+      frozen: false,
+    }));
+  }
+
   async function autoFitSurfaces() {
     if (!room?.previewUrl || room.sourceType !== 'photo' || !roomImageRef.current) return;
     setIsAutoFitting(true); setError(null);
@@ -921,53 +974,9 @@ export function RoomStudio() {
 
       if (aiStatus === 'ready' || aiStatus === 'checking') {
         try {
-          const inputImage = await createGeometryInput(room.previewUrl);
-          const form = new FormData();
-          form.append('image', inputImage, room.file.name.replace(/\.(heic|heif|png)$/i, '.jpg'));
-          const { response, result } = await requestJson<{
-            surfaces?: Array<{ name: string; kind: SurfaceKind; points: Point[]; confidence: number }>;
-            message?: string;
-          }>(endpoint('/api/detect-surfaces'), { method: 'POST', body: form }, 75000);
-          if (!response.ok || !result.surfaces?.length) throw new Error(result.message ?? 'Grok non ha trovato superfici affidabili.');
-          detected = result.surfaces.filter((surface) => isValidPolygon(surface.points)).map((surface, index) => ({
-            id: `grok-${Date.now()}-${index}`,
-            name: surface.name,
-            kind: surface.kind,
-            points: surface.points,
-            frozen: false,
-          }));
+          const source = showProcessedPreview && processedPreview ? processedPreview : room.previewUrl;
+          detected = await detectSurfacesForPreview(source, room.file.name);
           usedGrok = detected.length > 0;
-          const detectedWalls = detected.filter((surface) => surface.kind === 'wall');
-          if (detectedWalls.length === 3) {
-            const edgeTouches = (surface: Surface) => surface.points.filter((point) => point.x <= .025 || point.x >= .975).length;
-            const centralWall = [...detectedWalls].sort((a, b) => edgeTouches(a) - edgeTouches(b))[0];
-            const wallXs = centralWall.points.map((point) => point.x);
-            const aiLeft = Math.min(...wallXs);
-            const aiRight = Math.max(...wallXs);
-            const localBounds = detectRoomBounds(roomImageRef.current);
-            const localSpan = localBounds.right - localBounds.left;
-            const combinedBounds = localSpan >= .25 && localSpan <= .8
-              ? localBounds
-              : aiRight - aiLeft >= .2 ? { ...localBounds, left: aiLeft, right: aiRight } : localBounds;
-            const architecturalExtras = detected.filter((surface) => !['wall', 'floor'].includes(surface.kind));
-            if (!architecturalExtras.some((surface) => surface.kind === 'ceiling')) architecturalExtras.push({
-              id: `guided-ceiling-${Date.now()}`,
-              name: 'Soffitto',
-              kind: 'ceiling',
-              frozen: false,
-              points: [],
-            });
-            const alignedExtras = architecturalExtras.map((surface) => surface.kind === 'ceiling' ? {
-              ...surface,
-              points: [
-                { x: 0, y: 0 },
-                { x: 1, y: 0 },
-                { x: combinedBounds.right, y: combinedBounds.top },
-                { x: combinedBounds.left, y: combinedBounds.top },
-              ],
-            } : refineArchitecturalOpening(roomImageRef.current as HTMLImageElement, surface, combinedBounds));
-            detected = [...createGuidedSurfaces(combinedBounds), ...alignedExtras];
-          }
         } catch (caught) {
           grokError = caught instanceof Error ? caught : new Error('Grok non ha completato il riconoscimento.');
         }
@@ -988,7 +997,7 @@ export function RoomStudio() {
       setSelectedId(first?.id ?? null); setRenameDraft(first?.name ?? '');
       setIsCorrectingEdges(false);
       setNotice(usedGrok
-        ? `Grok ha riconosciuto ${nextSurfaces.length} superfici e l’app ha agganciato gli angoli ai bordi della foto. Correggi solo se serve.`
+        ? `Analisi ad alta precisione completata: ${nextSurfaces.length} superfici confrontate e bordi agganciati alla foto.`
         : `${grokError ? 'Grok non ha risposto: ' : ''}ho inserito una base locale. Puoi riprovare l’analisi IA o correggere i bordi.`);
     } catch {
       if (surfaces.length === 0) seedGuidedSurfaces();
@@ -1009,26 +1018,81 @@ export function RoomStudio() {
 
   async function emptyRoom() {
     if (!room?.previewUrl || room.sourceType !== 'photo' || isEmptyingRoom) return;
+    const baselineSurfaces = processedLabel === 'Stanza vuota' && processedPreview && originalSurfacesRef.current.length
+      ? originalSurfacesRef.current
+      : surfaces;
     setIsEmptyingRoom(true); setError(null);
+    setShowProcessedPreview(false);
+    setSurfaces(baselineSurfaces);
     setNotice('L’IA sta riconoscendo e rimuovendo i mobili. L’originale resta sempre disponibile.');
     try {
-      const frozenSurfaces = surfaces.filter((surface) => surface.frozen);
+      const frozenSurfaces = baselineSurfaces.filter((surface) => surface.frozen);
       const { inputImage, mask } = await createMaskedInput({ frozenSurfaces });
-      const form = new FormData();
-      form.append('image', inputImage, room.file.name.replace(/\.(heic|heif)$/i, '.png'));
-      form.append('mask', mask, 'freeze-mask.png');
-      form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
-      const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/empty-room'), { method: 'POST', body: form }, 180000);
-      if (!response.ok || !result.image) throw new Error(result.message ?? 'Immagine non disponibile.');
-      const protectedPreview = await protectAiResult(result.image, { frozenSurfaces });
-      setProcessedPreview(protectedPreview); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
-      setNotice('Stanza vuota pronta. Le zone Freeze sono state ricopiate dalla foto originale.');
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        if (attempt > 0) setNotice('La prima elaborazione ha cambiato l’inquadratura: la scarto e riprovo mantenendo tutti i bordi originali.');
+        const form = new FormData();
+        form.append('image', inputImage, room.file.name.replace(/\.(heic|heif)$/i, '.png'));
+        if (frozenSurfaces.length) form.append('mask', mask, 'freeze-mask.png');
+        form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
+        if (attempt > 0) form.append('strictRetry', 'true');
+        const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/empty-room'), { method: 'POST', body: form }, 180000);
+        if (!response.ok || !result.image) throw new Error(result.message ?? 'Immagine non disponibile.');
+        const protectedPreview = await protectAiResult(result.image, { frozenSurfaces });
+        const similarity = await framingSimilarity(room.previewUrl, protectedPreview);
+        if (similarity < .72) {
+          if (attempt === 0) continue;
+          throw new Error('Grok ha cambiato l’inquadratura della foto: il risultato è stato scartato e l’originale è rimasto intatto. Riprova tra poco.');
+        }
+
+        setNotice('Stanza svuotata. Ora verifico di nuovo pavimento, finestre, porte, stipiti e soglie sulla nuova immagine…');
+        const verified = inheritSurfaceState(
+          await detectSurfacesForPreview(protectedPreview, room.file.name),
+          baselineSurfaces,
+        );
+        if (!verified.length || !roomStructurePreserved(baselineSurfaces, verified)) {
+          if (attempt === 0) continue;
+          throw new Error('La struttura della stanza non coincide con la foto originale: il risultato è stato scartato. Riprova tra poco.');
+        }
+        originalSurfacesRef.current = baselineSurfaces;
+        processedSurfacesRef.current = verified;
+        setSurfaces(verified); setPastSurfaces([]); setFutureSurfaces([]);
+        const preferred = verified.find((surface) => surface.kind === 'floor') ?? verified[0];
+        setSelectedId(preferred.id); setRenameDraft(preferred.name);
+        setProcessedPreview(protectedPreview); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
+        setNotice(`Stanza vuota pronta: inquadratura verificata e ${verified.length} superfici ricalcolate.`);
+        return;
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Non sono riuscito a svuotare la stanza.');
       setNotice(null);
     } finally {
       setIsEmptyingRoom(false);
     }
+  }
+
+  function showOriginalRoom() {
+    if (showProcessedPreview) processedSurfacesRef.current = surfaces;
+    const original = originalSurfacesRef.current;
+    if (original.length) {
+      setSurfaces(original); setPastSurfaces([]); setFutureSurfaces([]);
+      const preferred = original.find((surface) => surface.kind === 'floor') ?? original[0];
+      setSelectedId(preferred.id); setRenameDraft(preferred.name);
+    }
+    setShowProcessedPreview(false);
+    setNotice('Foto originale e contorni originali ripristinati.');
+  }
+
+  function showProcessedRoom() {
+    if (!processedPreview) return;
+    if (!showProcessedPreview) originalSurfacesRef.current = surfaces;
+    const processed = processedSurfacesRef.current;
+    if (processed?.length) {
+      setSurfaces(processed); setPastSurfaces([]); setFutureSurfaces([]);
+      const preferred = processed.find((surface) => surface.kind === 'floor') ?? processed[0];
+      setSelectedId(preferred.id); setRenameDraft(preferred.name);
+    }
+    setShowProcessedPreview(true);
+    setNotice(`${processedLabel}: contorni ricalcolati sulla stessa immagine.`);
   }
 
   async function createFinalRender() {
@@ -1057,6 +1121,7 @@ export function RoomStudio() {
       const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/render-room'), { method: 'POST', body: form }, 240000);
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Render non disponibile.');
       const protectedPreview = await protectAiResult(result.image, { frozenSurfaces });
+      processedSurfacesRef.current = surfaces;
       setProcessedPreview(protectedPreview); setProcessedLabel('Render finale'); setShowProcessedPreview(true);
       setActiveStep(4);
       setNotice('Render finale pronto. Puoi confrontarlo con la foto originale; le zone Freeze sono identiche.');
@@ -1073,6 +1138,8 @@ export function RoomStudio() {
     processedBlobRef.current = null;
     const file = new File(['demo'], 'stanza-vuota-con-finestra.jpg', { type: 'image/jpeg' });
     const created = createDemoSurfaces();
+    originalSurfacesRef.current = created;
+    processedSurfacesRef.current = null;
     setRoom({ file, kind: 'image', canPreview: true, displaySize: 'esempio incluso', projectName: 'Stanza vuota con finestra', previewUrl: '/demo-room.jpg', sourceType: 'photo' });
     setRoomRatio(16 / 10); setSurfaces(created); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(created[0].id); setRenameDraft(created[0].name); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setError(null);
     setIsCorrectingEdges(false);
@@ -1136,7 +1203,8 @@ export function RoomStudio() {
                 })}
                 {draft.length > 0 && <><polyline points={pointsToSvg(draft)} fill="none" stroke="#d7f05c" strokeWidth="5" vectorEffect="non-scaling-stroke" />{draft.map((point, index) => <circle key={index} cx={point.x * 1000} cy={point.y * 625} r="9" className="draft-vertex" />)}</>}
               </svg><div className="import-status"><span className="status-dot" /><div><strong>{showProcessedPreview ? processedLabel : 'Originale intatto'}</strong><small>{showProcessedPreview ? 'Elaborazione IA · originale sempre disponibile' : importedCaption}</small></div></div>
-              {processedPreview && <div className="before-after-toggle" aria-label="Confronta originale e risultato"><button type="button" className={!showProcessedPreview ? 'is-active' : ''} onClick={() => setShowProcessedPreview(false)}>Originale</button><button type="button" className={showProcessedPreview ? 'is-active' : ''} onClick={() => setShowProcessedPreview(true)}>{processedLabel}</button></div>}
+              <button className="replace-button" type="button" onClick={() => roomInputRef.current?.click()}>↑ Carica la tua foto</button>
+              {processedPreview && <div className="before-after-toggle" aria-label="Confronta originale e risultato"><button type="button" className={!showProcessedPreview ? 'is-active' : ''} onClick={showOriginalRoom}>Originale</button><button type="button" className={showProcessedPreview ? 'is-active' : ''} onClick={showProcessedRoom}>{processedLabel}</button></div>}
             </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Inizia da ciò che hai</p><h1>Cosa vuoi caricare?</h1><p>Scegli una foto della stanza oppure una planimetria. L’originale resterà sempre intatto.</p><div className="source-actions"><label className="source-card is-primary" htmlFor="room-file"><span>▣</span><strong>Foto stanza</strong><small>Apri direttamente Foto su iPhone e iPad</small></label><label className="source-card" htmlFor="floorplan-file"><span>⌗</span><strong>Planimetria</strong><small>Ricalca perimetro e pareti interne</small></label></div><button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>JPG, PNG o HEIC · massimo 20 MB</small></div></>}
             {isDraggingFile && <div className="drop-overlay"><strong>Rilascia per importare</strong><span>La foto resterà nel browser.</span></div>}
             {isImportingRoom && <div className="processing-overlay" role="status"><span className="processing-spinner" /><strong>Preparo la foto…</strong><small>Le immagini grandi vengono ottimizzate per evitare blocchi.</small></div>}

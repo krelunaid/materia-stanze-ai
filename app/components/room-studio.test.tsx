@@ -48,6 +48,7 @@ describe('RoomStudio', () => {
   it('creates guided surfaces and freezes the selected wall', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    expect(screen.getByRole('button', { name: '↑ Carica la tua foto' })).toBeInTheDocument();
     expect(screen.getAllByText('Muro 1').length).toBeGreaterThan(0);
     const polygons = document.querySelectorAll('.surface-overlay polygon');
     expect(polygons[1]).toHaveAttribute('points', expect.stringContaining('0,0'));
