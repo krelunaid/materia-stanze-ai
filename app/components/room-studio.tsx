@@ -116,20 +116,22 @@ function detectRoomBounds(image: HTMLImageElement) {
   };
   const verticalScores = Array(width).fill(0) as number[];
   const horizontalScores = Array(height).fill(0) as number[];
-  for (let x = 1; x < width - 1; x += 1) {
-    for (let y = Math.round(height * .12); y < height * .9; y += 2) verticalScores[x] += Math.abs(luminance(x + 1, y) - luminance(x - 1, y));
-  }
   for (let y = 1; y < height - 1; y += 1) {
     for (let x = Math.round(width * .05); x < width * .95; x += 2) horizontalScores[y] += Math.abs(luminance(x, y + 1) - luminance(x, y - 1));
   }
-  const left = strongestEdge(verticalScores, .12, .46, .25);
-  const right = strongestEdge(verticalScores, Math.max(.54, left + .2), .9, .75);
   const top = strongestEdge(horizontalScores, .12, .48, .2);
   const floor = strongestEdge(horizontalScores, Math.max(.52, top + .2), .86, .68);
+  const upperBandStart = Math.max(.05, top - .05);
+  const upperBandEnd = Math.min(.92, top + .2);
+  for (let x = 1; x < width - 1; x += 1) {
+    for (let y = Math.round(height * upperBandStart); y < height * upperBandEnd; y += 1) verticalScores[x] += Math.abs(luminance(x + 1, y) - luminance(x - 1, y));
+  }
+  const left = strongestEdge(verticalScores, .12, .46, .25);
+  const right = strongestEdge(verticalScores, Math.max(.54, left + .2), .9, .75);
   return { left, right, top, floor };
 }
 
-function refineArchitecturalOpening(image: HTMLImageElement, surface: Surface) {
+function refineArchitecturalOpening(image: HTMLImageElement, surface: Surface, roomFloor?: number) {
   if (!['window', 'door'].includes(surface.kind) || surface.points.length < 3) return surface;
   const width = 360;
   const height = Math.max(220, Math.round(width * image.naturalHeight / image.naturalWidth));
@@ -150,7 +152,7 @@ function refineArchitecturalOpening(image: HTMLImageElement, surface: Surface) {
   const original = { left: Math.min(...xs), right: Math.max(...xs), top: Math.min(...ys), bottom: Math.max(...ys) };
   const openingWidth = Math.max(.035, original.right - original.left);
   const openingHeight = Math.max(.05, original.bottom - original.top);
-  const strongestBoundary = (axis: 'x' | 'y', from: number, to: number, crossFrom: number, crossTo: number, fallback: number) => {
+  const strongestBoundary = (axis: 'x' | 'y', from: number, to: number, crossFrom: number, crossTo: number, fallback: number, preferEnd = false) => {
     const size = axis === 'x' ? width : height;
     const crossSize = axis === 'x' ? height : width;
     const start = Math.max(2, Math.round(from * size));
@@ -159,6 +161,7 @@ function refineArchitecturalOpening(image: HTMLImageElement, surface: Surface) {
     const crossEnd = Math.min(crossSize - 1, Math.round(crossTo * crossSize));
     let bestIndex = Math.round(fallback * size);
     let bestScore = 0;
+    const scored: Array<{ index: number; score: number }> = [];
     for (let index = start; index <= end; index += 1) {
       let score = 0;
       let samples = 0;
@@ -169,7 +172,13 @@ function refineArchitecturalOpening(image: HTMLImageElement, surface: Surface) {
         samples += 1;
       }
       score /= Math.max(1, samples);
+      scored.push({ index, score });
       if (score > bestScore) { bestScore = score; bestIndex = index; }
+    }
+    if (preferEnd && bestScore >= 5) {
+      const reliable = Math.max(8, bestScore * .55);
+      const outer = [...scored].reverse().find((candidate) => candidate.score >= reliable);
+      if (outer) bestIndex = outer.index;
     }
     return bestScore >= 5 ? bestIndex / size : fallback;
   };
@@ -181,8 +190,10 @@ function refineArchitecturalOpening(image: HTMLImageElement, surface: Surface) {
   const horizontalFrom = Math.max(0, left - openingWidth * .08);
   const horizontalTo = Math.min(1, right + openingWidth * .08);
   const top = strongestBoundary('y', original.top - openingHeight * .55, original.top + openingHeight * .1, horizontalFrom, horizontalTo, original.top);
-  const bottomExpansion = surface.kind === 'door' ? .55 : .35;
-  const bottom = strongestBoundary('y', original.bottom - openingHeight * .1, original.bottom + openingHeight * bottomExpansion, horizontalFrom, horizontalTo, original.bottom);
+  const bottomLimit = surface.kind === 'window' && roomFloor
+    ? Math.min(roomFloor - .025, original.bottom + openingHeight * 3)
+    : original.bottom + openingHeight * (surface.kind === 'door' ? .55 : .75);
+  const bottom = strongestBoundary('y', original.bottom - openingHeight * .1, bottomLimit, horizontalFrom, horizontalTo, original.bottom, surface.kind === 'window');
   if (right - left < .025 || bottom - top < .04) return surface;
   return { ...surface, points: [{ x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom }] };
 }
@@ -881,9 +892,10 @@ export function RoomStudio() {
             const aiLeft = Math.min(...wallXs);
             const aiRight = Math.max(...wallXs);
             const localBounds = detectRoomBounds(roomImageRef.current);
-            const combinedBounds = aiRight - aiLeft >= .2
-              ? { ...localBounds, left: aiLeft, right: aiRight }
-              : localBounds;
+            const localSpan = localBounds.right - localBounds.left;
+            const combinedBounds = localSpan >= .25 && localSpan <= .8
+              ? localBounds
+              : aiRight - aiLeft >= .2 ? { ...localBounds, left: aiLeft, right: aiRight } : localBounds;
             const architecturalExtras = detected.filter((surface) => !['wall', 'floor'].includes(surface.kind));
             if (!architecturalExtras.some((surface) => surface.kind === 'ceiling')) architecturalExtras.push({
               id: `guided-ceiling-${Date.now()}`,
@@ -900,7 +912,7 @@ export function RoomStudio() {
                 { x: combinedBounds.right, y: combinedBounds.top },
                 { x: combinedBounds.left, y: combinedBounds.top },
               ],
-            } : refineArchitecturalOpening(roomImageRef.current as HTMLImageElement, surface));
+            } : refineArchitecturalOpening(roomImageRef.current as HTMLImageElement, surface, combinedBounds.floor));
             detected = [...createGuidedSurfaces(combinedBounds), ...alignedExtras];
           }
         } catch (caught) {
