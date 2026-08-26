@@ -1,0 +1,39 @@
+{
+  "baselineId": "geometry-baseline-34ee185-v1",
+  "datasetId": "materia-geometry-dataset-v1",
+  "codeVersion": "34ee1856bef96dcc8fbada84fdf4365bf95feda3",
+  "modelVersion": "grok-4.6",
+  "apiVersion": "xai-responses-and-images-edits-2026-08-26",
+  "configurationId": "geometry-config-v1",
+  "timestamp": "2026-08-26T05:49:49+02:00",
+  "measuredCases": 1,
+  "registeredCases": 43,
+  "metrics": {
+    "segmentationIoU": 1,
+    "edgeErrorPx": 0,
+    "doorWidthDeltaPx": null,
+    "doorHeightDeltaPx": null,
+    "windowWidthDeltaPx": 0,
+    "windowHeightDeltaPx": 0,
+    "cornerReprojectionError": null,
+    "geometryPreservationScore": null,
+    "measurementConfidence": null,
+    "depthConfidence": null,
+    "processingTimeMs": null,
+    "memoryUsageMb": null,
+    "calibrationErrorPercent": null,
+    "surfaceAreaErrorPercent": null,
+    "registrationErrorPx": null,
+    "trackingLossCount": null,
+    "trackingRecoveryTimeMs": null,
+    "maskOverlapPixels": null,
+    "structuralPixelChangePercent": null,
+    "materialScaleErrorPercent": null,
+    "materialOrientationErrorDeg": null
+  },
+  "limitations": [
+    "La sola fixture misurata è la stanza demo deterministica e non misura l'accuratezza del detector IA live.",
+    "Gli altri 42 casi obbligatori sono registrati ma privi di fixture originali annotate.",
+    "Le metriche non applicabili o non osservabili sono null e non sono state inventate."
+  ]
+}

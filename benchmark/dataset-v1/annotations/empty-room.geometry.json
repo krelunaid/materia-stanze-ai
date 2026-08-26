@@ -1,0 +1,13 @@
+{
+  "datasetId": "materia-geometry-dataset-v1",
+  "caseId": "empty-room",
+  "resolution": { "width": 1600, "height": 1000 },
+  "surfaces": [
+    { "id": "wall-front", "kind": "wall", "points": [{ "x": 0.218, "y": 0.13 }, { "x": 0.785, "y": 0.13 }, { "x": 0.785, "y": 0.695 }, { "x": 0.218, "y": 0.695 }] },
+    { "id": "wall-left", "kind": "wall", "points": [{ "x": 0, "y": 0 }, { "x": 0.218, "y": 0.13 }, { "x": 0.218, "y": 0.695 }, { "x": 0, "y": 0.86 }] },
+    { "id": "wall-right", "kind": "wall", "points": [{ "x": 0.785, "y": 0.13 }, { "x": 1, "y": 0 }, { "x": 1, "y": 0.86 }, { "x": 0.785, "y": 0.695 }] },
+    { "id": "floor", "kind": "floor", "points": [{ "x": 0.218, "y": 0.695 }, { "x": 0.785, "y": 0.695 }, { "x": 1, "y": 0.86 }, { "x": 1, "y": 1 }, { "x": 0, "y": 1 }, { "x": 0, "y": 0.86 }] },
+    { "id": "ceiling", "kind": "ceiling", "points": [{ "x": 0, "y": 0 }, { "x": 1, "y": 0 }, { "x": 0.785, "y": 0.13 }, { "x": 0.218, "y": 0.13 }] },
+    { "id": "window", "kind": "window", "points": [{ "x": 0.334, "y": 0.18 }, { "x": 0.667, "y": 0.18 }, { "x": 0.667, "y": 0.552 }, { "x": 0.334, "y": 0.552 }] }
+  ]
+}

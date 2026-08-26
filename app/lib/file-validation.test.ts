@@ -20,6 +20,16 @@ describe('validateRoomFile', () => {
     if (result.ok) expect(result.value.canPreview).toBe(true);
   });
 
+  it('accepts very small JPEG and alpha-capable PNG inputs without crashing', () => {
+    expect(validateRoomFile(new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], 'tiny.jpg', { type: 'image/jpeg' })).ok).toBe(true);
+    expect(validateRoomFile(new File([new Uint8Array([137, 80, 78, 71])], 'alpha.png', { type: 'image/png' })).ok).toBe(true);
+  });
+
+  it('accepts an EXIF-oriented JPEG as input while leaving orientation handling to image decoding', () => {
+    const exifStub = new Uint8Array([0xff, 0xd8, 0xff, 0xe1, 0, 8, 69, 120, 105, 102, 0, 0, 0xff, 0xd9]);
+    expect(validateRoomFile(new File([exifStub], 'portrait-exif.jpg', { type: 'image/jpeg' })).ok).toBe(true);
+  });
+
   it('rejects unsupported, empty, oversized and PDF files', () => {
     expect(validateRoomFile(new File(['hello'], 'notes.txt', { type: 'text/plain' })).ok).toBe(false);
     expect(validateRoomFile(new File([], 'empty.png', { type: 'image/png' })).ok).toBe(false);

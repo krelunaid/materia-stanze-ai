@@ -1,0 +1,15 @@
+{
+  "configurationId": "geometry-config-v1",
+  "datasetId": "materia-geometry-dataset-v1",
+  "metricRasterResolution": 256,
+  "coordinateSpace": "normalized-image-top-left",
+  "imageFixtureSha256": {
+    "public/demo-room.jpg": "0051b9311255de851cd60ee3c6451b457667e0b7b62bf35026634c16e99f8ec7"
+  },
+  "environment": {
+    "node": ">=22.13.0",
+    "device": "Mac local runner",
+    "operatingSystem": "macOS",
+    "network": "not-used-for-recorded-baseline"
+  }
+}

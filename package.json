@@ -13,6 +13,7 @@
     "lint": "eslint app e2e capacitor.config.ts next.config.ts eslint.config.mjs vitest.setup.ts vitest.config.ts vite.config.ts playwright.config.ts public/sw.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "baseline": "vitest run app/benchmark/baseline.test.ts --reporter=verbose",
     "test:e2e": "playwright test",
     "ios:add": "cap add ios",
     "ios:sync": "cap sync ios",
