@@ -104,7 +104,7 @@ const kindColors: Record<SurfaceKind, string> = {
 
 function materialReferenceLabel(item: StudioMaterial) {
   if (item.referenceKind === 'verified-texture') return 'Texture ufficiale verificata';
-  if (item.referenceKind === 'official-product-image') return 'Foto prodotto ufficiale';
+  if (item.referenceKind === 'official-product-image') return item.official ? 'Foto prodotto ufficiale' : 'Foto prodotto verificata';
   if (item.referenceKind === 'uploaded-sample') return 'Campione caricato da te';
   return item.sourceUrl ? 'Solo dati ufficiali · resa indicativa' : 'Campione incluso';
 }
@@ -453,6 +453,7 @@ export function RoomStudio() {
   const materialBlobRef = useRef<string | null>(null);
   const furnitureBlobUrlsRef = useRef<string[]>([]);
   const furnitureFilesRef = useRef<Map<string, File>>(new Map());
+  const furnitureIdRef = useRef(0);
   const processedBlobRef = useRef<string | null>(null);
   const dragStartRef = useRef<Surface[] | null>(null);
   const roomImageRef = useRef<HTMLImageElement>(null);
@@ -961,6 +962,14 @@ export function RoomStudio() {
     setNotice(`${next.name} selezionato. Ora applicalo alla superficie scelta.`);
   }
 
+  function chooseOnlineProduct(next: StudioMaterial) {
+    if (next.category === 'Arredi') {
+      startFurniturePlacement(`${next.brand ? `${next.brand} ` : ''}${next.name}`.trim(), next.previewUrl);
+      return;
+    }
+    chooseMaterial(next);
+  }
+
   function startFurniturePlacement(name: string, previewUrl?: string, file?: File) {
     if (!room || room.sourceType !== 'photo') {
       setError('Per posizionare un mobile serve una foto della stanza.');
@@ -991,7 +1000,8 @@ export function RoomStudio() {
     const rect = event.currentTarget.getBoundingClientRect();
     const x = Math.min(.94, Math.max(.06, (event.clientX - rect.left) / rect.width));
     const y = Math.min(.94, Math.max(.28, (event.clientY - rect.top) / rect.height));
-    const id = `furniture-${Date.now()}`;
+    furnitureIdRef.current += 1;
+    const id = `furniture-${furnitureIdRef.current}`;
     const placed: PlacedFurniture = { id, name: pendingFurniture.name, x, y, scale: 24, rotation: 0, frozen: false, previewUrl: pendingFurniture.previewUrl };
     if (pendingFurniture.file) furnitureFilesRef.current.set(id, pendingFurniture.file);
     setPlacedFurniture((current) => [...current, placed]);
@@ -1365,7 +1375,7 @@ export function RoomStudio() {
               <label className="free-search-label"><span>Altri dettagli facoltativi</span><input className="material-search" aria-label="Cerca materiali, colori o mobili" value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchProductsOnline(); }} placeholder="Es. effetto pietra, 60 × 120, opaco" /></label>
               <div className="guided-search-actions"><button type="button" className="reset-search-button" onClick={resetProductSearch}>Azzera</button><button type="button" className="guided-search-button" onClick={() => void searchProductsOnline()} disabled={isSearchingProducts}>{isSearchingProducts ? 'Cerco nei cataloghi…' : `Cerca con ${aiProviderLabel ?? 'IA'}`}</button></div>
               <div className="search-scope"><span>Materiali</span><span>Colori</span><span>Arredi</span><span className="internet-ready">Prodotti reali con fonte</span></div>
-              {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={`Riferimento ${item.name}`} /> : <span className="catalog-swatch tile" /> }<button type="button" onClick={() => chooseMaterial(item)}><strong>{item.brand} · {item.name}</strong><span className={`reference-badge reference-${item.referenceKind ?? 'metadata-only'}`}>{materialReferenceLabel(item)}</span><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a></div>)}</div>}
+              {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={`Riferimento ${item.name}`} /> : <span className="catalog-swatch tile" /> }<button type="button" onClick={() => chooseOnlineProduct(item)}><strong>{item.brand} · {item.name}</strong><span className={`reference-badge reference-${item.referenceKind ?? 'metadata-only'}`}>{materialReferenceLabel(item)}</span><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a></div>)}</div>}
               <div className="material-results">{filteredMaterials.map((item) => <button type="button" key={item.id} className={`material-result ${material?.id === item.id ? 'is-selected' : ''}`} onClick={() => chooseMaterial(item)}><span className={`catalog-swatch ${item.pattern ?? 'color'}`} style={{ '--swatch-color': item.color } as CSSProperties} /><span><strong>{item.name}</strong><small>{item.category} · {item.description}</small></span></button>)}{filteredFurniture.map((item) => <button type="button" key={item.name} className={`material-result furniture-result ${pendingFurniture?.name === item.name ? 'is-selected' : ''}`} onClick={() => startFurniturePlacement(item.name)}><span className="furniture-icon">＋</span><span><strong>{item.name}</strong><small>Tocca e poi scegli il punto nella stanza · {item.description}</small></span></button>)}{filteredMaterials.length === 0 && filteredFurniture.length === 0 && onlineMaterials.length === 0 && <div className="custom-search-result"><p>Nessun campione incluso corrisponde. Per trovare marca e prodotto esatti serve la ricerca IA attiva.</p><button type="button" onClick={addCustomRequest}>Aggiungi “{materialQuery.trim()}” alla richiesta</button></div>}</div>
               <div className="custom-color"><input type="color" aria-label="Scegli colore personalizzato" value={customColor} onChange={(event) => setCustomColor(event.target.value)} /><button type="button" onClick={chooseCustomColor}>Usa questo colore</button></div>
               {material && <div className="loaded-material">{material.previewUrl ? <img src={material.previewUrl} alt={`Campione ${material.name}`} /> : <span className="catalog-swatch tile" />}<div><strong>{material.name}</strong><small>{materialReferenceLabel(material)}</small></div></div>}

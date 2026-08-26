@@ -166,18 +166,27 @@ function normalizeProducts(products: MaterialProduct[]) {
 }
 
 export async function searchMaterials(provider: AiProvider, query: string) {
+  const isFurnitureSearch = /Tipo prodotto:\s*Arredi/i.test(query);
   const prompt = [
     'You are the verification engine for a professional Italian architectural-material search application.',
     'Interpret spelling mistakes and informal color descriptions. Detect brand, collection, official product or color, effect, size and finish.',
     'Known starting manufacturers and aliases: Lea Ceramiche (Lea), Marazzi, EnergieKer (Energieker), Ceramica Senio (Senio), Ceramica Euro (Euro). Distinguish the Ceramica Euro manufacturer from retailers named Euro Ceramiche.',
     'When the query provides separate brand, model or collection, color and product type criteria, require the result to satisfy all non-empty criteria. Do not silently substitute another brand.',
-    'Keep this lookup fast: perform one focused web search, open at most one promising official page, then answer immediately.',
-    'Search official manufacturer pages and official catalogs first. Never invent a collection, color, format, finish, URL or image.',
+    isFurnitureSearch
+      ? 'This is a furniture search. A term such as Chesterfield, Scandinavian or modular can be a style rather than a brand or model. When no brand is supplied, find real matching products from identifiable manufacturers or established furniture retailers; do not reject the search merely because the user omitted a brand.'
+      : 'This is an architectural material search. Search official manufacturer pages and official catalogs first.',
+    isFurnitureSearch
+      ? 'For furniture, prefer a manufacturer page; otherwise accept a reputable retailer product page, set official=false, and use the actual seller or manufacturer as brand. The source URL must show the exact furniture item. Return a direct product image only when it is clearly tied to that exact page.'
+      : 'Use manufacturer-owned sources and images for materials.',
+    'Keep this lookup fast: perform one focused web search, open at most two promising pages, then answer immediately.',
+    'Never invent a collection, color, format, finish, URL or image.',
     'If the requested color is not official, use correction to explain the nearest verified official alternative in Italian.',
     'The product source URL must support the exact association.',
     'Classify images strictly: productImageUrl is a verified product sample or swatch; textureImageUrl is only a verified flat/front-facing texture suitable for surface rendering; roomImageUrls contains only room scenes or installed-product photos.',
     'Never use a room scene, catalog cover, logo or generic collection photo as a product image or texture. Never classify the same URL as more than one image type.',
-    'Use only manufacturer-owned image assets that are confidently associated with the exact product and color. When an image type is unavailable, return an empty string or empty array.',
+    isFurnitureSearch
+      ? 'For furniture, productImageUrl may come from the exact verified manufacturer or reputable retailer product page. textureImageUrl must always be empty. roomImageUrls may contain only room scenes showing the exact item.'
+      : 'Use only manufacturer-owned image assets that are confidently associated with the exact product and color. When an image type is unavailable, return an empty string or empty array.',
     'Set official=true only for a manufacturer-owned source and confidence from 0 to 1. Return at most six results and an empty array when no reliable match exists.',
     `User query: ${query}`,
   ].join('\n');
@@ -190,7 +199,7 @@ export async function searchMaterials(provider: AiProvider, query: string) {
       model: 'grok-4.6',
       input: prompt,
       tools: [{ type: 'web_search' }],
-      max_tool_calls: 2,
+      max_tool_calls: isFurnitureSearch ? 4 : 2,
       max_output_tokens: 1800,
       reasoning: { effort: 'low' },
       text: { format: { type: 'json_schema', name: 'verified_material_products', schema: productSchema, strict: true } },

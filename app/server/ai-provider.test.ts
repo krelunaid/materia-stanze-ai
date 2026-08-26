@@ -84,6 +84,22 @@ describe('getAiProvider', () => {
     }]);
   });
 
+  it('allows generic furniture styles and gives Grok more search calls', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({ products: [] }) }] }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await searchMaterials(
+      { id: 'grok', label: 'Grok', apiKey: 'xai-test' },
+      'Modello o collezione: Chesterfield\nTipo prodotto: Arredi\nAltri dettagli: divano',
+    );
+
+    const payload = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
+    expect(payload.max_tool_calls).toBe(4);
+    expect(payload.input).toContain('can be a style rather than a brand or model');
+    expect(payload.input).toContain('established furniture retailers');
+  });
+
   it('asks Grok vision for normalized architectural polygons', async () => {
     const geometry = {
       surfaces: [
