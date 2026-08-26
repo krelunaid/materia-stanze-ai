@@ -317,7 +317,8 @@ html,body { height:100%; overflow:hidden; overscroll-behavior:none; }
 
 @media (max-width:900px) {
   /* Safari/WebView ingrandisce automaticamente i campi sotto i 16 px. */
-  .native-app input,.native-app select,.native-app textarea { font-size:16px; }
+  input,select,textarea { font-size:16px !important; }
+  button,a,label,input,select,textarea { touch-action:manipulation; }
   .topbar { position:sticky; top:0; grid-template-columns:1fr auto; min-height:68px; padding:0 18px; }
   .project-heading { display:none; }
   .simple-steps { position:sticky; z-index:9; top:68px; }

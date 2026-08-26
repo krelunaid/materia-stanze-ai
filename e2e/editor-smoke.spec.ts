@@ -18,3 +18,18 @@ test('exposes the projects route', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Progetti' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Crea nuovo progetto' })).toBeVisible();
 });
+
+test('keeps iPhone form controls at a non-zooming size', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await expect(page.locator('main')).toHaveAttribute('data-hydrated', 'true');
+  await page.getByRole('button', { name: 'Prova con la stanza esempio' }).click();
+  await page.getByRole('button', { name: 'Continua ai prodotti' }).click();
+
+  const search = page.getByRole('textbox', { name: 'Cerca materiali, colori o mobili' });
+  await expect(search).toBeVisible();
+  await expect(search).toHaveCSS('font-size', '16px');
+  await expect(page.locator('main')).toHaveJSProperty('scrollLeft', 0);
+  const overflow = await page.locator('main').evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+});
