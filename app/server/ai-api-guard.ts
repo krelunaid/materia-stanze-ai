@@ -59,7 +59,9 @@ export function isAllowedAiOrigin(origin: string | null) {
 export function aiCorsHeaders(request: Request, methods = 'POST, OPTIONS') {
   const headers = new Headers({
     'Access-Control-Allow-Methods': methods,
-    'Access-Control-Allow-Headers': 'Content-Type',
+    // Older TestFlight builds may still send the former Sites header. It is
+    // accepted for CORS compatibility only and is never treated as authority.
+    'Access-Control-Allow-Headers': 'Content-Type, OAI-Sites-Authorization',
     'Cache-Control': 'no-store',
     Vary: 'Origin',
   });

@@ -20,6 +20,7 @@ describe('AI API origin protection', () => {
       headers: { Origin: 'https://attacker.example' },
     }));
     expect(allowed.get('Access-Control-Allow-Origin')).toBe('capacitor://localhost');
+    expect(allowed.get('Access-Control-Allow-Headers')).toContain('OAI-Sites-Authorization');
     expect(denied.has('Access-Control-Allow-Origin')).toBe(false);
   });
 
