@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { acceptsFurnitureRender, chooseSupportedImageAspectRatio, detectRoomSurfaces, editImage, getAiProvider, getProductCleaner, getRenderProvider, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
+import { acceptsFurnitureRender, chooseSupportedImageAspectRatio, detectRoomSurfaces, editImage, getAiProvider, getProductCleaner, getRenderProvider, knownRetailerProductImage, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -54,12 +54,18 @@ describe('getAiProvider', () => {
   });
 
   it('calls the BRIA RMBG endpoint and returns its transparent image', async () => {
+    const inputResponse = new Response(new Uint8Array([255, 216, 255, 224]), {
+      status: 200,
+      headers: { 'Content-Type': 'image/jpeg' },
+    });
+    Object.defineProperty(inputResponse, 'url', { value: 'https://shop.example/product.jpg' });
     const resultResponse = new Response(new Uint8Array([137, 80, 78, 71]), {
       status: 200,
       headers: { 'Content-Type': 'image/png' },
     });
     Object.defineProperty(resultResponse, 'url', { value: 'https://cdn.bria.ai/result.png' });
     const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(inputResponse)
       .mockResolvedValueOnce(new Response(JSON.stringify({ result: { image_url: 'https://cdn.bria.ai/result.png' } }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -69,14 +75,19 @@ describe('getAiProvider', () => {
     await expect(removeFurnitureBackgroundWithBria('bria-test', 'https://shop.example/product.jpg'))
       .resolves.toMatch(/^data:image\/png;base64,/);
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://engine.prod.bria-api.com/v2/image/edit/remove_background');
-    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('https://engine.prod.bria-api.com/v2/image/edit/remove_background');
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
       method: 'POST',
       headers: { api_token: 'bria-test', 'Content-Type': 'application/json' },
     });
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
-      image: 'https://shop.example/product.jpg', preserve_alpha: true, sync: true,
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      image: expect.stringMatching(/^data:image\/jpeg;base64,/), preserve_alpha: true, sync: true,
     });
+  });
+
+  it('derives the official Tikamoon packshot URL from an exact product page', () => {
+    expect(knownRetailerProductImage('https://www.tikamoon.it/art-mobile-per-il-bagno-in-legno-di-mango-164-cm-6539.htm?utm_source=test'))
+      .toBe('https://media.tikamoon.com/images/t_product-picture-1200/website/product/6539_A_HD_010/mobile-per-il-bagno-in-legno-di-mango-164-cm-6539.jpg');
   });
 
   it('keeps Grok product lookup bounded for a responsive UI', async () => {
@@ -181,6 +192,36 @@ describe('getAiProvider', () => {
 
     await expect(readProductPage('https://www.sklum.com/prodotto-miller', 'Arredi')).resolves.toEqual([
       expect.objectContaining({ name: 'Mobile TV Miller', brand: 'SKLUM', collection: 'Miller', format: 'L 215 cm', productImageUrl: 'https://cdn.sklum.com/miller.jpg', confidence: .98 }),
+    ]);
+  });
+
+  it('follows a public product redirect and falls back to the official Open Graph image', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, {
+        status: 302,
+        headers: { Location: '/art-mobile-per-il-bagno-in-legno-di-mango-164-cm-6539.htm' },
+      }))
+      .mockResolvedValueOnce(new Response(`<!doctype html>
+        <meta property="og:image" content="https://media.tikamoon.com/images/mobile-bagno-milo.jpg?width=1200&amp;quality=90">
+        <script type="application/ld+json">${JSON.stringify({
+          '@context': 'https://schema.org', '@type': 'Product', name: 'Milo - Mobile per il bagno in legno di mango 164 cm',
+          brand: { '@type': 'Brand', name: 'Tikamoon' }, description: 'Mobile bagno in mango con quattro ante.',
+          additionalProperty: [
+            { '@type': 'PropertyValue', name: 'Larghezza', value: 164, unitCode: 'cm' },
+            { '@type': 'PropertyValue', name: 'Profondità', value: 48, unitCode: 'cm' },
+            { '@type': 'PropertyValue', name: 'Altezza', value: 78.5, unitCode: 'cm' },
+          ],
+        })}</script>`, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
+
+    await expect(readProductPage('https://www.tikamoon.it/prodotto-milo?utm_source=test', 'Arredi')).resolves.toEqual([
+      expect.objectContaining({
+        name: 'Milo - Mobile per il bagno in legno di mango 164 cm',
+        brand: 'Tikamoon',
+        format: 'L 164 cm · P 48 cm · H 78.5 cm',
+        sourceUrl: 'https://www.tikamoon.it/art-mobile-per-il-bagno-in-legno-di-mango-164-cm-6539.htm',
+        productImageUrl: 'https://media.tikamoon.com/images/mobile-bagno-milo.jpg?width=1200&quality=90',
+      }),
     ]);
   });
 

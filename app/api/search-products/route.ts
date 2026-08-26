@@ -1,4 +1,4 @@
-import { getAiProvider, readProductPage, searchMaterials } from '../../server/ai-provider';
+import { getAiProvider, knownRetailerProductImage, readProductPage, searchMaterials } from '../../server/ai-provider';
 import { guardAiRequest, handleAiOptions } from '../../server/ai-api-guard';
 
 function json(body: unknown, headers: Headers, status = 200) {
@@ -48,7 +48,11 @@ export async function POST(request: Request) {
     ].filter(Boolean).join('\n');
     if (structuredQuery.length < 3) return json({ message: 'Inserisci almeno un criterio di ricerca.' }, headers, 400);
     const directProducts = sourceUrl ? await readProductPage(sourceUrl, category || 'Arredi') : [];
-    const products = directProducts.length ? directProducts : await searchMaterials(provider, structuredQuery);
+    const searchedProducts = directProducts.length ? directProducts : await searchMaterials(provider, structuredQuery);
+    const products = searchedProducts.map((product) => ({
+      ...product,
+      productImageUrl: product.productImageUrl || knownRetailerProductImage(product.sourceUrl || sourceUrl),
+    }));
     return json({ products, provider: provider.id }, headers);
   } catch (caught) {
     return json({

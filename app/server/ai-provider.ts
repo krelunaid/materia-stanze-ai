@@ -290,15 +290,71 @@ function structuredImage(value: unknown) {
   return '';
 }
 
-export async function readProductPage(sourceUrl: string, category: MaterialProduct['category'] = 'Arredi') {
-  const source = validPublicUrl(sourceUrl);
-  if (!source || !source.hostname.includes('.') || source.hostname.endsWith('.local') || source.hostname.endsWith('.internal')) return [];
+function absolutePublicUrl(value: string, base: URL) {
+  if (!value) return '';
   try {
-    const response = await fetch(source, {
+    return validPublicUrl(new URL(value.replace(/&amp;/gi, '&'), base).toString())?.toString() ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function pageImage(html: string, base: URL) {
+  const names = ['og:image:secure_url', 'og:image', 'twitter:image'];
+  for (const name of names) {
+    const escaped = name.replace(':', '\\:');
+    const patterns = [
+      new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`, 'i'),
+      new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${escaped}["'][^>]*>`, 'i'),
+    ];
+    for (const pattern of patterns) {
+      const candidate = absolutePublicUrl(html.match(pattern)?.[1] ?? '', base);
+      if (candidate) return candidate;
+    }
+  }
+  return '';
+}
+
+export function knownRetailerProductImage(sourceUrl: string) {
+  const source = validPublicUrl(sourceUrl);
+  if (!source) return '';
+  if (source.hostname === 'www.tikamoon.it' || source.hostname === 'tikamoon.it') {
+    const match = source.pathname.match(/^\/art-(.+)-(\d+)\.htm$/i);
+    if (!match) return '';
+    const [, slug, productId] = match;
+    return `https://media.tikamoon.com/images/t_product-picture-1200/website/product/${productId}_A_HD_010/${slug}-${productId}.jpg`;
+  }
+  return '';
+}
+
+async function fetchProductHtml(source: URL) {
+  let current = source;
+  for (let redirectCount = 0; redirectCount <= 4; redirectCount += 1) {
+    const response = await fetch(current, {
       redirect: 'manual',
       signal: AbortSignal.timeout(8000),
       headers: { Accept: 'text/html,application/xhtml+xml' },
     });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get('location');
+      if (!location || redirectCount === 4) return null;
+      const next = absolutePublicUrl(location, current);
+      if (!next) return null;
+      current = new URL(next);
+      continue;
+    }
+    return { response, source: current };
+  }
+  return null;
+}
+
+export async function readProductPage(sourceUrl: string, category: MaterialProduct['category'] = 'Arredi') {
+  const initialSource = validPublicUrl(sourceUrl);
+  if (!initialSource || !initialSource.hostname.includes('.') || initialSource.hostname.endsWith('.local') || initialSource.hostname.endsWith('.internal')) return [];
+  try {
+    const fetched = await fetchProductHtml(initialSource);
+    if (!fetched) return [];
+    const { response, source } = fetched;
     if (!response.ok || !(response.headers.get('content-type') ?? '').includes('text/html')) return [];
     const contentLength = Number(response.headers.get('content-length') ?? 0);
     if (contentLength > 3_000_000) return [];
@@ -331,7 +387,7 @@ export async function readProductPage(sourceUrl: string, category: MaterialProdu
       properties.get('profondità') ? `P ${properties.get('profondità')}` : '',
       properties.get('altezza') ? `H ${properties.get('altezza')}` : '',
     ].filter(Boolean).join(' · ');
-    const productImageUrl = validPublicUrl(structuredImage(product.image))?.toString() ?? '';
+    const productImageUrl = absolutePublicUrl(structuredImage(product.image), source) || pageImage(html, source);
     return normalizeProducts([{
       name,
       brand: brand || source.hostname.replace(/^www\./, ''),
@@ -853,10 +909,21 @@ async function remoteImageToDataUri(value: string) {
 export async function removeFurnitureBackgroundWithBria(apiKey: string, imageUrl: string) {
   const reference = validPublicUrl(imageUrl);
   if (!reference) throw new Error('Foto prodotto non valida.');
+  const headers: Record<string, string> = { Accept: 'image/jpeg,image/png,image/webp' };
+  if (reference.hostname === 'media.tikamoon.com') headers.Referer = 'https://www.tikamoon.it/';
+  const inputResponse = await fetch(reference, { redirect: 'follow', signal: AbortSignal.timeout(15000), headers });
+  const finalInputUrl = validPublicUrl(inputResponse.url || reference.toString());
+  const inputType = inputResponse.headers.get('content-type')?.split(';')[0] ?? '';
+  if (!inputResponse.ok || !finalInputUrl || !['image/jpeg', 'image/png', 'image/webp'].includes(inputType)) {
+    throw new Error('La fotografia ufficiale del prodotto non è scaricabile.');
+  }
+  const inputBytes = new Uint8Array(await inputResponse.arrayBuffer());
+  if (inputBytes.byteLength > 12 * 1024 * 1024) throw new Error('La fotografia del prodotto è troppo grande.');
+  const inputImage = `data:${inputType};base64,${bytesToBase64(inputBytes)}`;
   const response = await fetch('https://engine.prod.bria-api.com/v2/image/edit/remove_background', {
     method: 'POST',
     headers: { api_token: apiKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image: reference.toString(), preserve_alpha: true, sync: true }),
+    body: JSON.stringify({ image: inputImage, preserve_alpha: true, sync: true }),
     signal: AbortSignal.timeout(90000),
   });
   const payload = await response.json() as { result?: { image_url?: string }; error?: { message?: string }; message?: string };

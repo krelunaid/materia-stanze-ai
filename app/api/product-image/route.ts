@@ -15,7 +15,9 @@ export async function GET(request: Request) {
   const source = publicImageUrl(new URL(request.url).searchParams.get('url') ?? '');
   if (!source) return Response.json({ message: 'Immagine prodotto non valida.' }, { status: 400 });
   try {
-    const response = await fetch(source, { redirect: 'follow', signal: AbortSignal.timeout(10000) });
+    const headers: Record<string, string> = { Accept: 'image/jpeg,image/png,image/webp' };
+    if (source.hostname === 'media.tikamoon.com') headers.Referer = 'https://www.tikamoon.it/';
+    const response = await fetch(source, { redirect: 'follow', signal: AbortSignal.timeout(10000), headers });
     const finalUrl = publicImageUrl(response.url);
     const type = response.headers.get('content-type')?.split(';')[0] ?? '';
     if (!response.ok || !finalUrl || !type.startsWith('image/')) {
