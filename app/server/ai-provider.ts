@@ -43,6 +43,36 @@ type ImagePayload = {
   error?: { message?: string };
 };
 
+const furnitureVerificationSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    visible: { type: 'boolean' },
+    atRequestedAnchor: { type: 'boolean' },
+    resemblesReference: { type: 'boolean' },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
+    reason: { type: 'string' },
+    referenceLeft: { type: 'number', minimum: 0, maximum: 1 },
+    referenceTop: { type: 'number', minimum: 0, maximum: 1 },
+    referenceRight: { type: 'number', minimum: 0, maximum: 1 },
+    referenceBottom: { type: 'number', minimum: 0, maximum: 1 },
+  },
+  required: ['visible', 'atRequestedAnchor', 'resemblesReference', 'confidence', 'reason', 'referenceLeft', 'referenceTop', 'referenceRight', 'referenceBottom'],
+} as const;
+
+const productBoundsSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    left: { type: 'number', minimum: 0, maximum: 1 },
+    top: { type: 'number', minimum: 0, maximum: 1 },
+    right: { type: 'number', minimum: 0, maximum: 1 },
+    bottom: { type: 'number', minimum: 0, maximum: 1 },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
+  },
+  required: ['left', 'top', 'right', 'bottom', 'confidence'],
+} as const;
+
 const productSchema = {
   type: 'object',
   additionalProperties: false,
@@ -832,4 +862,92 @@ export async function editImage(provider: AiProvider, input: {
     throw new Error(payload.error?.message ?? 'Il motore non ha restituito un’immagine.');
   }
   return `data:image/png;base64,${payload.data[0].b64_json}`;
+}
+
+export async function verifyFurniturePlacement(provider: AiProvider, input: {
+  source: File;
+  renderedImage: string;
+  furniture: string;
+  referenceImageUrl?: string | null;
+  referenceImageFile?: File | null;
+}) {
+  const sourceImage = await fileToDataUri(input.source);
+  const reference = input.referenceImageUrl ? validPublicUrl(input.referenceImageUrl) : null;
+  const content: Array<Record<string, unknown>> = [
+    { type: 'input_image', image_url: sourceImage, detail: 'high' },
+    { type: 'input_image', image_url: input.renderedImage, detail: 'high' },
+  ];
+  if (input.referenceImageFile) content.push({ type: 'input_image', image_url: await fileToDataUri(input.referenceImageFile), detail: 'high' });
+  else if (reference) content.push({ type: 'input_image', image_url: reference.toString(), detail: 'high' });
+  content.push({
+    type: 'input_text',
+    text: [
+      'You are a strict visual quality gate. Image 1 is the room before editing. Image 2 is the proposed render. Image 3, when present, is the exact product reference.',
+      `Required furniture and placement: ${input.furniture}`,
+      'Set visible=true only if every requested furniture item is clearly visible in image 2.',
+      'Set atRequestedAnchor=true only if each floor-contact point is close to the requested x/y percentage and the visible size is close to the requested width.',
+      'Set resemblesReference=true only if the rendered item preserves the recognizable shape, proportions, material and color of the supplied product reference. If no reference is present, judge the requested description conservatively.',
+      'When image 3 is present, return the tight normalized bounding box of the furniture body only in referenceLeft/referenceTop/referenceRight/referenceBottom. Exclude wall, floor, artwork, lamps, books, labels, arrows, dimension text, shadows and foreground objects. If no reference exists, return 0,0,1,1.',
+      'A room that looks unchanged or omits the item must fail. Return only the structured result.',
+    ].join('\n'),
+  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 50000);
+  try {
+    const response = await fetch(provider.id === 'grok' ? 'https://api.x.ai/v1/responses' : 'https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: provider.id === 'grok' ? 'grok-4.6' : 'gpt-5.4-mini',
+        input: [{ role: 'user', content }],
+        max_output_tokens: 500,
+        reasoning: { effort: 'low' },
+        text: { format: { type: 'json_schema', name: 'furniture_render_verification', schema: furnitureVerificationSchema, strict: true } },
+        store: false,
+      }),
+      signal: controller.signal,
+    });
+    const payload = await response.json() as ResponsesPayload;
+    if (!response.ok) throw new Error(payload.error?.message ?? 'Verifica del mobile non disponibile.');
+    return JSON.parse(responseText(payload)) as {
+      visible: boolean;
+      atRequestedAnchor: boolean;
+      resemblesReference: boolean;
+      confidence: number;
+      reason: string;
+      referenceLeft: number;
+      referenceTop: number;
+      referenceRight: number;
+      referenceBottom: number;
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function locateProductReference(provider: AiProvider, imageUrl: string, productName: string) {
+  const reference = validPublicUrl(imageUrl);
+  if (!reference) throw new Error('Foto prodotto non valida.');
+  const response = await fetch(provider.id === 'grok' ? 'https://api.x.ai/v1/responses' : 'https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: provider.id === 'grok' ? 'grok-4.6' : 'gpt-5.4-mini',
+      input: [{
+        role: 'user',
+        content: [
+          { type: 'input_image', image_url: reference.toString(), detail: 'high' },
+          { type: 'input_text', text: `Locate only the physical body of “${productName}” in this catalog photograph. Return a tight normalized bounding box around the product itself. Exclude wall, floor, artwork, lamps, books, decorations, people, labels, arrows, dimension text, shadows and foreground objects.` },
+        ],
+      }],
+      max_output_tokens: 300,
+      reasoning: { effort: 'low' },
+      text: { format: { type: 'json_schema', name: 'product_reference_bounds', schema: productBoundsSchema, strict: true } },
+      store: false,
+    }),
+    signal: AbortSignal.timeout(45000),
+  });
+  const payload = await response.json() as ResponsesPayload;
+  if (!response.ok) throw new Error(payload.error?.message ?? 'Ritaglio prodotto non disponibile.');
+  return JSON.parse(responseText(payload)) as { left: number; top: number; right: number; bottom: number; confidence: number };
 }

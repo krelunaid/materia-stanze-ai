@@ -15,6 +15,7 @@ import {
 } from 'react';
 import { drawImageCover } from '../lib/canvas-draw';
 import { AcceptedRoomFile, validateRoomFile } from '../lib/file-validation';
+import { furnitureEditRect, hasCompatibleImageGeometry, rectPoints } from '../lib/render-geometry';
 import {
   isValidPolygon,
   nextSurfaceName,
@@ -55,8 +56,9 @@ type PlacedFurniture = {
   rotation: number;
   frozen: boolean;
   previewUrl?: string;
+  description?: string;
 };
-type PendingFurniture = { name: string; previewUrl?: string; file?: File };
+type PendingFurniture = { name: string; previewUrl?: string; description?: string; file?: File };
 type DragFurniture = { id: string; pointerId: number };
 type AiStatus = 'checking' | 'ready' | 'missing' | 'unreachable';
 type DetectedSurface = { name: string; kind: SurfaceKind; points: Point[]; confidence: number };
@@ -822,7 +824,14 @@ export function RoomStudio() {
       ?? null;
   }
 
-  async function createMaskedInput(options: { editableSurface?: Surface; frozenSurfaces?: Surface[]; sourceUrl?: string }) {
+  async function createMaskedInput(options: {
+    editableSurface?: Surface;
+    editableSurfaces?: Surface[];
+    editableFurniture?: PlacedFurniture[];
+    protectedSurfaces?: Surface[];
+    frozenSurfaces?: Surface[];
+    sourceUrl?: string;
+  }) {
     const sourceUrl = options.sourceUrl ?? room?.previewUrl;
     if (!sourceUrl) throw new Error('La foto della stanza non è pronta.');
     const image = await loadImageSource(sourceUrl);
@@ -839,19 +848,26 @@ export function RoomStudio() {
     if (!imageContext || !maskContext) throw new Error('Non posso preparare la superficie.');
     imageContext.drawImage(image, 0, 0, width, height);
 
-    const drawPolygon = (surface: Surface) => {
+    const drawPoints = (points: Point[]) => {
       maskContext.beginPath();
-      surface.points.forEach((point, index) => {
+      points.forEach((point, index) => {
         const x = point.x * width; const y = point.y * height;
         if (index === 0) maskContext.moveTo(x, y); else maskContext.lineTo(x, y);
       });
       maskContext.closePath(); maskContext.fill();
     };
+    const drawPolygon = (surface: Surface) => drawPoints(surface.points);
 
-    if (options.editableSurface) {
+    const editableSurfaces = options.editableSurfaces ?? (options.editableSurface ? [options.editableSurface] : []);
+    const editableFurniture = options.editableFurniture ?? [];
+    if (editableSurfaces.length || editableFurniture.length) {
       maskContext.fillStyle = '#ffffff'; maskContext.fillRect(0, 0, width, height);
       maskContext.globalCompositeOperation = 'destination-out';
-      drawPolygon(options.editableSurface);
+      for (const surface of editableSurfaces) drawPolygon(surface);
+      for (const item of editableFurniture) drawPoints(rectPoints(furnitureEditRect(item)));
+      maskContext.globalCompositeOperation = 'source-over';
+      maskContext.fillStyle = '#ffffff';
+      for (const surface of options.protectedSurfaces ?? []) drawPolygon(surface);
     } else {
       maskContext.clearRect(0, 0, width, height);
       maskContext.fillStyle = '#ffffff';
@@ -859,19 +875,32 @@ export function RoomStudio() {
     }
 
     const [inputImage, mask] = await Promise.all([
-      new Promise<Blob | null>((resolve) => imageCanvas.toBlob(resolve, 'image/png')),
+      // JPEG keeps the multipart request comfortably below mobile/edge body
+      // limits; the lossless PNG is reserved for the technical mask.
+      new Promise<Blob | null>((resolve) => imageCanvas.toBlob(resolve, 'image/jpeg', .92)),
       new Promise<Blob | null>((resolve) => maskCanvas.toBlob(resolve, 'image/png')),
     ]);
     if (!inputImage || !mask) throw new Error('Non posso preparare foto e maschera della superficie.');
     return { inputImage, mask };
   }
 
-  async function protectAiResult(resultSource: string, options: { editableSurface?: Surface; frozenSurfaces?: Surface[] }) {
-    if (!room?.previewUrl) throw new Error('La fotografia originale non è disponibile.');
+  async function protectAiResult(resultSource: string, options: {
+    editableSurface?: Surface;
+    editableSurfaces?: Surface[];
+    editableFurniture?: PlacedFurniture[];
+    protectedSurfaces?: Surface[];
+    frozenSurfaces?: Surface[];
+    sourceUrl?: string;
+  }) {
+    const sourceUrl = options.sourceUrl ?? room?.previewUrl;
+    if (!sourceUrl) throw new Error('La fotografia originale non è disponibile.');
     const [original, generated] = await Promise.all([
-      loadImageSource(room.previewUrl),
+      loadImageSource(sourceUrl),
       loadImageSource(resultSource),
     ]);
+    if (!hasCompatibleImageGeometry(original.naturalWidth, original.naturalHeight, generated.naturalWidth, generated.naturalHeight)) {
+      throw new Error('Il risultato IA ha cambiato taglio o proporzioni: è stato scartato e la stanza è rimasta intatta.');
+    }
     const maxSide = 1536;
     const scale = Math.min(1, maxSide / Math.max(original.naturalWidth, original.naturalHeight));
     const width = Math.max(1, Math.round(original.naturalWidth * scale));
@@ -881,22 +910,30 @@ export function RoomStudio() {
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Non posso proteggere le zone Freeze.');
 
-    const clipTo = (surface: Surface) => {
+    const clipPoints = (points: Point[]) => {
       context.beginPath();
-      surface.points.forEach((point, index) => {
+      points.forEach((point, index) => {
         const x = point.x * width; const y = point.y * height;
         if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
       });
       context.closePath();
       context.clip();
     };
+    const clipTo = (surface: Surface) => clipPoints(surface.points);
 
-    if (options.editableSurface) {
+    const editableSurfaces = options.editableSurfaces ?? (options.editableSurface ? [options.editableSurface] : []);
+    const editableFurniture = options.editableFurniture ?? [];
+    if (editableSurfaces.length || editableFurniture.length) {
       context.drawImage(original, 0, 0, width, height);
-      context.save();
-      clipTo(options.editableSurface);
-      drawImageCover(context, generated, width, height);
-      context.restore();
+      for (const surface of editableSurfaces) {
+        context.save(); clipTo(surface); drawImageCover(context, generated, width, height); context.restore();
+      }
+      for (const item of editableFurniture) {
+        context.save(); clipPoints(rectPoints(furnitureEditRect(item))); drawImageCover(context, generated, width, height); context.restore();
+      }
+      for (const surface of options.protectedSurfaces ?? []) {
+        context.save(); clipTo(surface); context.drawImage(original, 0, 0, width, height); context.restore();
+      }
     } else {
       drawImageCover(context, generated, width, height);
       for (const surface of options.frozenSurfaces ?? []) {
@@ -915,10 +952,120 @@ export function RoomStudio() {
     return protectedUrl;
   }
 
+  async function overlayExactFurniture(baseSource: string, items: PlacedFurniture[], referenceBounds?: { left: number; top: number; right: number; bottom: number }) {
+    const base = await loadImageSource(baseSource);
+    const maxSide = 1536;
+    const scale = Math.min(1, maxSide / Math.max(base.naturalWidth, base.naturalHeight));
+    const width = Math.max(1, Math.round(base.naturalWidth * scale));
+    const height = Math.max(1, Math.round(base.naturalHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width; canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Non posso comporre il mobile scelto.');
+    context.drawImage(base, 0, 0, width, height);
+
+    for (const item of items) {
+      if (!item.previewUrl) continue;
+      let itemBounds = referenceBounds;
+      if (item.previewUrl.startsWith('http')) {
+        try {
+          const { response, result } = await requestJson<{ bounds?: { left: number; top: number; right: number; bottom: number }; message?: string }>(endpoint('/api/product-bounds'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageUrl: item.previewUrl, productName: item.name }),
+          }, 60000);
+          if (response.ok && result.bounds) itemBounds = result.bounds;
+        } catch {
+          // The full reference remains usable when the optional crop audit times out.
+        }
+      }
+      const source = item.previewUrl.startsWith('http')
+        ? endpoint(`/api/product-image?url=${encodeURIComponent(item.previewUrl)}`)
+        : item.previewUrl;
+      const product = await loadImageSource(source);
+      const productScale = Math.min(1, 1200 / Math.max(product.naturalWidth, product.naturalHeight));
+      const productCanvas = document.createElement('canvas');
+      productCanvas.width = Math.max(1, Math.round(product.naturalWidth * productScale));
+      productCanvas.height = Math.max(1, Math.round(product.naturalHeight * productScale));
+      const productContext = productCanvas.getContext('2d', { willReadFrequently: true });
+      if (!productContext) continue;
+      productContext.drawImage(product, 0, 0, productCanvas.width, productCanvas.height);
+
+      const pixels = productContext.getImageData(0, 0, productCanvas.width, productCanvas.height);
+      const boundLeft = itemBounds ? Math.max(0, Math.floor(itemBounds.left * productCanvas.width)) : 0;
+      let boundTop = itemBounds ? Math.max(0, Math.floor(itemBounds.top * productCanvas.height)) : 0;
+      const boundRight = itemBounds ? Math.min(productCanvas.width - 1, Math.ceil(itemBounds.right * productCanvas.width)) : productCanvas.width - 1;
+      const boundBottom = itemBounds ? Math.min(productCanvas.height - 1, Math.ceil(itemBounds.bottom * productCanvas.height)) : productCanvas.height - 1;
+      const length = item.description?.match(/\bL\s*(\d+(?:[.,]\d+)?)\s*cm/i)?.[1];
+      const physicalHeight = item.description?.match(/\bH\s*(\d+(?:[.,]\d+)?)\s*cm/i)?.[1];
+      if (length && physicalHeight) {
+        const physicalAspect = Number(length.replace(',', '.')) / Number(physicalHeight.replace(',', '.'));
+        if (Number.isFinite(physicalAspect) && physicalAspect > 1) {
+          const expectedPixelHeight = (boundRight - boundLeft) / physicalAspect;
+          boundTop = Math.max(boundTop, Math.floor(boundBottom - expectedPixelHeight * 1.12));
+        }
+      }
+      const pixelOffset = (x: number, y: number) => (y * productCanvas.width + x) * 4;
+      const corners = [
+        pixelOffset(boundLeft, boundTop),
+        pixelOffset(boundRight, boundTop),
+        pixelOffset(boundLeft, boundBottom),
+        pixelOffset(boundRight, boundBottom),
+      ];
+      const backgroundColors = corners.map((offset) => ({
+        r: pixels.data[offset], g: pixels.data[offset + 1], b: pixels.data[offset + 2],
+      }));
+      for (let offset = 0; offset < pixels.data.length; offset += 4) {
+        const index = offset / 4; const x = index % productCanvas.width; const y = Math.floor(index / productCanvas.width);
+        if (x < boundLeft || x > boundRight || y < boundTop || y > boundBottom) { pixels.data[offset + 3] = 0; continue; }
+        const distance = Math.min(...backgroundColors.map((background) => Math.hypot(
+          pixels.data[offset] - background.r,
+          pixels.data[offset + 1] - background.g,
+          pixels.data[offset + 2] - background.b,
+        )));
+        if (distance <= 18) pixels.data[offset + 3] = 0;
+        else if (distance < 60) pixels.data[offset + 3] = Math.round(pixels.data[offset + 3] * (distance - 18) / 42);
+      }
+      productContext.putImageData(pixels, 0, 0);
+
+      const cleaned = productContext.getImageData(0, 0, productCanvas.width, productCanvas.height).data;
+      let left = productCanvas.width; let top = productCanvas.height; let right = 0; let bottom = 0;
+      for (let y = 0; y < productCanvas.height; y += 2) {
+        for (let x = 0; x < productCanvas.width; x += 2) {
+          if (cleaned[(y * productCanvas.width + x) * 4 + 3] < 36) continue;
+          left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
+        }
+      }
+      if (right <= left || bottom <= top) { left = 0; top = 0; right = productCanvas.width; bottom = productCanvas.height; }
+      const cropWidth = Math.max(1, right - left);
+      const cropHeight = Math.max(1, bottom - top);
+      let targetWidth = width * item.scale / 100;
+      let targetHeight = targetWidth * cropHeight / cropWidth;
+      if (targetHeight > height * .75) {
+        const fit = height * .75 / targetHeight;
+        targetWidth *= fit; targetHeight *= fit;
+      }
+      const anchorX = item.x * width; const anchorY = item.y * height;
+      context.save();
+      context.translate(anchorX, anchorY);
+      context.rotate(item.rotation * Math.PI / 180);
+      context.shadowColor = 'rgba(0,0,0,.3)'; context.shadowBlur = Math.max(4, targetWidth * .035); context.shadowOffsetY = Math.max(2, targetHeight * .025);
+      context.drawImage(productCanvas, left, top, cropWidth, cropHeight, -targetWidth / 2, -targetHeight, targetWidth, targetHeight);
+      context.restore();
+    }
+
+    const composite = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!composite) throw new Error('Non posso completare la composizione del mobile.');
+    if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
+    const url = URL.createObjectURL(composite);
+    processedBlobRef.current = url;
+    return url;
+  }
+
   async function applyMaterialAutomatically() {
     if (!material || !room?.previewUrl || isApplyingProduct) return;
     if (material.category === 'Arredi') {
-      startFurniturePlacement(material.name, material.previewUrl);
+      startFurniturePlacement(material.name, material.previewUrl, material.description);
       return;
     }
     const target = recommendedSurface(material);
@@ -935,7 +1082,7 @@ export function RoomStudio() {
     try {
       const { inputImage, mask } = await createMaskedInput({ editableSurface: target });
       const form = new FormData();
-      form.append('image', inputImage, room.file.name.replace(/\.(heic|heif)$/i, '.png'));
+      form.append('image', inputImage, 'surface-input.jpg');
       form.append('mask', mask, 'surface-mask.png');
       form.append('productName', `${material.brand ? `${material.brand} ` : ''}${material.name}`);
       form.append('productDescription', `${material.description} · fonte: ${material.sourceUrl}`);
@@ -966,18 +1113,18 @@ export function RoomStudio() {
 
   function chooseOnlineProduct(next: StudioMaterial) {
     if (next.category === 'Arredi') {
-      startFurniturePlacement(`${next.brand ? `${next.brand} ` : ''}${next.name}`.trim(), next.previewUrl);
+      startFurniturePlacement(`${next.brand ? `${next.brand} ` : ''}${next.name}`.trim(), next.previewUrl, next.description);
       return;
     }
     chooseMaterial(next);
   }
 
-  function startFurniturePlacement(name: string, previewUrl?: string, file?: File) {
+  function startFurniturePlacement(name: string, previewUrl?: string, description?: string, file?: File) {
     if (!room || room.sourceType !== 'photo') {
       setError('Per posizionare un mobile serve una foto della stanza.');
       return;
     }
-    setPendingFurniture({ name, previewUrl, file });
+    setPendingFurniture({ name, previewUrl, description, file });
     setSelectedFurnitureId(null);
     setNotice(`Tocca il punto del pavimento dove vuoi mettere “${name}”.`);
   }
@@ -988,7 +1135,7 @@ export function RoomStudio() {
     if (file.size > 20 * 1024 * 1024) { setError('La foto del mobile supera il limite di 20 MB.'); return; }
     const previewUrl = URL.createObjectURL(file);
     furnitureBlobUrlsRef.current.push(previewUrl);
-    startFurniturePlacement(file.name.replace(/\.[^.]+$/, ''), previewUrl, file);
+    startFurniturePlacement(file.name.replace(/\.[^.]+$/, ''), previewUrl, undefined, file);
     setError(null);
   }
 
@@ -1004,7 +1151,7 @@ export function RoomStudio() {
     const y = Math.min(.94, Math.max(.28, (event.clientY - rect.top) / rect.height));
     furnitureIdRef.current += 1;
     const id = `furniture-${furnitureIdRef.current}`;
-    const placed: PlacedFurniture = { id, name: pendingFurniture.name, x, y, scale: 24, rotation: 0, frozen: false, previewUrl: pendingFurniture.previewUrl };
+    const placed: PlacedFurniture = { id, name: pendingFurniture.name, x, y, scale: 24, rotation: 0, frozen: false, previewUrl: pendingFurniture.previewUrl, description: pendingFurniture.description };
     if (pendingFurniture.file) furnitureFilesRef.current.set(id, pendingFurniture.file);
     setPlacedFurniture((current) => [...current, placed]);
     setSelectedFurnitureId(id);
@@ -1160,7 +1307,7 @@ export function RoomStudio() {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         if (attempt > 0) setNotice('La precedente elaborazione ha cambiato l’inquadratura: la scarto e riprovo mantenendo tutti i bordi originali.');
         const form = new FormData();
-        form.append('image', inputImage, room.file.name.replace(/\.(heic|heif)$/i, '.png'));
+        form.append('image', inputImage, 'room-input.jpg');
         if (frozenSurfaces.length) form.append('mask', mask, 'freeze-mask.png');
         form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
         if (attempt > 0) form.append('strictRetry', 'true');
@@ -1234,6 +1381,10 @@ export function RoomStudio() {
     if (!room?.previewUrl || room.sourceType !== 'photo' || isRendering) return;
     const frozenSurfaces = surfaces.filter((surface) => surface.frozen);
     const sourceUrl = showProcessedPreview && processedPreview ? processedPreview : room.previewUrl;
+    const editableMaterialSurfaces = surfaces.filter((surface) => surface.materialId && !surface.frozen);
+    const protectedSurfaces = surfaces.filter((surface) => surface.frozen
+      || ((surface.kind === 'door' || surface.kind === 'window') && !surface.materialId)
+      || (surface.kind === 'ceiling' && !surface.materialId));
     const materialAssignments = surfaces.filter((surface) => surface.materialId).map((surface) => {
       const assigned = materialMap.get(surface.materialId!);
       return `${surface.name}: ${assigned?.brand ? `${assigned.brand} ` : ''}${assigned?.name ?? 'materiale scelto'} (${assigned?.description ?? 'mantieni il campione selezionato'}; ${assigned ? materialReferenceLabel(assigned) : 'riferimento non disponibile'})`;
@@ -1247,12 +1398,34 @@ export function RoomStudio() {
     ].join('; '));
 
     setIsRendering(true); setError(null); setRenderSummaryOpen(false);
-    setNotice('Grok sta creando il render fotografico. Le aree Freeze verranno ricopiate dall’originale.');
+    setNotice('Grok modifica solo prodotti e mobili. Geometria, aperture e resto della foto sono bloccati pixel per pixel.');
     try {
-      const { inputImage, mask } = await createMaskedInput({ frozenSurfaces, sourceUrl });
+      if (!editableMaterialSurfaces.length && !placedFurniture.length) {
+        processedSurfacesRef.current = surfaces;
+        setProcessedPreview(sourceUrl); setProcessedLabel('Render controllato'); setShowProcessedPreview(true); setActiveStep(4);
+        setNotice('Nessuna modifica visiva richiesta: la fotografia è rimasta identica e non è stata inviata all’IA.');
+        return;
+      }
+      const exactFurnitureOnly = !editableMaterialSurfaces.length
+        && !customRequests.length
+        && placedFurniture.length > 0
+        && placedFurniture.every((item) => item.previewUrl);
+      if (exactFurnitureOnly) {
+        const exactPreview = await overlayExactFurniture(sourceUrl, placedFurniture);
+        processedSurfacesRef.current = surfaces;
+        setProcessedPreview(exactPreview); setProcessedLabel('Render controllato'); setShowProcessedPreview(true); setActiveStep(4);
+        setNotice('Render controllato pronto: foto prodotto ritagliata e composta nel punto e nella misura scelti. Nessuna parte della stanza è stata rigenerata.');
+        return;
+      }
+      const { inputImage, mask } = await createMaskedInput({
+        editableSurfaces: editableMaterialSurfaces,
+        editableFurniture: placedFurniture,
+        protectedSurfaces,
+        sourceUrl,
+      });
       const form = new FormData();
-      form.append('image', inputImage, room.file.name.replace(/\.(heic|heif)$/i, '.png'));
-      if (frozenSurfaces.length) form.append('mask', mask, 'freeze-mask.png');
+      form.append('image', inputImage, 'render-input.jpg');
+      form.append('mask', mask, 'controlled-edit-mask.png');
       form.append('materials', materialAssignments.join('\n'));
       form.append('furniture', furnitureAssignments.join('\n'));
       form.append('requests', customRequests.join(', '));
@@ -1266,13 +1439,38 @@ export function RoomStudio() {
         form.append('furnitureReference', furnitureReference, furnitureReference.name);
         form.append('furnitureReferenceName', furnitureWithPhoto.name);
       }
-      const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/render-room'), { method: 'POST', body: form }, 240000);
+      const furnitureWithRemotePhoto = placedFurniture.find((item) => item.previewUrl?.startsWith('http'));
+      if (!furnitureReference && furnitureWithRemotePhoto?.previewUrl) {
+        form.append('furnitureReferenceUrl', furnitureWithRemotePhoto.previewUrl);
+        form.append('furnitureReferenceName', furnitureWithRemotePhoto.name);
+      }
+      const { response, result } = await requestJson<{
+        image?: string;
+        message?: string;
+        needsExactOverlay?: boolean;
+        verification?: { referenceLeft: number; referenceTop: number; referenceRight: number; referenceBottom: number } | null;
+      }>(endpoint('/api/render-room'), { method: 'POST', body: form }, 240000);
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Render non disponibile.');
-      const protectedPreview = await protectAiResult(result.image, { frozenSurfaces });
+      let protectedPreview = await protectAiResult(result.image, {
+        editableSurfaces: editableMaterialSurfaces,
+        editableFurniture: placedFurniture,
+        protectedSurfaces,
+        sourceUrl,
+      });
+      const hasExactFurnitureReference = placedFurniture.some((item) => item.previewUrl);
+      const referenceBounds = result.verification ? {
+        left: result.verification.referenceLeft,
+        top: result.verification.referenceTop,
+        right: result.verification.referenceRight,
+        bottom: result.verification.referenceBottom,
+      } : undefined;
+      if (hasExactFurnitureReference) protectedPreview = await overlayExactFurniture(sourceUrl, placedFurniture, referenceBounds);
       processedSurfacesRef.current = surfaces;
-      setProcessedPreview(protectedPreview); setProcessedLabel('Render finale'); setShowProcessedPreview(true);
+      setProcessedPreview(protectedPreview); setProcessedLabel('Render controllato'); setShowProcessedPreview(true);
       setActiveStep(4);
-      setNotice('Render finale pronto. Puoi confrontarlo con la foto originale; le zone Freeze sono identiche.');
+      setNotice(hasExactFurnitureReference
+        ? 'Render controllato pronto: l’app ha composto la foto prodotto esatta nel punto e nella misura scelti. La stanza è rimasta intatta.'
+        : 'Render controllato pronto: fuori dalle aree autorizzate i pixel sono identici; porte, finestre, soffitto e Freeze sono stati ricopiati dalla foto di partenza.');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Non sono riuscito a creare il render.');
       setNotice(null);
@@ -1392,7 +1590,7 @@ export function RoomStudio() {
           <div className="phase-card"><span className="phase-index">0.3</span><div><p className="eyebrow">Modalità prova</p><strong>IA e Freeze pronti</strong><p>Ricerca prodotti, stanza vuota e render vengono elaborati dal server senza mostrare chiavi nell’app.</p></div></div>
         </aside>
       </div>
-      {renderSummaryOpen && <div className="render-modal" role="dialog" aria-modal="true" aria-labelledby="render-summary-title"><div className="render-modal-card"><button className="modal-close" type="button" onClick={() => setRenderSummaryOpen(false)} aria-label="Chiudi riepilogo">×</button><p className="eyebrow">Richiesta pronta</p><h2 id="render-summary-title">Crea il render reale</h2><div className="render-checks"><div><span>Superfici con materiale</span><strong>{surfaces.filter((surface) => surface.materialId).length}</strong></div><div><span>Zone protette</span><strong>{surfaces.filter((surface) => surface.frozen).length}</strong></div><div><span>Mobili posizionati</span><strong>{placedFurniture.length}</strong></div></div><div className="render-list"><strong>Il motore riceverà:</strong><p>{surfaces.filter((surface) => surface.materialId).map((surface) => `${surface.name}: ${materialMap.get(surface.materialId!)?.name ?? 'materiale'}`).join(' · ') || 'Nessun materiale ancora applicato'}</p><p>{placedFurniture.length || customRequests.length ? `Da inserire: ${[...placedFurniture.map((item) => `${item.name} nel punto scelto`), ...customRequests].join(', ')}` : 'Nessun arredo aggiunto'}</p></div><div className="engine-warning"><span>AI</span><p><strong>{aiStatus === 'ready' ? `${aiProviderLabel ?? 'IA'} attiva` : 'L’app riproverà il collegamento'}</strong>La foto sarà elaborata dal server; al termine le aree Freeze verranno ricopiate dall’originale.</p></div><button className="modal-primary" type="button" onClick={() => void createFinalRender()} disabled={isRendering}>{isRendering ? 'Creo il render…' : 'Crea render reale con IA'}</button><button className="modal-secondary" type="button" onClick={() => setRenderSummaryOpen(false)}>Torna alle modifiche</button></div></div>}
+      {renderSummaryOpen && <div className="render-modal" role="dialog" aria-modal="true" aria-labelledby="render-summary-title"><div className="render-modal-card"><button className="modal-close" type="button" onClick={() => setRenderSummaryOpen(false)} aria-label="Chiudi riepilogo">×</button><p className="eyebrow">Richiesta pronta</p><h2 id="render-summary-title">Crea il render reale</h2><div className="render-checks"><div><span>Superfici con materiale</span><strong>{surfaces.filter((surface) => surface.materialId).length}</strong></div><div><span>Zone protette</span><strong>{surfaces.filter((surface) => surface.frozen).length}</strong></div><div><span>Mobili posizionati</span><strong>{placedFurniture.length}</strong></div></div><div className="render-list"><strong>Il motore riceverà:</strong><p>{surfaces.filter((surface) => surface.materialId).map((surface) => `${surface.name}: ${materialMap.get(surface.materialId!)?.name ?? 'materiale'}`).join(' · ') || 'Nessun materiale ancora applicato'}</p><p>{placedFurniture.length || customRequests.length ? `Da inserire: ${[...placedFurniture.map((item) => `${item.name} nel punto scelto`), ...customRequests].join(', ')}` : 'Nessun arredo aggiunto'}</p></div><div className="engine-warning"><span>AI</span><p><strong>{aiStatus === 'ready' ? `${aiProviderLabel ?? 'IA'} attiva` : 'L’app riproverà il collegamento'}</strong>L’IA riceve una maschera limitata a prodotti e mobili. Il resto della stanza, incluse aperture e Freeze, viene ricopiato pixel per pixel.</p></div><button className="modal-primary" type="button" onClick={() => void createFinalRender()} disabled={isRendering}>{isRendering ? 'Creo il render…' : 'Crea render reale con IA'}</button><button className="modal-secondary" type="button" onClick={() => setRenderSummaryOpen(false)}>Torna alle modifiche</button></div></div>}
     </main>
   );
 }
