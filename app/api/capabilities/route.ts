@@ -1,21 +1,15 @@
 import { getAiProvider } from '../../server/ai-provider';
+import { aiCorsHeaders, handleAiOptions } from '../../server/ai-api-guard';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, OAI-Sites-Authorization',
-  'Cache-Control': 'no-store',
-};
-
-export function OPTIONS() {
-  return new Response(null, { status: 204, headers: corsHeaders });
+export function OPTIONS(request: Request) {
+  return handleAiOptions(request, 'GET, OPTIONS');
 }
 
-export function GET() {
+export function GET(request: Request) {
   const provider = getAiProvider();
   return Response.json({
     aiReady: Boolean(provider),
     provider: provider?.id ?? null,
     providerLabel: provider?.label ?? null,
-  }, { headers: corsHeaders });
+  }, { headers: aiCorsHeaders(request, 'GET, OPTIONS') });
 }

@@ -1,23 +1,21 @@
 import { editImage, getAiProvider } from '../../server/ai-provider';
+import { guardAiRequest, handleAiOptions } from '../../server/ai-api-guard';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, OAI-Sites-Authorization',
-};
-
-function json(body: unknown, status = 200) {
-  return Response.json(body, { status, headers: corsHeaders });
+function json(body: unknown, headers: Headers, status = 200) {
+  return Response.json(body, { status, headers });
 }
 
-export function OPTIONS() {
-  return new Response(null, { status: 204, headers: corsHeaders });
+export function OPTIONS(request: Request) {
+  return handleAiOptions(request);
 }
 
 export async function POST(request: Request) {
+  const access = await guardAiRequest(request, 'empty-room');
+  if (!access.ok) return access.response;
+  const { headers } = access;
   const provider = getAiProvider();
   if (!provider) {
-    return json({ code: 'not_configured', message: 'Il servizio IA del server non è momentaneamente disponibile.' }, 503);
+    return json({ code: 'not_configured', message: 'Il servizio IA del server non è momentaneamente disponibile.' }, headers, 503);
   }
 
   try {
@@ -27,9 +25,9 @@ export async function POST(request: Request) {
     const protectedAreas = String(incoming.get('protectedAreas') ?? '').slice(0, 1000);
     const strictRetry = incoming.get('strictRetry') === 'true';
     if (!(image instanceof File) || !image.type.startsWith('image/')) {
-      return json({ message: 'Carica una fotografia valida della stanza.' }, 400);
+      return json({ message: 'Carica una fotografia valida della stanza.' }, headers, 400);
     }
-    if (image.size > 20 * 1024 * 1024) return json({ message: 'La fotografia supera il limite di 20 MB.' }, 413);
+    if (image.size > 20 * 1024 * 1024) return json({ message: 'La fotografia supera il limite di 20 MB.' }, headers, 413);
 
     const prompt = [
       'This is a constrained photographic inpainting task, not a new room generation. Return the complete source photograph and erase only the precise silhouettes of movable objects.',
@@ -55,10 +53,10 @@ export async function POST(request: Request) {
       prompt,
       maskExplanation: 'solid white polygons identify protected Freeze areas that must remain visually unchanged; transparent areas may be reconstructed.',
     });
-    return json({ image: result, provider: provider.id });
+    return json({ image: result, provider: provider.id }, headers);
   } catch (caught) {
     return json({
       message: caught instanceof Error ? caught.message : 'Non sono riuscito a preparare la stanza vuota. Riprova tra poco.',
-    }, 500);
+    }, headers, 500);
   }
 }

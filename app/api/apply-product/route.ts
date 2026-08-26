@@ -1,23 +1,21 @@
 import { editImage, getAiProvider } from '../../server/ai-provider';
+import { guardAiRequest, handleAiOptions } from '../../server/ai-api-guard';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, OAI-Sites-Authorization',
-};
-
-function json(body: unknown, status = 200) {
-  return Response.json(body, { status, headers: corsHeaders });
+function json(body: unknown, headers: Headers, status = 200) {
+  return Response.json(body, { status, headers });
 }
 
-export function OPTIONS() {
-  return new Response(null, { status: 204, headers: corsHeaders });
+export function OPTIONS(request: Request) {
+  return handleAiOptions(request);
 }
 
 export async function POST(request: Request) {
+  const access = await guardAiRequest(request, 'apply-product');
+  if (!access.ok) return access.response;
+  const { headers } = access;
   const provider = getAiProvider();
   if (!provider) {
-    return json({ code: 'not_configured', message: 'Il servizio IA del server non è momentaneamente disponibile.' }, 503);
+    return json({ code: 'not_configured', message: 'Il servizio IA del server non è momentaneamente disponibile.' }, headers, 503);
   }
 
   try {
@@ -34,7 +32,7 @@ export async function POST(request: Request) {
       ? incomingReferenceType
       : 'metadata-only';
     if (!(image instanceof File) || !(mask instanceof File) || mask.type !== 'image/png') {
-      return json({ message: 'Foto o maschera della superficie non valida.' }, 400);
+      return json({ message: 'Foto o maschera della superficie non valida.' }, headers, 400);
     }
 
     const referenceInstruction = referenceType === 'verified-texture'
@@ -63,10 +61,10 @@ export async function POST(request: Request) {
       prompt,
       maskExplanation: 'the transparent polygon is the only editable target; every solid white pixel is protected and must not be changed.',
     });
-    return json({ image: result, provider: provider.id });
+    return json({ image: result, provider: provider.id }, headers);
   } catch (caught) {
     return json({
       message: caught instanceof Error ? caught.message : 'Non sono riuscito ad applicare il prodotto. Riprova tra poco.',
-    }, 500);
+    }, headers, 500);
   }
 }

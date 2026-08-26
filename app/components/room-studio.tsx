@@ -55,17 +55,6 @@ function isNativeApp() {
   return typeof window !== 'undefined' && window.location.protocol === 'capacitor:';
 }
 
-function nativeAccessToken() {
-  return import.meta.env.VITE_SITES_BYPASS_TOKEN?.trim() ?? '';
-}
-
-function withNativeAuth(headers?: HeadersInit) {
-  const next = new Headers(headers);
-  const token = nativeAccessToken();
-  if (isNativeApp() && token) next.set('OAI-Sites-Authorization', `Bearer ${token}`);
-  return next;
-}
-
 function studioEndpoint(path: string) {
   return isNativeApp() ? `${HOSTED_SITE}${path}` : path;
 }
@@ -376,8 +365,7 @@ async function requestJson<T>(url: string, init: RequestInit, timeoutMs: number)
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const headers = withNativeAuth(init.headers);
-    const response = await fetch(url, { ...init, headers, signal: controller.signal });
+    const response = await fetch(url, { ...init, signal: controller.signal });
     const text = await response.text();
     let result: T;
     try {
@@ -459,7 +447,7 @@ export function RoomStudio() {
   useEffect(() => {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), 10000);
-    void fetch(studioEndpoint('/api/capabilities'), { cache: 'no-store', headers: withNativeAuth(), signal: controller.signal })
+    void fetch(studioEndpoint('/api/capabilities'), { cache: 'no-store', signal: controller.signal })
       .then(async (response) => {
         const result = await response.json() as { aiReady?: boolean; providerLabel?: string | null };
         setAiProviderLabel(result.providerLabel ?? null);
@@ -1235,7 +1223,7 @@ export function RoomStudio() {
           {selected ? <><div className="property-section"><div className="property-title"><span>Nome superficie</span><span className="editable-badge">Personalizzabile</span></div><div className="rename-control"><input aria-label="Nome superficie" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} /><button type="button" onClick={renameSelected} disabled={!renameDraft.trim() || renameDraft.trim() === selected.name}>Salva</button></div></div><div className="property-section"><div className="property-title"><span>Protezione superficie</span><span className={`editable-badge ${selected.frozen ? 'frozen' : ''}`}>{selected.frozen ? 'Frozen' : 'Modificabile'}</span></div><button className={`freeze-button ${selected.frozen ? 'is-active' : ''}`} type="button" aria-label={selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'} onClick={toggleFreeze}><span>{selected.frozen ? '◆' : '◇'}</span>{selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'}<small>{selected.frozen ? 'Protetta' : 'Attivo subito'}</small></button><button className="freeze-others-button" type="button" onClick={freezeAllExceptSelected}>Blocca tutto tranne {selected.name}</button></div>
             <div className="property-section product-search-section">
               <div className="property-title"><span>Cerca un prodotto preciso</span><button type="button" onClick={() => materialInputRef.current?.click()}>Carica campione</button></div>
-              {aiStatus !== 'ready' && <div className="ai-setup-banner"><strong>{aiStatus === 'missing' ? 'IA non configurata sul server' : 'IA momentaneamente non raggiungibile'}</strong><span>{isNativeApp() && !nativeAccessToken() ? 'Questa build iOS non contiene il token di accesso al server. Ricostruisci l’app con VITE_SITES_BYPASS_TOKEN, altrimenti Grok non può essere chiamato.' : 'La chiave resta protetta sul server. Puoi comunque premere il comando: l’app riproverà il collegamento.'}</span></div>}
+              {aiStatus !== 'ready' && <div className="ai-setup-banner"><strong>{aiStatus === 'missing' ? 'IA non configurata sul server' : 'IA momentaneamente non raggiungibile'}</strong><span>La chiave resta protetta sul server. Puoi comunque premere il comando: l’app riproverà il collegamento.</span></div>}
               <div className="online-search-control"><input className="material-search" aria-label="Cerca materiali, colori o mobili" value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchProductsOnline(); }} placeholder="Es. Intense Lea white materico" /><button type="button" onClick={() => void searchProductsOnline()} disabled={isSearchingProducts}>{isSearchingProducts ? 'Cerco…' : `Cerca con ${aiProviderLabel ?? 'IA'}`}</button></div>
               <div className="search-scope"><span>Materiali</span><span>Colori</span><span>Arredi</span><span className="internet-ready">Prodotti reali con fonte</span></div>
               {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={`Riferimento ${item.name}`} /> : <span className="catalog-swatch tile" /> }<button type="button" onClick={() => chooseMaterial(item)}><strong>{item.brand} · {item.name}</strong><span className={`reference-badge reference-${item.referenceKind ?? 'metadata-only'}`}>{materialReferenceLabel(item)}</span><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a></div>)}</div>}
