@@ -169,7 +169,8 @@ export async function searchMaterials(provider: AiProvider, query: string) {
   const prompt = [
     'You are the verification engine for a professional Italian architectural-material search application.',
     'Interpret spelling mistakes and informal color descriptions. Detect brand, collection, official product or color, effect, size and finish.',
-    'Known starting manufacturers and aliases: Lea Ceramiche (Lea), Marazzi, Energieker.',
+    'Known starting manufacturers and aliases: Lea Ceramiche (Lea), Marazzi, EnergieKer (Energieker), Ceramica Senio (Senio), Ceramica Euro (Euro). Distinguish the Ceramica Euro manufacturer from retailers named Euro Ceramiche.',
+    'When the query provides separate brand, model or collection, color and product type criteria, require the result to satisfy all non-empty criteria. Do not silently substitute another brand.',
     'Keep this lookup fast: perform one focused web search, open at most one promising official page, then answer immediately.',
     'Search official manufacturer pages and official catalogs first. Never invent a collection, color, format, finish, URL or image.',
     'If the requested color is not official, use correction to explain the nearest verified official alternative in Italian.',

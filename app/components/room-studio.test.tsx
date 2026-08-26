@@ -188,6 +188,27 @@ describe('RoomStudio', () => {
     expect(screen.getByText('pianoforte nero a coda', { selector: '.selected-assets button' })).toBeInTheDocument();
   });
 
+  it('offers separate brand, model, color and product type criteria', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+
+    fireEvent.change(screen.getByLabelText('Marca o produttore'), { target: { value: 'Lea Ceramiche' } });
+    fireEvent.change(screen.getByLabelText('Modello o collezione'), { target: { value: 'Intense' } });
+    fireEvent.change(screen.getByLabelText('Colore prodotto'), { target: { value: 'Clair' } });
+    fireEvent.change(screen.getByLabelText('Tipo prodotto'), { target: { value: 'Pavimenti' } });
+
+    expect(screen.getByLabelText('Marca o produttore')).toHaveValue('Lea Ceramiche');
+    expect(screen.getByLabelText('Modello o collezione')).toHaveValue('Intense');
+    expect(screen.getByLabelText('Colore prodotto')).toHaveValue('Clair');
+    expect(screen.getByLabelText('Tipo prodotto')).toHaveValue('Pavimenti');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Azzera' }));
+    expect(screen.getByLabelText('Marca o produttore')).toHaveValue('');
+    expect(screen.getByLabelText('Modello o collezione')).toHaveValue('');
+    expect(screen.getByLabelText('Colore prodotto')).toHaveValue('');
+  });
+
   it('starts with a four-step workflow and only exposes the simple mode', () => {
     render(<RoomStudio />);
     expect(screen.getByRole('navigation', { name: 'Passaggi del progetto' })).toHaveTextContent('1Foto2Prepara3Prodotti4Render');

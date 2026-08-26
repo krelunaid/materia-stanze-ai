@@ -60,6 +60,7 @@ type PendingFurniture = { name: string; previewUrl?: string; file?: File };
 type DragFurniture = { id: string; pointerId: number };
 type AiStatus = 'checking' | 'ready' | 'missing' | 'unreachable';
 type DetectedSurface = { name: string; kind: SurfaceKind; points: Point[]; confidence: number };
+type ProductSearchCategory = '' | StudioMaterial['category'];
 
 const HOSTED_SITE = 'https://materia-stanze-ai.andreagadducci.chatgpt.site';
 const EMPTY_ROOM_FRAMING_MIN = .64;
@@ -413,6 +414,10 @@ export function RoomStudio() {
   const [draft, setDraft] = useState<Point[]>([]);
   const [material, setMaterial] = useState<StudioMaterial | null>(null);
   const [materialQuery, setMaterialQuery] = useState('');
+  const [searchBrand, setSearchBrand] = useState('');
+  const [searchModel, setSearchModel] = useState('');
+  const [searchColor, setSearchColor] = useState('');
+  const [searchCategory, setSearchCategory] = useState<ProductSearchCategory>('');
   const [onlineMaterials, setOnlineMaterials] = useState<StudioMaterial[]>([]);
   const [placedFurniture, setPlacedFurniture] = useState<PlacedFurniture[]>([]);
   const [pendingFurniture, setPendingFurniture] = useState<PendingFurniture | null>(null);
@@ -504,15 +509,21 @@ export function RoomStudio() {
   const projectName = room?.projectName ?? 'Progetto senza titolo';
   const importedCaption = useMemo(() => room ? `Immagine · ${room.displaySize}` : null, [room]);
   const filteredMaterials = useMemo(() => {
-    const query = materialQuery.trim().toLocaleLowerCase('it');
-    if (!query) return catalogMaterials.slice(0, 4);
-    return catalogMaterials.filter((item) => `${item.name} ${item.category} ${item.description}`.toLocaleLowerCase('it').includes(query));
-  }, [materialQuery]);
+    const query = [materialQuery, searchBrand, searchModel, searchColor].filter(Boolean).join(' ').trim().toLocaleLowerCase('it');
+    const byCategory = searchCategory ? catalogMaterials.filter((item) => item.category === searchCategory) : catalogMaterials;
+    if (!query) return byCategory.slice(0, 4);
+    const tokens = query.split(/\s+/).filter(Boolean);
+    return byCategory.filter((item) => {
+      const haystack = `${item.name} ${item.category} ${item.description}`.toLocaleLowerCase('it');
+      return tokens.every((token) => haystack.includes(token));
+    });
+  }, [materialQuery, searchBrand, searchModel, searchColor, searchCategory]);
   const filteredFurniture = useMemo(() => {
-    const query = materialQuery.trim().toLocaleLowerCase('it');
+    if (searchCategory && searchCategory !== 'Arredi') return [];
+    const query = [materialQuery, searchBrand, searchModel, searchColor].filter(Boolean).join(' ').trim().toLocaleLowerCase('it');
     if (!query) return [];
     return furnitureCatalog.filter((item) => `${item.name} ${item.description}`.toLocaleLowerCase('it').includes(query));
-  }, [materialQuery]);
+  }, [materialQuery, searchBrand, searchModel, searchColor, searchCategory]);
   const materialMap = useMemo(() => new Map(catalogMaterials.concat(onlineMaterials, material ? [material] : []).map((item) => [item.id, item])), [material, onlineMaterials]);
 
   function commitSurfaces(next: Surface[]) {
@@ -739,15 +750,22 @@ export function RoomStudio() {
   }
 
   async function searchProductsOnline() {
+    const criteria = {
+      brand: searchBrand.trim(),
+      model: searchModel.trim(),
+      color: searchColor.trim(),
+      category: searchCategory,
+    };
     const query = materialQuery.trim();
-    if (query.length < 3 || isSearchingProducts) {
-      if (query.length < 3) setError('Scrivi almeno tre caratteri per cercare un prodotto.');
+    const readableSearch = [criteria.brand, criteria.model, criteria.color, criteria.category, query].filter(Boolean).join(' · ');
+    if (readableSearch.length < 3 || isSearchingProducts) {
+      if (readableSearch.length < 3) setError('Inserisci almeno una marca, un modello, un colore oppure una descrizione.');
       return;
     }
-    setIsSearchingProducts(true); setError(null); setNotice(`Cerco “${query}” nei cataloghi online…`); setOnlineMaterials([]);
+    setIsSearchingProducts(true); setError(null); setNotice(`Cerco ${readableSearch} nei cataloghi ufficiali…`); setOnlineMaterials([]);
     try {
       const { response, result } = await requestJson<{ products?: Array<{ name: string; brand: string; collection?: string; category: StudioMaterial['category']; color?: string; effect?: string; format?: string; finish?: string; description: string; sourceUrl: string; productImageUrl?: string; textureImageUrl?: string; roomImageUrls?: string[]; confidence?: number; official?: boolean; correction?: string }>; message?: string }>(endpoint('/api/search-products'), {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query, criteria }),
       }, 60000);
       if (!response.ok) throw new Error(result.message ?? 'Ricerca non disponibile.');
       const found = (result.products ?? []).map((item, index) => {
@@ -785,6 +803,11 @@ export function RoomStudio() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Ricerca non disponibile.'); setNotice(null);
     } finally { setIsSearchingProducts(false); }
+  }
+
+  function resetProductSearch() {
+    setMaterialQuery(''); setSearchBrand(''); setSearchModel(''); setSearchColor(''); setSearchCategory(''); setOnlineMaterials([]); setError(null);
+    setNotice('Criteri di ricerca azzerati.');
   }
 
   function recommendedSurface(item: StudioMaterial) {
@@ -1338,7 +1361,9 @@ export function RoomStudio() {
             <div className="property-section product-search-section">
               <div className="property-title"><span>Cerca un prodotto preciso</span><button type="button" onClick={() => materialInputRef.current?.click()}>Carica campione</button></div>
               {aiStatus !== 'ready' && <div className="ai-setup-banner"><strong>{aiStatus === 'missing' ? 'IA non configurata sul server' : 'IA momentaneamente non raggiungibile'}</strong><span>La chiave resta protetta sul server. Puoi comunque premere il comando: l’app riproverà il collegamento.</span></div>}
-              <div className="online-search-control"><input className="material-search" aria-label="Cerca materiali, colori o mobili" value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchProductsOnline(); }} placeholder="Es. Intense Lea white materico" /><button type="button" onClick={() => void searchProductsOnline()} disabled={isSearchingProducts}>{isSearchingProducts ? 'Cerco…' : `Cerca con ${aiProviderLabel ?? 'IA'}`}</button></div>
+              <div className="guided-search" aria-label="Criteri di ricerca prodotto"><label><span>Marca o produttore</span><input aria-label="Marca o produttore" value={searchBrand} onChange={(event) => setSearchBrand(event.target.value)} placeholder="Es. Lea Ceramiche" /></label><label><span>Modello o collezione</span><input aria-label="Modello o collezione" value={searchModel} onChange={(event) => setSearchModel(event.target.value)} placeholder="Es. Intense" /></label><label><span>Colore</span><input aria-label="Colore prodotto" value={searchColor} onChange={(event) => setSearchColor(event.target.value)} placeholder="Es. Clair" /></label><label><span>Tipo prodotto</span><select aria-label="Tipo prodotto" value={searchCategory} onChange={(event) => setSearchCategory(event.target.value as ProductSearchCategory)}><option value="">Tutti</option><option value="Pavimenti">Pavimenti</option><option value="Rivestimenti">Rivestimenti</option><option value="Colori">Colori parete</option><option value="Arredi">Mobili e arredi</option></select></label></div>
+              <label className="free-search-label"><span>Altri dettagli facoltativi</span><input className="material-search" aria-label="Cerca materiali, colori o mobili" value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchProductsOnline(); }} placeholder="Es. effetto pietra, 60 × 120, opaco" /></label>
+              <div className="guided-search-actions"><button type="button" className="reset-search-button" onClick={resetProductSearch}>Azzera</button><button type="button" className="guided-search-button" onClick={() => void searchProductsOnline()} disabled={isSearchingProducts}>{isSearchingProducts ? 'Cerco nei cataloghi…' : `Cerca con ${aiProviderLabel ?? 'IA'}`}</button></div>
               <div className="search-scope"><span>Materiali</span><span>Colori</span><span>Arredi</span><span className="internet-ready">Prodotti reali con fonte</span></div>
               {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={`Riferimento ${item.name}`} /> : <span className="catalog-swatch tile" /> }<button type="button" onClick={() => chooseMaterial(item)}><strong>{item.brand} · {item.name}</strong><span className={`reference-badge reference-${item.referenceKind ?? 'metadata-only'}`}>{materialReferenceLabel(item)}</span><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a></div>)}</div>}
               <div className="material-results">{filteredMaterials.map((item) => <button type="button" key={item.id} className={`material-result ${material?.id === item.id ? 'is-selected' : ''}`} onClick={() => chooseMaterial(item)}><span className={`catalog-swatch ${item.pattern ?? 'color'}`} style={{ '--swatch-color': item.color } as CSSProperties} /><span><strong>{item.name}</strong><small>{item.category} · {item.description}</small></span></button>)}{filteredFurniture.map((item) => <button type="button" key={item.name} className={`material-result furniture-result ${pendingFurniture?.name === item.name ? 'is-selected' : ''}`} onClick={() => startFurniturePlacement(item.name)}><span className="furniture-icon">＋</span><span><strong>{item.name}</strong><small>Tocca e poi scegli il punto nella stanza · {item.description}</small></span></button>)}{filteredMaterials.length === 0 && filteredFurniture.length === 0 && onlineMaterials.length === 0 && <div className="custom-search-result"><p>Nessun campione incluso corrisponde. Per trovare marca e prodotto esatti serve la ricerca IA attiva.</p><button type="button" onClick={addCustomRequest}>Aggiungi “{materialQuery.trim()}” alla richiesta</button></div>}</div>

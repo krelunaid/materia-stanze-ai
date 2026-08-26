@@ -22,10 +22,23 @@ export async function POST(request: Request) {
   }
 
   try {
-    const body = await request.json() as { query?: string };
+    const body = await request.json() as { query?: string; criteria?: { brand?: string; model?: string; color?: string; category?: string } };
     const query = String(body.query ?? '').trim().slice(0, 300);
-    if (query.length < 3) return json({ message: 'Scrivi almeno tre caratteri.' }, headers, 400);
-    const products = await searchMaterials(provider, query);
+    const allowedCategories = new Set(['Pavimenti', 'Rivestimenti', 'Colori', 'Arredi']);
+    const brand = String(body.criteria?.brand ?? '').trim().slice(0, 100);
+    const model = String(body.criteria?.model ?? '').trim().slice(0, 100);
+    const color = String(body.criteria?.color ?? '').trim().slice(0, 100);
+    const categoryCandidate = String(body.criteria?.category ?? '').trim();
+    const category = allowedCategories.has(categoryCandidate) ? categoryCandidate : '';
+    const structuredQuery = [
+      brand ? `Marca o produttore: ${brand}` : '',
+      model ? `Modello o collezione: ${model}` : '',
+      color ? `Colore richiesto: ${color}` : '',
+      category ? `Tipo prodotto: ${category}` : '',
+      query ? `Altri dettagli: ${query}` : '',
+    ].filter(Boolean).join('\n');
+    if (structuredQuery.length < 3) return json({ message: 'Inserisci almeno un criterio di ricerca.' }, headers, 400);
+    const products = await searchMaterials(provider, structuredQuery);
     return json({ products, provider: provider.id }, headers);
   } catch (caught) {
     return json({
