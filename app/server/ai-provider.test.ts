@@ -28,7 +28,7 @@ describe('getAiProvider', () => {
 
   it('keeps Grok for analysis but prefers OpenAI for masked rendering', () => {
     const environment = { XAI_API_KEY: 'xai-test', OPENAI_API_KEY: 'openai-test' };
-    expect(getAiProvider(environment).id).toBe('grok');
+    expect(getAiProvider(environment)?.id).toBe('grok');
     expect(getRenderProvider(environment)).toEqual({ id: 'openai', label: 'OpenAI', apiKey: 'openai-test' });
   });
 
