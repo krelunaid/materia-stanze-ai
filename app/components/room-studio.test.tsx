@@ -197,16 +197,19 @@ describe('RoomStudio', () => {
     fireEvent.change(screen.getByLabelText('Modello o collezione'), { target: { value: 'Intense' } });
     fireEvent.change(screen.getByLabelText('Colore prodotto'), { target: { value: 'Clair' } });
     fireEvent.change(screen.getByLabelText('Tipo prodotto'), { target: { value: 'Pavimenti' } });
+    fireEvent.change(screen.getByLabelText('Link prodotto'), { target: { value: 'https://example.com/prodotto' } });
 
     expect(screen.getByLabelText('Marca o produttore')).toHaveValue('Lea Ceramiche');
     expect(screen.getByLabelText('Modello o collezione')).toHaveValue('Intense');
     expect(screen.getByLabelText('Colore prodotto')).toHaveValue('Clair');
     expect(screen.getByLabelText('Tipo prodotto')).toHaveValue('Pavimenti');
+    expect(screen.getByLabelText('Link prodotto')).toHaveValue('https://example.com/prodotto');
 
     fireEvent.click(screen.getByRole('button', { name: 'Azzera' }));
     expect(screen.getByLabelText('Marca o produttore')).toHaveValue('');
     expect(screen.getByLabelText('Modello o collezione')).toHaveValue('');
     expect(screen.getByLabelText('Colore prodotto')).toHaveValue('');
+    expect(screen.getByLabelText('Link prodotto')).toHaveValue('');
   });
 
   it('starts with a four-step workflow and only exposes the simple mode', () => {

@@ -165,8 +165,107 @@ function normalizeProducts(products: MaterialProduct[]) {
   }));
 }
 
+function productType(value: unknown) {
+  const types = Array.isArray(value) ? value : [value];
+  return types.some((item) => String(item).toLowerCase() === 'product');
+}
+
+function findStructuredProduct(value: unknown): Record<string, unknown> | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findStructuredProduct(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (productType(record['@type'])) return record;
+  return findStructuredProduct(record['@graph']);
+}
+
+function structuredText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function structuredImage(value: unknown) {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return structuredImage(value[0]);
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return structuredImage(record.url ?? record.contentUrl);
+  }
+  return '';
+}
+
+export async function readProductPage(sourceUrl: string, category: MaterialProduct['category'] = 'Arredi') {
+  const source = validPublicUrl(sourceUrl);
+  if (!source || !source.hostname.includes('.') || source.hostname.endsWith('.local') || source.hostname.endsWith('.internal')) return [];
+  try {
+    const response = await fetch(source, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(8000),
+      headers: { Accept: 'text/html,application/xhtml+xml' },
+    });
+    if (!response.ok || !(response.headers.get('content-type') ?? '').includes('text/html')) return [];
+    const contentLength = Number(response.headers.get('content-length') ?? 0);
+    if (contentLength > 3_000_000) return [];
+    const html = (await response.text()).slice(0, 3_000_000);
+    const scripts = [...html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
+    let product: Record<string, unknown> | null = null;
+    for (const script of scripts) {
+      try {
+        product = findStructuredProduct(JSON.parse(script[1]));
+        if (product) break;
+      } catch { /* Ignore malformed structured data and fall back to Grok. */ }
+    }
+    if (!product) return [];
+    const name = structuredText(product.name);
+    if (!name) return [];
+    const brandValue = product.brand;
+    const brand = typeof brandValue === 'object' && brandValue ? structuredText((brandValue as Record<string, unknown>).name) : structuredText(brandValue);
+    const properties = new Map<string, string>();
+    const additionalProperties = Array.isArray(product.additionalProperty) ? product.additionalProperty : [];
+    for (const item of additionalProperties) {
+      if (!item || typeof item !== 'object') continue;
+      const record = item as Record<string, unknown>;
+      const key = structuredText(record.name).toLocaleLowerCase('it');
+      const unit = structuredText(record.unitCode);
+      const value = structuredText(record.value) || (typeof record.value === 'number' ? String(record.value) : '');
+      if (key && value) properties.set(key, `${value}${unit ? ` ${unit}` : ''}`);
+    }
+    const dimensions = [
+      properties.get('larghezza') ? `L ${properties.get('larghezza')}` : '',
+      properties.get('profondità') ? `P ${properties.get('profondità')}` : '',
+      properties.get('altezza') ? `H ${properties.get('altezza')}` : '',
+    ].filter(Boolean).join(' · ');
+    const productImageUrl = validPublicUrl(structuredImage(product.image))?.toString() ?? '';
+    return normalizeProducts([{
+      name,
+      brand: brand || source.hostname.replace(/^www\./, ''),
+      collection: properties.get('collection') ?? '',
+      category,
+      color: structuredText(product.color),
+      effect: properties.get('effetto') ?? '',
+      format: dimensions || structuredText(product.size),
+      finish: properties.get('finitura') ?? properties.get('finitura della struttura') ?? '',
+      description: structuredText(product.description).replace(/\s+/g, ' ').slice(0, 700),
+      sourceUrl: source.toString(),
+      productImageUrl,
+      textureImageUrl: '',
+      roomImageUrls: [],
+      confidence: .98,
+      official: false,
+      correction: 'Dati letti direttamente dalla pagina prodotto',
+    }]);
+  } catch {
+    return [];
+  }
+}
+
 export async function searchMaterials(provider: AiProvider, query: string) {
   const isFurnitureSearch = /Tipo prodotto:\s*Arredi/i.test(query);
+  const hasExactSourceUrl = /Pagina prodotto esatta:\s*https?:\/\//i.test(query);
   const prompt = [
     'You are the verification engine for a professional Italian architectural-material search application.',
     'Interpret spelling mistakes and informal color descriptions. Detect brand, collection, official product or color, effect, size and finish.',
@@ -178,7 +277,9 @@ export async function searchMaterials(provider: AiProvider, query: string) {
     isFurnitureSearch
       ? 'For furniture, prefer a manufacturer page; otherwise accept a reputable retailer product page, set official=false, and use the actual seller or manufacturer as brand. The source URL must show the exact furniture item. Return a direct product image only when it is clearly tied to that exact page.'
       : 'Use manufacturer-owned sources and images for materials.',
-    'Keep this lookup fast: perform one focused web search, open at most two promising pages, then answer immediately.',
+    hasExactSourceUrl
+      ? 'The user supplied the exact product page. Open that URL directly, do not perform a general search, extract only the product shown there, and answer immediately.'
+      : 'Keep this lookup fast: perform one focused web search, open at most two promising pages, then answer immediately.',
     'Never invent a collection, color, format, finish, URL or image.',
     'If the requested color is not official, use correction to explain the nearest verified official alternative in Italian.',
     'The product source URL must support the exact association.',
@@ -199,7 +300,7 @@ export async function searchMaterials(provider: AiProvider, query: string) {
       model: 'grok-4.6',
       input: prompt,
       tools: [{ type: 'web_search' }],
-      max_tool_calls: isFurnitureSearch ? 4 : 2,
+      max_tool_calls: hasExactSourceUrl ? 1 : isFurnitureSearch ? 4 : 2,
       max_output_tokens: 1800,
       reasoning: { effort: 'low' },
       text: { format: { type: 'json_schema', name: 'verified_material_products', schema: productSchema, strict: true } },

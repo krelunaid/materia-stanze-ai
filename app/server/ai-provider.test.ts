@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chooseSupportedImageAspectRatio, detectRoomSurfaces, editImage, getAiProvider, normalizeRoomSurfaces, orderQuadClockwise, reconcileRoomSurfaceCandidates, searchMaterials } from './ai-provider';
+import { chooseSupportedImageAspectRatio, detectRoomSurfaces, editImage, getAiProvider, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, searchMaterials } from './ai-provider';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -98,6 +98,37 @@ describe('getAiProvider', () => {
     expect(payload.max_tool_calls).toBe(4);
     expect(payload.input).toContain('can be a style rather than a brand or model');
     expect(payload.input).toContain('established furniture retailers');
+  });
+
+  it('opens an exact product link with one Grok tool call', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({ products: [] }) }] }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await searchMaterials(
+      { id: 'grok', label: 'Grok', apiKey: 'xai-test' },
+      'Tipo prodotto: Arredi\nPagina prodotto esatta: https://www.sklum.com/it/prodotto-miller',
+    );
+
+    const payload = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
+    expect(payload.max_tool_calls).toBe(1);
+    expect(payload.input).toContain('Open that URL directly, do not perform a general search');
+  });
+
+  it('reads schema.org Product data directly from an exact page', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(`<!doctype html><script type="application/ld+json">${JSON.stringify({
+      '@context': 'https://schema.org', '@type': 'Product', name: 'Mobile TV Miller', brand: { '@type': 'Brand', name: 'SKLUM' },
+      image: 'https://cdn.sklum.com/miller.jpg', description: 'Mobile TV in legno di mango.',
+      additionalProperty: [
+        { '@type': 'PropertyValue', name: 'Collection', value: 'Miller' },
+        { '@type': 'PropertyValue', name: 'Finitura', value: 'Lacca acrilica' },
+        { '@type': 'QuantitativeValue', name: 'Larghezza', value: 215, unitCode: 'cm' },
+      ],
+    })}</script>`, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
+
+    await expect(readProductPage('https://www.sklum.com/prodotto-miller', 'Arredi')).resolves.toEqual([
+      expect.objectContaining({ name: 'Mobile TV Miller', brand: 'SKLUM', collection: 'Miller', format: 'L 215 cm', productImageUrl: 'https://cdn.sklum.com/miller.jpg', confidence: .98 }),
+    ]);
   });
 
   it('asks Grok vision for normalized architectural polygons', async () => {

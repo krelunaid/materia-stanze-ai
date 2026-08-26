@@ -418,6 +418,7 @@ export function RoomStudio() {
   const [searchModel, setSearchModel] = useState('');
   const [searchColor, setSearchColor] = useState('');
   const [searchCategory, setSearchCategory] = useState<ProductSearchCategory>('');
+  const [searchSourceUrl, setSearchSourceUrl] = useState('');
   const [onlineMaterials, setOnlineMaterials] = useState<StudioMaterial[]>([]);
   const [placedFurniture, setPlacedFurniture] = useState<PlacedFurniture[]>([]);
   const [pendingFurniture, setPendingFurniture] = useState<PendingFurniture | null>(null);
@@ -756,9 +757,10 @@ export function RoomStudio() {
       model: searchModel.trim(),
       color: searchColor.trim(),
       category: searchCategory,
+      sourceUrl: searchSourceUrl.trim(),
     };
     const query = materialQuery.trim();
-    const readableSearch = [criteria.brand, criteria.model, criteria.color, criteria.category, query].filter(Boolean).join(' · ');
+    const readableSearch = [criteria.brand, criteria.model, criteria.color, criteria.category, query, criteria.sourceUrl].filter(Boolean).join(' · ');
     if (readableSearch.length < 3 || isSearchingProducts) {
       if (readableSearch.length < 3) setError('Inserisci almeno una marca, un modello, un colore oppure una descrizione.');
       return;
@@ -807,7 +809,7 @@ export function RoomStudio() {
   }
 
   function resetProductSearch() {
-    setMaterialQuery(''); setSearchBrand(''); setSearchModel(''); setSearchColor(''); setSearchCategory(''); setOnlineMaterials([]); setError(null);
+    setMaterialQuery(''); setSearchBrand(''); setSearchModel(''); setSearchColor(''); setSearchCategory(''); setSearchSourceUrl(''); setOnlineMaterials([]); setError(null);
     setNotice('Criteri di ricerca azzerati.');
   }
 
@@ -1373,6 +1375,7 @@ export function RoomStudio() {
               {aiStatus !== 'ready' && <div className="ai-setup-banner"><strong>{aiStatus === 'missing' ? 'IA non configurata sul server' : 'IA momentaneamente non raggiungibile'}</strong><span>La chiave resta protetta sul server. Puoi comunque premere il comando: l’app riproverà il collegamento.</span></div>}
               <div className="guided-search" aria-label="Criteri di ricerca prodotto"><label><span>Marca o produttore</span><input aria-label="Marca o produttore" value={searchBrand} onChange={(event) => setSearchBrand(event.target.value)} placeholder="Es. Lea Ceramiche" /></label><label><span>Modello o collezione</span><input aria-label="Modello o collezione" value={searchModel} onChange={(event) => setSearchModel(event.target.value)} placeholder="Es. Intense" /></label><label><span>Colore</span><input aria-label="Colore prodotto" value={searchColor} onChange={(event) => setSearchColor(event.target.value)} placeholder="Es. Clair" /></label><label><span>Tipo prodotto</span><select aria-label="Tipo prodotto" value={searchCategory} onChange={(event) => setSearchCategory(event.target.value as ProductSearchCategory)}><option value="">Tutti</option><option value="Pavimenti">Pavimenti</option><option value="Rivestimenti">Rivestimenti</option><option value="Colori">Colori parete</option><option value="Arredi">Mobili e arredi</option></select></label></div>
               <label className="free-search-label"><span>Altri dettagli facoltativi</span><input className="material-search" aria-label="Cerca materiali, colori o mobili" value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchProductsOnline(); }} placeholder="Es. effetto pietra, 60 × 120, opaco" /></label>
+              <label className="free-search-label"><span>Link prodotto facoltativo · ricerca più veloce</span><input className="material-search" type="url" inputMode="url" aria-label="Link prodotto" value={searchSourceUrl} onChange={(event) => setSearchSourceUrl(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchProductsOnline(); }} placeholder="https://sito-produttore.it/prodotto" /></label>
               <div className="guided-search-actions"><button type="button" className="reset-search-button" onClick={resetProductSearch}>Azzera</button><button type="button" className="guided-search-button" onClick={() => void searchProductsOnline()} disabled={isSearchingProducts}>{isSearchingProducts ? 'Cerco nei cataloghi…' : `Cerca con ${aiProviderLabel ?? 'IA'}`}</button></div>
               <div className="search-scope"><span>Materiali</span><span>Colori</span><span>Arredi</span><span className="internet-ready">Prodotti reali con fonte</span></div>
               {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={`Riferimento ${item.name}`} /> : <span className="catalog-swatch tile" /> }<button type="button" onClick={() => chooseOnlineProduct(item)}><strong>{item.brand} · {item.name}</strong><span className={`reference-badge reference-${item.referenceKind ?? 'metadata-only'}`}>{materialReferenceLabel(item)}</span><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a></div>)}</div>}
