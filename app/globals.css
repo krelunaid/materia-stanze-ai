@@ -205,6 +205,32 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .selected-assets { display:flex; flex-wrap:wrap; gap:6px; }
 .selected-assets button { display:flex; align-items:center; gap:7px; padding:7px 8px; border:1px solid #bfd5cf; border-radius:8px; background:#eef7f4; color:var(--accent); font-size:9px; font-weight:700; cursor:pointer; }
 .selected-assets span { font-size:13px; line-height:1; }
+.selected-assets button.is-selected { border-color:var(--accent); background:#dfeee9; box-shadow:inset 0 0 0 1px var(--accent); }
+.upload-furniture-button { width:100%; min-height:42px; margin:0 0 9px; border:1px dashed #86b7ac; border-radius:10px; background:#f0f8f5; color:var(--accent); font-size:10px; font-weight:800; cursor:pointer; }
+.furniture-controls { display:grid; gap:8px; margin-top:10px; padding:11px; border:1px solid #b9d4cd; border-radius:12px; background:#f3f9f7; }
+.furniture-controls>div:first-child strong,.furniture-controls>div:first-child span { display:block; }
+.furniture-controls>div:first-child strong { font-size:11px; }
+.furniture-controls>div:first-child span { margin-top:3px; color:#6f7b76; font-size:8px; }
+.furniture-control-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+.furniture-control-grid button,.freeze-furniture-button,.remove-furniture-button { min-height:36px; border:1px solid #cbdad5; border-radius:9px; background:#fff; color:var(--ink); font-size:9px; font-weight:750; cursor:pointer; }
+.furniture-control-grid button:disabled,.remove-furniture-button:disabled { opacity:.42; cursor:not-allowed; }
+.freeze-furniture-button.is-active { border-color:#d5a85d; background:#fff5e2; color:#785822; }
+.remove-furniture-button { border-color:#ead4d1; color:#95544b; }
+.furniture-placement-layer { position:absolute; z-index:4; inset:0; pointer-events:none; }
+.placed-furniture { position:absolute; display:grid; place-items:center; min-width:74px; min-height:58px; padding:7px; border:2px dashed rgba(255,255,255,.95); border-radius:12px; background:rgba(19,35,32,.76); color:#fff; box-shadow:0 5px 18px rgba(0,0,0,.28); pointer-events:auto; touch-action:none; cursor:grab; transform-origin:50% 100%; }
+.placed-furniture:active { cursor:grabbing; }
+.placed-furniture.is-selected { border:3px solid #d7f05c; background:rgba(19,35,32,.88); }
+.placed-furniture.is-frozen { border-style:solid; border-color:#e6bd74; cursor:not-allowed; }
+.placed-furniture img { width:100%; max-height:86px; border-radius:7px; object-fit:contain; background:#fff; }
+.placed-furniture strong { display:block; max-width:100%; margin-top:4px; overflow:hidden; font-size:8px; text-overflow:ellipsis; white-space:nowrap; }
+.placed-furniture-placeholder { font-size:24px; line-height:1; }
+.placed-furniture i { position:absolute; left:50%; bottom:-9px; width:16px; height:16px; border:3px solid #fff; border-radius:50%; background:#d7f05c; transform:translateX(-50%); box-shadow:0 2px 6px rgba(0,0,0,.28); }
+.canvas.is-placing-furniture { cursor:crosshair; box-shadow:0 0 0 4px #d7f05c,0 18px 45px rgba(31,49,44,.14); }
+.placement-hint { position:absolute; z-index:8; top:12px; left:50%; display:grid; grid-template-columns:auto auto; align-items:center; gap:2px 10px; width:min(360px,calc(100% - 24px)); padding:10px 12px; border-radius:12px; background:rgba(20,36,33,.94); color:#fff; text-align:left; transform:translateX(-50%); box-shadow:0 8px 24px rgba(0,0,0,.28); }
+.placement-hint strong,.placement-hint span { display:block; }
+.placement-hint strong { font-size:11px; }
+.placement-hint span { grid-column:1; color:#dbe7e3; font-size:8px; }
+.placement-hint button { grid-column:2; grid-row:1 / 3; min-height:34px; padding:0 10px; border:0; border-radius:8px; background:#fff; color:var(--ink); font-size:9px; font-weight:800; cursor:pointer; }
 .furniture-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
 .furniture-grid button { min-height:34px; padding:6px 8px; border:1px solid #dbe1dd; border-radius:9px; background:#f8faf8; font-size:9px; font-weight:650; text-align:left; cursor:pointer; }
 .furniture-grid button.is-selected { border-color:#8dbbb0; background:var(--accent-soft); color:var(--accent); }
@@ -335,6 +361,8 @@ html,body { height:100%; overflow:hidden; overscroll-behavior:none; }
   .simple-mode.step-3 .properties-panel { position:static; order:2; display:block; width:100%; padding:20px; border:0; border-top:1px solid var(--line); overflow:visible; }
   .product-search-section,.online-search-control,.material-results,.online-results,.custom-color { min-width:0; max-width:100%; }
   .status-bar button { min-height:44px; }
+  .placed-furniture { min-width:82px; min-height:62px; }
+  .furniture-control-grid button,.freeze-furniture-button,.remove-furniture-button,.upload-furniture-button { min-height:46px; }
 }
 
 @media (max-width:520px) {

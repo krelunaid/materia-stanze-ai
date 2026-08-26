@@ -662,6 +662,7 @@ export async function editImage(provider: AiProvider, input: {
   source: File;
   mask?: File | null;
   referenceImageUrl?: string | null;
+  referenceImageFile?: File | null;
   prompt: string;
   maskExplanation?: string;
 }) {
@@ -671,12 +672,14 @@ export async function editImage(provider: AiProvider, input: {
       { type: 'image_url', url: await fileToDataUri(input.source) },
     ];
     if (input.mask) images.push({ type: 'image_url', url: await fileToDataUri(input.mask) });
+    if (input.referenceImageFile && images.length < 3) images.push({ type: 'image_url', url: await fileToDataUri(input.referenceImageFile) });
     const reference = input.referenceImageUrl ? validPublicUrl(input.referenceImageUrl) : null;
     if (reference && images.length < 3) images.push({ type: 'image_url', url: reference.toString() });
     const prompt = [
       input.prompt,
       input.mask && input.maskExplanation ? `The second image is a technical guide, not part of the room: ${input.maskExplanation}` : '',
-      reference ? `The ${input.mask ? 'third' : 'second'} image is the exact product reference.` : '',
+      input.referenceImageFile ? 'One additional image is the exact furniture reference selected by the user.' : '',
+      reference && images.some((image) => image.url === reference.toString()) ? 'One additional image is the exact material reference selected by the user.' : '',
     ].filter(Boolean).join(' ');
     const response = await fetch('https://api.x.ai/v1/images/edits', {
       method: 'POST',
@@ -700,6 +703,7 @@ export async function editImage(provider: AiProvider, input: {
   const form = new FormData();
   form.append('model', 'gpt-image-2');
   form.append('image[]', input.source, input.source.name || 'room.png');
+  if (input.referenceImageFile) form.append('image[]', input.referenceImageFile, input.referenceImageFile.name || 'furniture-reference.jpg');
   if (input.referenceImageUrl) {
     const reference = await referenceBlob(input.referenceImageUrl);
     if (reference) form.append('image[]', reference, 'product-reference.jpg');

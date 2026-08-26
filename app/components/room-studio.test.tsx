@@ -162,9 +162,12 @@ describe('RoomStudio', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Applica a Muro 1' }));
     fireEvent.change(search, { target: { value: 'divano' } });
     fireEvent.click(screen.getByRole('button', { name: /Divano chiaro/ }));
+    const canvas = document.querySelector('.canvas') as HTMLDivElement;
+    vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+    fireEvent.click(canvas, { clientX: 650, clientY: 500 });
     fireEvent.click(screen.getByRole('button', { name: 'Prova flusso render' }));
     expect(screen.getByRole('dialog', { name: 'Crea il render reale' })).toHaveTextContent('Muro 1: Verde salvia');
-    expect(screen.getByRole('dialog', { name: 'Crea il render reale' })).toHaveTextContent('Da inserire: Divano chiaro');
+    expect(screen.getByRole('dialog', { name: 'Crea il render reale' })).toHaveTextContent('Da inserire: Divano chiaro nel punto scelto');
     expect(screen.getByRole('dialog', { name: 'Crea il render reale' })).toHaveTextContent('L’app riproverà il collegamento');
     expect(screen.getByRole('button', { name: 'Crea render reale con IA' })).toBeInTheDocument();
   });
@@ -172,10 +175,14 @@ describe('RoomStudio', () => {
   it('uses one search for furniture and accepts a free-form render request', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
     const search = screen.getByLabelText('Cerca materiali, colori o mobili');
     fireEvent.change(search, { target: { value: 'cucina' } });
     fireEvent.click(screen.getByRole('button', { name: /Cucina/ }));
-    expect(screen.getByText('Cucina', { selector: '.selected-assets button' })).toBeInTheDocument();
+    const canvas = document.querySelector('.canvas') as HTMLDivElement;
+    vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+    fireEvent.click(canvas, { clientX: 500, clientY: 470 });
+    expect(screen.getByRole('button', { name: 'Sposta Cucina' })).toBeInTheDocument();
     fireEvent.change(search, { target: { value: 'pianoforte nero a coda' } });
     fireEvent.click(screen.getByRole('button', { name: /Aggiungi “pianoforte nero a coda” alla richiesta/ }));
     expect(screen.getByText('pianoforte nero a coda', { selector: '.selected-assets button' })).toBeInTheDocument();

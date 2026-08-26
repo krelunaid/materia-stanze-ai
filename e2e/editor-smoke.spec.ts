@@ -33,3 +33,25 @@ test('keeps iPhone form controls at a non-zooming size', async ({ page }) => {
   const overflow = await page.locator('main').evaluate((element) => element.scrollWidth - element.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
 });
+
+test('places, resizes and locks furniture at a chosen room point', async ({ page }) => {
+  await page.setViewportSize({ width: 834, height: 1112 });
+  await page.goto('/');
+  await expect(page.locator('main')).toHaveAttribute('data-hydrated', 'true');
+  await page.getByRole('button', { name: 'Prova con la stanza esempio' }).click();
+  await page.getByRole('button', { name: 'Continua ai prodotti' }).click();
+  const search = page.getByRole('textbox', { name: 'Cerca materiali, colori o mobili' });
+  await search.fill('divano');
+  await page.getByRole('button', { name: /Divano chiaro/ }).click();
+  await expect(page.getByText('Tocca il punto sul pavimento')).toBeVisible();
+
+  const canvas = page.locator('.canvas');
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error('Anteprima stanza non disponibile');
+  await canvas.click({ position: { x: box.width * .62, y: box.height * .78 } });
+
+  await expect(page.getByRole('button', { name: 'Sposta Divano chiaro' })).toBeVisible();
+  await page.getByRole('button', { name: 'Ingrandisci mobile' }).click();
+  await page.getByRole('button', { name: '◆ Blocca posizione' }).click();
+  await expect(page.getByText('Posizione bloccata')).toBeVisible();
+});
