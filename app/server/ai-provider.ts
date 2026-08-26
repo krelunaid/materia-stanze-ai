@@ -6,6 +6,12 @@ export type AiProvider = {
   apiKey: string;
 };
 
+export type ProductCleaner = {
+  id: 'bria' | 'grok';
+  label: 'BRIA RMBG 2.0' | 'Grok Imagine 2.0';
+  apiKey: string;
+};
+
 export type MaterialProduct = {
   name: string;
   brand: string;
@@ -43,6 +49,31 @@ type ImagePayload = {
   error?: { message?: string };
 };
 
+export type FurnitureRenderVerification = {
+  visible: boolean;
+  atRequestedAnchor: boolean;
+  resemblesReference: boolean;
+  physicallyGrounded: boolean;
+  structurallyComplete: boolean;
+  realisticLighting: boolean;
+  confidence: number;
+  reason: string;
+  referenceLeft: number;
+  referenceTop: number;
+  referenceRight: number;
+  referenceBottom: number;
+};
+
+export function acceptsFurnitureRender(verification: FurnitureRenderVerification, referenceRequired: boolean) {
+  return verification.visible
+    && verification.atRequestedAnchor
+    && (!referenceRequired || verification.resemblesReference)
+    && verification.physicallyGrounded
+    && verification.structurallyComplete
+    && verification.realisticLighting
+    && verification.confidence >= .8;
+}
+
 const furnitureVerificationSchema = {
   type: 'object',
   additionalProperties: false,
@@ -50,6 +81,9 @@ const furnitureVerificationSchema = {
     visible: { type: 'boolean' },
     atRequestedAnchor: { type: 'boolean' },
     resemblesReference: { type: 'boolean' },
+    physicallyGrounded: { type: 'boolean' },
+    structurallyComplete: { type: 'boolean' },
+    realisticLighting: { type: 'boolean' },
     confidence: { type: 'number', minimum: 0, maximum: 1 },
     reason: { type: 'string' },
     referenceLeft: { type: 'number', minimum: 0, maximum: 1 },
@@ -57,7 +91,7 @@ const furnitureVerificationSchema = {
     referenceRight: { type: 'number', minimum: 0, maximum: 1 },
     referenceBottom: { type: 'number', minimum: 0, maximum: 1 },
   },
-  required: ['visible', 'atRequestedAnchor', 'resemblesReference', 'confidence', 'reason', 'referenceLeft', 'referenceTop', 'referenceRight', 'referenceBottom'],
+  required: ['visible', 'atRequestedAnchor', 'resemblesReference', 'physicallyGrounded', 'structurallyComplete', 'realisticLighting', 'confidence', 'reason', 'referenceLeft', 'referenceTop', 'referenceRight', 'referenceBottom'],
 } as const;
 
 const productBoundsSchema = {
@@ -155,6 +189,34 @@ export function getAiProvider(environment: Record<string, string | undefined> = 
   }
   if (environment.XAI_API_KEY) return { id: 'grok', label: 'Grok', apiKey: environment.XAI_API_KEY };
   if (environment.OPENAI_API_KEY) return { id: 'openai', label: 'OpenAI', apiKey: environment.OPENAI_API_KEY };
+  return null;
+}
+
+export function getRenderProvider(environment: Record<string, string | undefined> = process.env): AiProvider | null {
+  const requested = environment.RENDER_PROVIDER?.trim().toLowerCase();
+  if (requested === 'openai') {
+    return environment.OPENAI_API_KEY
+      ? { id: 'openai', label: 'OpenAI', apiKey: environment.OPENAI_API_KEY }
+      : getAiProvider(environment);
+  }
+  if (requested === 'grok' || requested === 'xai') {
+    return environment.XAI_API_KEY ? { id: 'grok', label: 'Grok', apiKey: environment.XAI_API_KEY } : null;
+  }
+  if (environment.OPENAI_API_KEY) return { id: 'openai', label: 'OpenAI', apiKey: environment.OPENAI_API_KEY };
+  return getAiProvider(environment);
+}
+
+export function getProductCleaner(environment: Record<string, string | undefined> = process.env): ProductCleaner | null {
+  const requested = environment.PRODUCT_CLEANER?.trim().toLowerCase();
+  if (requested === 'bria') {
+    if (environment.BRIA_API_KEY) return { id: 'bria', label: 'BRIA RMBG 2.0', apiKey: environment.BRIA_API_KEY };
+    return environment.XAI_API_KEY ? { id: 'grok', label: 'Grok Imagine 2.0', apiKey: environment.XAI_API_KEY } : null;
+  }
+  if (requested === 'grok' || requested === 'xai') {
+    return environment.XAI_API_KEY ? { id: 'grok', label: 'Grok Imagine 2.0', apiKey: environment.XAI_API_KEY } : null;
+  }
+  if (environment.BRIA_API_KEY) return { id: 'bria', label: 'BRIA RMBG 2.0', apiKey: environment.BRIA_API_KEY };
+  if (environment.XAI_API_KEY) return { id: 'grok', label: 'Grok Imagine 2.0', apiKey: environment.XAI_API_KEY };
   return null;
 }
 
@@ -788,6 +850,23 @@ async function remoteImageToDataUri(value: string) {
   return `data:${type.split(';')[0]};base64,${bytesToBase64(bytes)}`;
 }
 
+export async function removeFurnitureBackgroundWithBria(apiKey: string, imageUrl: string) {
+  const reference = validPublicUrl(imageUrl);
+  if (!reference) throw new Error('Foto prodotto non valida.');
+  const response = await fetch('https://engine.prod.bria-api.com/v2/image/edit/remove_background', {
+    method: 'POST',
+    headers: { api_token: apiKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: reference.toString(), preserve_alpha: true, sync: true }),
+    signal: AbortSignal.timeout(90000),
+  });
+  const payload = await response.json() as { result?: { image_url?: string }; error?: { message?: string }; message?: string };
+  const resultUrl = payload.result?.image_url;
+  if (!response.ok || !resultUrl) {
+    throw new Error(payload.error?.message ?? payload.message ?? 'BRIA non ha scontornato il prodotto.');
+  }
+  return remoteImageToDataUri(resultUrl);
+}
+
 async function referenceBlob(value: string) {
   const url = validPublicUrl(value);
   if (!url) return null;
@@ -864,6 +943,35 @@ export async function editImage(provider: AiProvider, input: {
   return `data:image/png;base64,${payload.data[0].b64_json}`;
 }
 
+export async function cleanFurnitureReference(provider: AiProvider, imageUrl: string, productName: string) {
+  const reference = validPublicUrl(imageUrl);
+  if (!reference) throw new Error('Foto prodotto non valida.');
+  if (provider.id !== 'grok') throw new Error('La pulizia automatica del prodotto richiede Grok Imagine.');
+  const response = await fetch('https://api.x.ai/v1/images/edits', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'grok-imagine-image-2.0',
+      image: { type: 'image_url', url: reference.toString() },
+      prompt: [
+        `Create a clean e-commerce isolation of the exact furniture product “${productName}” shown in the source photograph.`,
+        'Preserve the product identity, proportions, number and shape of doors, handles, legs, wood grain, color, finish and camera-facing orientation exactly.',
+        'Remove every other object: books, lamps, artwork, decorations, walls, floor, rugs, foreground furniture, labels, arrows, dimension text and all original cast shadows.',
+        'Show the complete furniture body and every leg, fully inside the frame with generous empty margin. Do not crop, redesign, repair, add or remove product parts.',
+        'Place it alone on a perfectly uniform pure white (#FFFFFF) background with no horizon, no floor line, no reflection and no shadow. Photorealistic catalog cutout, no text.',
+      ].join('\n'),
+    }),
+    signal: AbortSignal.timeout(90000),
+  });
+  const payload = await response.json() as ImagePayload;
+  const result = payload.data?.[0];
+  if (!response.ok || (!result?.url && !result?.b64_json)) {
+    throw new Error(payload.error?.message ?? 'Grok non ha ripulito la foto del mobile.');
+  }
+  if (result.b64_json) return `data:${result.mime_type ?? 'image/jpeg'};base64,${result.b64_json}`;
+  return remoteImageToDataUri(result.url as string);
+}
+
 export async function verifyFurniturePlacement(provider: AiProvider, input: {
   source: File;
   renderedImage: string;
@@ -887,6 +995,9 @@ export async function verifyFurniturePlacement(provider: AiProvider, input: {
       'Set visible=true only if every requested furniture item is clearly visible in image 2.',
       'Set atRequestedAnchor=true only if each floor-contact point is close to the requested x/y percentage and the visible size is close to the requested width.',
       'Set resemblesReference=true only if the rendered item preserves the recognizable shape, proportions, material and color of the supplied product reference. If no reference is present, judge the requested description conservatively.',
+      'Set physicallyGrounded=true only if every leg or base visibly meets the detected floor plane, without floating, sinking or wall-mounting, and the contact shadow follows the room light.',
+      'Set structurallyComplete=true only if no leg, door, handle, edge or other visible product part from the reference was removed, merged, cropped or invented.',
+      'Set realisticLighting=true only if perspective, illumination, color temperature, sharpness and shadows make the furniture look photographed inside image 1 rather than pasted on top.',
       'When image 3 is present, return the tight normalized bounding box of the furniture body only in referenceLeft/referenceTop/referenceRight/referenceBottom. Exclude wall, floor, artwork, lamps, books, labels, arrows, dimension text, shadows and foreground objects. If no reference exists, return 0,0,1,1.',
       'A room that looks unchanged or omits the item must fail. Return only the structured result.',
     ].join('\n'),
@@ -909,17 +1020,7 @@ export async function verifyFurniturePlacement(provider: AiProvider, input: {
     });
     const payload = await response.json() as ResponsesPayload;
     if (!response.ok) throw new Error(payload.error?.message ?? 'Verifica del mobile non disponibile.');
-    return JSON.parse(responseText(payload)) as {
-      visible: boolean;
-      atRequestedAnchor: boolean;
-      resemblesReference: boolean;
-      confidence: number;
-      reason: string;
-      referenceLeft: number;
-      referenceTop: number;
-      referenceRight: number;
-      referenceBottom: number;
-    };
+    return JSON.parse(responseText(payload)) as FurnitureRenderVerification;
   } finally {
     clearTimeout(timeout);
   }

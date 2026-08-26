@@ -1,4 +1,4 @@
-import { editImage, getAiProvider } from '../../server/ai-provider';
+import { editImage, getRenderProvider } from '../../server/ai-provider';
 import { guardAiRequest, handleAiOptions } from '../../server/ai-api-guard';
 
 function json(body: unknown, headers: Headers, status = 200) {
@@ -13,7 +13,7 @@ export async function POST(request: Request) {
   const access = await guardAiRequest(request, 'apply-product');
   if (!access.ok) return access.response;
   const { headers } = access;
-  const provider = getAiProvider();
+  const provider = getRenderProvider();
   if (!provider) {
     return json({ code: 'not_configured', message: 'Il servizio IA del server non è momentaneamente disponibile.' }, headers, 503);
   }
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     const protectedAreas = String(incoming.get('protectedAreas') ?? '').slice(0, 1000);
     const imageUrl = String(incoming.get('imageUrl') ?? '').slice(0, 2000);
     const incomingReferenceType = String(incoming.get('referenceType') ?? 'metadata-only');
-    const referenceType = ['verified-texture', 'official-product-image', 'uploaded-sample'].includes(incomingReferenceType)
+    const referenceType = ['verified-texture', 'uploaded-sample'].includes(incomingReferenceType)
       ? incomingReferenceType
       : 'metadata-only';
     if (!(image instanceof File) || !(mask instanceof File) || mask.type !== 'image/png') {
@@ -37,11 +37,9 @@ export async function POST(request: Request) {
 
     const referenceInstruction = referenceType === 'verified-texture'
       ? 'Use the supplied verified flat texture as the exact visual reference for color, grain, pattern and finish.'
-      : referenceType === 'official-product-image'
-        ? 'Use the supplied official product sample as the color and finish reference. Reconstruct repetition and scale conservatively; do not invent distinctive veins or graphics that are not visible in the sample.'
-        : referenceType === 'uploaded-sample'
+      : referenceType === 'uploaded-sample'
           ? 'Use the user-supplied material sample as the visual reference for color, grain, pattern and finish.'
-          : 'No verified visual sample is available. Create only a clearly approximate visualization from the verified metadata; keep the appearance restrained and do not invent distinctive product graphics.';
+          : 'No verified flat texture is available. Use only the written metadata to construct a clean, continuous material pattern. Never copy or repeat furniture, people, props, room scenes, catalog backgrounds, labels or shadows from a product photograph.';
 
     const prompt = [
       `Edit only the area identified for ${targetName}.`,
@@ -57,7 +55,7 @@ export async function POST(request: Request) {
     const result = await editImage(provider, {
       source: image,
       mask,
-      referenceImageUrl: imageUrl || null,
+      referenceImageUrl: referenceType === 'metadata-only' ? null : imageUrl || null,
       prompt,
       maskExplanation: 'the transparent polygon is the only editable target; every solid white pixel is protected and must not be changed.',
     });

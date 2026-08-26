@@ -18,6 +18,7 @@ export function removeConnectedProductBackground(
   width: number,
   height: number,
   bounds?: NormalizedProductBounds,
+  expectedWidthHeightRatio?: number,
 ) {
   const data = new Uint8ClampedArray(source);
   const requestedLeft = bounds ? Math.floor(bounds.left * width) : 0;
@@ -112,6 +113,128 @@ export function removeConnectedProductBackground(
       const touchesBackground = data[offset(x - 1, y) + 3] === 0 || data[offset(x + 1, y) + 3] === 0
         || data[offset(x, y - 1) + 3] === 0 || data[offset(x, y + 1) + 3] === 0;
       if (touchesBackground) data[pixelOffset + 3] = Math.min(data[pixelOffset + 3], 190);
+    }
+  }
+
+  // Catalog scenes often contain books, lamps and cast shadows inside the AI
+  // rectangle. Keep the largest connected foreground object intact instead of
+  // cropping it by an estimated physical aspect ratio, which can cut legs or tops.
+  const labels = new Int32Array(width * height);
+  const componentQueue = new Int32Array(Math.max(1, (right - left + 1) * (bottom - top + 1)));
+  let label = 0; let largestLabel = 0; let largestSize = 0;
+  for (let y = top; y <= bottom; y += 1) {
+    for (let x = left; x <= right; x += 1) {
+      const startIndex = y * width + x;
+      if (labels[startIndex] || data[startIndex * 4 + 3] < 32) continue;
+      label += 1;
+      let componentHead = 0; let componentTail = 0; let componentSize = 0;
+      labels[startIndex] = label;
+      componentQueue[componentTail++] = startIndex;
+      while (componentHead < componentTail) {
+        const index = componentQueue[componentHead++];
+        componentSize += 1;
+        const currentX = index % width; const currentY = Math.floor(index / width);
+        const neighbours = [[currentX - 1, currentY], [currentX + 1, currentY], [currentX, currentY - 1], [currentX, currentY + 1]];
+        for (const [nextX, nextY] of neighbours) {
+          if (nextX < left || nextX > right || nextY < top || nextY > bottom) continue;
+          const nextIndex = nextY * width + nextX;
+          if (labels[nextIndex] || data[nextIndex * 4 + 3] < 32) continue;
+          labels[nextIndex] = label;
+          componentQueue[componentTail++] = nextIndex;
+        }
+      }
+      if (componentSize > largestSize) { largestSize = componentSize; largestLabel = label; }
+    }
+  }
+  if (largestLabel) {
+    for (let y = top; y <= bottom; y += 1) {
+      for (let x = left; x <= right; x += 1) {
+        const index = y * width + x;
+        if (labels[index] !== largestLabel) data[index * 4 + 3] = 0;
+      }
+    }
+  }
+
+  // Low, wide cabinets are commonly photographed with books or lamps resting on
+  // top and a long cast shadow beneath them. Those pixels can touch the furniture,
+  // so connected-component filtering alone cannot separate them. Detect the
+  // sustained, opaque horizontal body and retain a short support zone for legs.
+  // The rule is intentionally limited to wide silhouettes so chairs, lamps and
+  // other upright products keep their full shape.
+  let componentLeft = width; let componentTop = height; let componentRight = -1; let componentBottom = -1;
+  if (largestLabel) {
+    for (let y = top; y <= bottom; y += 1) {
+      for (let x = left; x <= right; x += 1) {
+        const index = y * width + x;
+        if (labels[index] !== largestLabel || data[index * 4 + 3] < 96) continue;
+        componentLeft = Math.min(componentLeft, x); componentRight = Math.max(componentRight, x);
+        componentTop = Math.min(componentTop, y); componentBottom = Math.max(componentBottom, y);
+      }
+    }
+  }
+  const componentWidth = componentRight - componentLeft + 1;
+  const componentHeight = componentBottom - componentTop + 1;
+  if (componentWidth > 0 && componentHeight > 0 && componentWidth / componentHeight >= 1.3) {
+    const requiredRun = Math.max(4, Math.floor(componentWidth * .58));
+    const qualifyingRows: boolean[] = [];
+    for (let y = componentTop; y <= componentBottom; y += 1) {
+      let longestRun = 0; let currentRun = 0;
+      for (let x = componentLeft; x <= componentRight; x += 1) {
+        const opaque = data[(y * width + x) * 4 + 3] >= 96;
+        currentRun = opaque ? currentRun + 1 : 0;
+        longestRun = Math.max(longestRun, currentRun);
+      }
+      qualifyingRows[y] = longestRun >= requiredRun;
+    }
+    let bestStart = -1; let bestEnd = -1; let runStart = -1;
+    for (let y = componentTop; y <= componentBottom + 1; y += 1) {
+      if (y <= componentBottom && qualifyingRows[y]) {
+        if (runStart < 0) runStart = y;
+      } else if (runStart >= 0) {
+        const runEnd = y - 1;
+        if (runEnd - runStart > bestEnd - bestStart) { bestStart = runStart; bestEnd = runEnd; }
+        runStart = -1;
+      }
+    }
+    const bodyHeight = bestEnd - bestStart + 1;
+    if (bestStart >= 0 && bodyHeight >= Math.max(3, Math.round(componentHeight * .12))) {
+      // Start at the first sustained full-width row. This deliberately excludes
+      // books and lamps resting on the top plane, even when their pixels touch it.
+      const retainedTop = bestStart;
+      const supportBottom = bestEnd + Math.round(componentWidth * .13);
+      const dimensionBottom = expectedWidthHeightRatio && expectedWidthHeightRatio > 1
+        // Perspective exposes some depth, hence a 26% tolerance over the
+        // catalog front elevation. More would retain the staged floor shadow.
+        ? retainedTop + Math.round(componentWidth / expectedWidthHeightRatio * 1.26)
+        : componentBottom;
+      const retainedBottom = Math.min(componentBottom, supportBottom, dimensionBottom);
+      for (let y = componentTop; y <= componentBottom; y += 1) {
+        if (y >= retainedTop && y <= retainedBottom) continue;
+        for (let x = componentLeft; x <= componentRight; x += 1) data[(y * width + x) * 4 + 3] = 0;
+      }
+
+      // Below the wide body, retain only narrow runs that continue vertically:
+      // these are legs or feet. Broad or diagonal runs are staged floor shadows.
+      let previousSupports: Array<{ start: number; end: number }> = [];
+      const maximumSupportWidth = Math.max(3, Math.round(componentWidth * .25));
+      for (let y = bestEnd + 1; y <= retainedBottom; y += 1) {
+        const runs: Array<{ start: number; end: number }> = [];
+        let runStart = -1;
+        for (let x = componentLeft; x <= componentRight + 1; x += 1) {
+          const opaque = x <= componentRight && data[(y * width + x) * 4 + 3] >= 96;
+          if (opaque && runStart < 0) runStart = x;
+          if (!opaque && runStart >= 0) { runs.push({ start: runStart, end: x - 1 }); runStart = -1; }
+        }
+        const supports = runs.filter((run) => {
+          if (run.end - run.start + 1 > maximumSupportWidth) return false;
+          return y === bestEnd + 1 || previousSupports.some((previous) => run.start <= previous.end + 2 && run.end >= previous.start - 2);
+        });
+        for (let x = componentLeft; x <= componentRight; x += 1) {
+          const supported = supports.some((run) => x >= run.start - 1 && x <= run.end + 1);
+          if (!supported) data[(y * width + x) * 4 + 3] = 0;
+        }
+        previousSupports = supports;
+      }
     }
   }
 

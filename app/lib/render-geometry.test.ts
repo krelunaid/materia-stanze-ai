@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { furnitureEditRect, hasCompatibleImageGeometry, rectPoints } from './render-geometry';
+import { furnitureContactGeometry, furnitureEditRect, hasCompatibleImageGeometry, rectPoints } from './render-geometry';
 
 describe('controlled render geometry', () => {
   it('opens only a bounded area around the furniture floor anchor', () => {
@@ -21,5 +21,21 @@ describe('controlled render geometry', () => {
     expect(hasCompatibleImageGeometry(1600, 1000, 1500, 1000)).toBe(true);
     expect(hasCompatibleImageGeometry(1600, 1000, 1024, 1024)).toBe(false);
     expect(hasCompatibleImageGeometry(0, 1000, 1024, 1024)).toBe(false);
+  });
+
+  it('anchors a transparent furniture cutout to its visible feet', () => {
+    const width = 20; const height = 10;
+    const pixels = new Uint8ClampedArray(width * height * 4);
+    for (const x of [3, 4, 15, 16]) pixels[((8 * width + x) * 4) + 3] = 255;
+    const contact = furnitureContactGeometry(pixels, width, height);
+    expect(contact.bottom).toBe(.9);
+    expect(contact.spans).toEqual([{ left: .15, right: .25 }, { left: .75, right: .85 }]);
+  });
+
+  it('uses a safe broad shadow for an empty or invalid cutout', () => {
+    expect(furnitureContactGeometry(new Uint8ClampedArray(), 0, 0)).toEqual({
+      bottom: 1,
+      spans: [{ left: .18, right: .82 }],
+    });
   });
 });

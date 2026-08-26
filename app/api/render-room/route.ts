@@ -1,4 +1,4 @@
-import { editImage, getAiProvider, verifyFurniturePlacement } from '../../server/ai-provider';
+import { acceptsFurnitureRender, editImage, getRenderProvider, verifyFurniturePlacement } from '../../server/ai-provider';
 import { guardAiRequest, handleAiOptions } from '../../server/ai-api-guard';
 
 function json(body: unknown, headers: Headers, status = 200) {
@@ -13,7 +13,7 @@ export async function POST(request: Request) {
   const access = await guardAiRequest(request, 'render-room');
   if (!access.ok) return access.response;
   const { headers } = access;
-  const provider = getAiProvider();
+  const provider = getRenderProvider();
   if (!provider) {
     return json({ code: 'not_configured', message: 'Il servizio IA del server non è momentaneamente disponibile.' }, headers, 503);
   }
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     const protectedAreas = String(incoming.get('protectedAreas') ?? '').slice(0, 1000);
     const imageUrl = String(incoming.get('imageUrl') ?? '').slice(0, 2000);
     const incomingReferenceType = String(incoming.get('referenceType') ?? 'metadata-only');
-    const referenceType = ['verified-texture', 'official-product-image', 'uploaded-sample'].includes(incomingReferenceType)
+    const referenceType = ['verified-texture', 'uploaded-sample'].includes(incomingReferenceType)
       ? incomingReferenceType
       : 'metadata-only';
     if (!(image instanceof File) || !image.type.startsWith('image/')) {
@@ -48,7 +48,6 @@ export async function POST(request: Request) {
       'Preserve the camera position, lens, crop, room geometry, walls, ceiling, floor, windows, doors, structural openings and lighting direction.',
       materials ? `Apply these user-selected products to their named surfaces, respecting real scale, joints, laying direction, perspective and finish:\n${materials}` : 'Keep every existing architectural material unchanged.',
       imageUrl && referenceType === 'verified-texture' ? 'Use the supplied verified flat texture as the exact material reference.' : '',
-      imageUrl && referenceType === 'official-product-image' ? 'Use the supplied official product image as a color and finish reference; reconstruct scale and repetition conservatively.' : '',
       imageUrl && referenceType === 'uploaded-sample' ? 'Use the supplied user sample as the material reference.' : '',
       materials && referenceType === 'metadata-only' ? 'No verified texture is supplied. Keep any product visualization restrained and approximate; do not invent distinctive graphics or claim exact visual fidelity.' : '',
       furniture ? `Insert these furniture elements at the exact user-selected image anchors, approximate sizes and rotations below. Treat x/y as percentages of the full source photograph; keep each item's floor contact point at its anchor and preserve the user's composition:\n${furniture}` : '',
@@ -64,7 +63,9 @@ export async function POST(request: Request) {
     const editInput = {
       source: image,
       mask: mask instanceof File ? mask : null,
-      referenceImageUrl: (furnitureReferenceUrl && !(furnitureReference instanceof File) ? furnitureReferenceUrl : imageUrl) || null,
+      referenceImageUrl: (furnitureReferenceUrl && !(furnitureReference instanceof File)
+        ? furnitureReferenceUrl
+        : referenceType === 'metadata-only' ? null : imageUrl) || null,
       referenceImageFile: furnitureReference instanceof File ? furnitureReference : null,
       prompt,
       maskExplanation: 'transparent pixels are the complete and only editable product/furniture regions; every solid white pixel is protected and must remain unchanged.',
@@ -81,19 +82,22 @@ export async function POST(request: Request) {
       });
       verification = await verify(result);
       const referenceRequired = Boolean(furnitureReferenceUrl || furnitureReference instanceof File);
-      const accepted = verification.visible && verification.atRequestedAnchor
-        && (!referenceRequired || verification.resemblesReference)
-        && verification.confidence >= .65;
+      const accepted = acceptsFurnitureRender(verification, referenceRequired);
       if (!accepted) {
         result = await editImage(provider, {
           ...editInput,
-          prompt: `${prompt}\nQUALITY-CONTROL RETRY: the previous attempt omitted, misplaced or distorted the requested furniture. Make the referenced furniture unmistakably visible inside the requested transparent placement window. Do not return an empty room.`,
+          prompt: `${prompt}\nQUALITY-CONTROL RETRY: the previous attempt omitted, misplaced, distorted or failed to ground the requested furniture. Preserve every visible leg, door, handle and edge from the reference. Put every leg or base exactly on the floor plane, with perspective-correct scale and a natural contact shadow matching the room light. Do not return an empty room or a wall-mounted/floating object.`,
         });
         verification = await verify(result);
-        const retryAccepted = verification.visible && verification.atRequestedAnchor
-          && (!referenceRequired || verification.resemblesReference)
-          && verification.confidence >= .65;
-        if (!retryAccepted) return json({ image: result, provider: provider.id, verification, needsExactOverlay: true }, headers);
+        const retryAccepted = acceptsFurnitureRender(verification, referenceRequired);
+        if (!retryAccepted) {
+          return json({
+            code: 'quality_check_failed',
+            message: 'Il render non ha superato il controllo fotografico di posizione, appoggio e somiglianza del mobile. Non mostro un risultato finto: riprova modificando posizione o dimensione.',
+            provider: provider.id,
+            verification,
+          }, headers, 422);
+        }
       }
     }
     return json({ image: result, provider: provider.id, verification }, headers);

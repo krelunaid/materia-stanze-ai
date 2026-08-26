@@ -1,4 +1,4 @@
-import { editImage, getAiProvider } from '../../server/ai-provider';
+import { editImage, getRenderProvider } from '../../server/ai-provider';
 import { guardAiRequest, handleAiOptions } from '../../server/ai-api-guard';
 
 function json(body: unknown, headers: Headers, status = 200) {
@@ -13,7 +13,7 @@ export async function POST(request: Request) {
   const access = await guardAiRequest(request, 'empty-room');
   if (!access.ok) return access.response;
   const { headers } = access;
-  const provider = getAiProvider();
+  const provider = getRenderProvider();
   if (!provider) {
     return json({ code: 'not_configured', message: 'Il servizio IA del server non è momentaneamente disponibile.' }, headers, 503);
   }

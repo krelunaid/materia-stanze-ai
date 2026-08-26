@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chooseSupportedImageAspectRatio, detectRoomSurfaces, editImage, getAiProvider, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, searchMaterials } from './ai-provider';
+import { acceptsFurnitureRender, chooseSupportedImageAspectRatio, detectRoomSurfaces, editImage, getAiProvider, getProductCleaner, getRenderProvider, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -24,6 +24,59 @@ describe('getAiProvider', () => {
 
   it('does not silently use another provider when Grok was explicitly selected', () => {
     expect(getAiProvider({ AI_PROVIDER: 'grok', OPENAI_API_KEY: 'openai-test' })).toBeNull();
+  });
+
+  it('keeps Grok for analysis but prefers OpenAI for masked rendering', () => {
+    const environment = { XAI_API_KEY: 'xai-test', OPENAI_API_KEY: 'openai-test' };
+    expect(getAiProvider(environment).id).toBe('grok');
+    expect(getRenderProvider(environment)).toEqual({ id: 'openai', label: 'OpenAI', apiKey: 'openai-test' });
+  });
+
+  it('respects an explicitly selected render provider', () => {
+    expect(getRenderProvider({ RENDER_PROVIDER: 'grok', XAI_API_KEY: 'xai-test', OPENAI_API_KEY: 'openai-test' })).toEqual({
+      id: 'grok', label: 'Grok', apiKey: 'xai-test',
+    });
+    expect(getRenderProvider({ RENDER_PROVIDER: 'openai', XAI_API_KEY: 'xai-test' })).toEqual({
+      id: 'grok', label: 'Grok', apiKey: 'xai-test',
+    });
+  });
+
+  it('prefers BRIA for product cleanup and falls back to Grok Imagine', () => {
+    expect(getProductCleaner({ BRIA_API_KEY: 'bria-test', XAI_API_KEY: 'xai-test' })).toEqual({
+      id: 'bria', label: 'BRIA RMBG 2.0', apiKey: 'bria-test',
+    });
+    expect(getProductCleaner({ XAI_API_KEY: 'xai-test' })).toEqual({
+      id: 'grok', label: 'Grok Imagine 2.0', apiKey: 'xai-test',
+    });
+    expect(getProductCleaner({ PRODUCT_CLEANER: 'bria', XAI_API_KEY: 'xai-test' })).toEqual({
+      id: 'grok', label: 'Grok Imagine 2.0', apiKey: 'xai-test',
+    });
+  });
+
+  it('calls the BRIA RMBG endpoint and returns its transparent image', async () => {
+    const resultResponse = new Response(new Uint8Array([137, 80, 78, 71]), {
+      status: 200,
+      headers: { 'Content-Type': 'image/png' },
+    });
+    Object.defineProperty(resultResponse, 'url', { value: 'https://cdn.bria.ai/result.png' });
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ result: { image_url: 'https://cdn.bria.ai/result.png' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(resultResponse);
+
+    await expect(removeFurnitureBackgroundWithBria('bria-test', 'https://shop.example/product.jpg'))
+      .resolves.toMatch(/^data:image\/png;base64,/);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://engine.prod.bria-api.com/v2/image/edit/remove_background');
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: 'POST',
+      headers: { api_token: 'bria-test', 'Content-Type': 'application/json' },
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      image: 'https://shop.example/product.jpg', preserve_alpha: true, sync: true,
+    });
   });
 
   it('keeps Grok product lookup bounded for a responsive UI', async () => {
@@ -302,5 +355,21 @@ describe('getAiProvider', () => {
     const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
     expect(payload).toMatchObject({ model: 'grok-imagine-image-2.0', aspect_ratio: '3:2' });
     expect(chooseSupportedImageAspectRatio(1080, 1920)).toBe('9:16');
+  });
+});
+
+describe('acceptsFurnitureRender', () => {
+  const good = {
+    visible: true, atRequestedAnchor: true, resemblesReference: true,
+    physicallyGrounded: true, structurallyComplete: true, realisticLighting: true,
+    confidence: .9, reason: 'ok', referenceLeft: 0, referenceTop: 0, referenceRight: 1, referenceBottom: 1,
+  };
+
+  it('accepts only a complete, grounded and realistically integrated product', () => {
+    expect(acceptsFurnitureRender(good, true)).toBe(true);
+    expect(acceptsFurnitureRender({ ...good, physicallyGrounded: false }, true)).toBe(false);
+    expect(acceptsFurnitureRender({ ...good, structurallyComplete: false }, true)).toBe(false);
+    expect(acceptsFurnitureRender({ ...good, realisticLighting: false }, true)).toBe(false);
+    expect(acceptsFurnitureRender({ ...good, confidence: .79 }, true)).toBe(false);
   });
 });
