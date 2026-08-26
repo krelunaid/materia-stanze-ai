@@ -212,6 +212,16 @@ describe('RoomStudio', () => {
     expect(screen.getByLabelText('Link prodotto')).toHaveValue('');
   });
 
+  it('offers search, product photo and material sample as clear entry cards', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+    expect(screen.getByLabelText('Modalità inserimento prodotto')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Cerca online/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Foto prodotto/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Campione materiale/ })).toBeInTheDocument();
+  });
+
   it('starts with a four-step workflow and only exposes the simple mode', () => {
     render(<RoomStudio />);
     expect(screen.getByRole('navigation', { name: 'Passaggi del progetto' })).toHaveTextContent('1Foto2Prepara3Prodotti4Render');

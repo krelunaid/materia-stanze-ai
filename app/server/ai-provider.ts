@@ -906,6 +906,21 @@ async function remoteImageToDataUri(value: string) {
   return `data:${type.split(';')[0]};base64,${bytesToBase64(bytes)}`;
 }
 
+async function removeFurnitureBackgroundWithBriaData(apiKey: string, inputImage: string) {
+  const response = await fetch('https://engine.prod.bria-api.com/v2/image/edit/remove_background', {
+    method: 'POST',
+    headers: { api_token: apiKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: inputImage, preserve_alpha: true, sync: true }),
+    signal: AbortSignal.timeout(90000),
+  });
+  const payload = await response.json() as { result?: { image_url?: string }; error?: { message?: string }; message?: string };
+  const resultUrl = payload.result?.image_url;
+  if (!response.ok || !resultUrl) {
+    throw new Error(payload.error?.message ?? payload.message ?? 'BRIA non ha scontornato il prodotto.');
+  }
+  return remoteImageToDataUri(resultUrl);
+}
+
 export async function removeFurnitureBackgroundWithBria(apiKey: string, imageUrl: string) {
   const reference = validPublicUrl(imageUrl);
   if (!reference) throw new Error('Foto prodotto non valida.');
@@ -919,19 +934,15 @@ export async function removeFurnitureBackgroundWithBria(apiKey: string, imageUrl
   }
   const inputBytes = new Uint8Array(await inputResponse.arrayBuffer());
   if (inputBytes.byteLength > 12 * 1024 * 1024) throw new Error('La fotografia del prodotto è troppo grande.');
-  const inputImage = `data:${inputType};base64,${bytesToBase64(inputBytes)}`;
-  const response = await fetch('https://engine.prod.bria-api.com/v2/image/edit/remove_background', {
-    method: 'POST',
-    headers: { api_token: apiKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image: inputImage, preserve_alpha: true, sync: true }),
-    signal: AbortSignal.timeout(90000),
-  });
-  const payload = await response.json() as { result?: { image_url?: string }; error?: { message?: string }; message?: string };
-  const resultUrl = payload.result?.image_url;
-  if (!response.ok || !resultUrl) {
-    throw new Error(payload.error?.message ?? payload.message ?? 'BRIA non ha scontornato il prodotto.');
+  return removeFurnitureBackgroundWithBriaData(apiKey, `data:${inputType};base64,${bytesToBase64(inputBytes)}`);
+}
+
+export async function removeFurnitureFileBackgroundWithBria(apiKey: string, file: File) {
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+    throw new Error('La foto prodotto deve essere JPG, PNG o WEBP.');
   }
-  return remoteImageToDataUri(resultUrl);
+  if (!file.size || file.size > 12 * 1024 * 1024) throw new Error('La foto prodotto supera il limite di 12 MB.');
+  return removeFurnitureBackgroundWithBriaData(apiKey, await fileToDataUri(file));
 }
 
 async function referenceBlob(value: string) {

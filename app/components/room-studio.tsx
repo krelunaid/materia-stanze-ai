@@ -768,7 +768,7 @@ export function RoomStudio() {
 
   function importMaterial(file?: File) {
     if (!file) return;
-    if (!['image/jpeg', 'image/png'].includes(file.type)) { setError('Il campione materiale deve essere JPG o PNG.'); return; }
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { setError('Il campione materiale deve essere JPG, PNG o WEBP.'); return; }
     if (file.size > 20 * 1024 * 1024) { setError('Il campione materiale supera il limite di 20 MB.'); return; }
     if (materialBlobRef.current) URL.revokeObjectURL(materialBlobRef.current);
     const previewUrl = URL.createObjectURL(file);
@@ -1058,6 +1058,16 @@ export function RoomStudio() {
     return createFurnitureCutout(result.image, productName, undefined, false, productDescription);
   }
 
+  async function createAiCleanedFurnitureFile(file: File, productName: string) {
+    const form = new FormData();
+    form.append('image', file, file.name || 'prodotto.jpg');
+    const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/clean-product'), {
+      method: 'POST', body: form,
+    }, 100000);
+    if (!response.ok || !result.image) throw new Error(result.message ?? 'Pulizia BRIA non disponibile.');
+    return createFurnitureCutout(result.image, productName, undefined, false);
+  }
+
   async function applyMaterialAutomatically() {
     if (!material || !room?.previewUrl || isApplyingProduct) return;
     if (material.category === 'Arredi') {
@@ -1146,14 +1156,16 @@ export function RoomStudio() {
 
   async function importFurniture(file?: File) {
     if (!file) return;
-    if (!['image/jpeg', 'image/png'].includes(file.type)) { setError('La foto del mobile deve essere JPG o PNG.'); return; }
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { setError('La foto del mobile deve essere JPG, PNG o WEBP.'); return; }
     if (file.size > 20 * 1024 * 1024) { setError('La foto del mobile supera il limite di 20 MB.'); return; }
     const previewUrl = URL.createObjectURL(file);
     furnitureBlobUrlsRef.current.push(previewUrl);
     const name = file.name.replace(/\.[^.]+$/, '');
-    setNotice(`Scontorno “${name}” e preparo la sagoma trasparente…`);
+    setNotice(`BRIA scontorna “${name}” e prepara la sagoma trasparente…`);
     let cutoutUrl: string | undefined;
-    try { cutoutUrl = await createFurnitureCutout(previewUrl, name, undefined, false); } catch { /* keep original */ }
+    try { cutoutUrl = await createAiCleanedFurnitureFile(file, name); } catch {
+      try { cutoutUrl = await createFurnitureCutout(previewUrl, name, undefined, false); } catch { /* keep original */ }
+    }
     startFurniturePlacement(name, previewUrl, undefined, file, cutoutUrl);
     setError(null);
   }
@@ -1572,7 +1584,7 @@ export function RoomStudio() {
             {isDraggingFile && <div className="drop-overlay"><strong>Rilascia per importare</strong><span>La foto resterà nel browser.</span></div>}
             {isImportingRoom && <div className="processing-overlay" role="status"><span className="processing-spinner" /><strong>Preparo la foto…</strong><small>Le immagini grandi vengono ottimizzate per evitare blocchi.</small></div>}
           </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
-          <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" onChange={onMaterialInput} /><input ref={furnitureInputRef} id="furniture-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" onChange={onFurnitureInput} />
+          <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onMaterialInput} /><input ref={furnitureInputRef} id="furniture-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onFurnitureInput} />
           {room?.sourceType === 'photo' && activeStep === 2 && <section className="empty-room-choice" aria-label="Svuota la stanza"><div><strong>Vuoi svuotare la stanza?</strong><span>Opzionale: rimuove mobili e decorazioni lasciando intatta la struttura.</span></div><button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button></section>}
           <div className={`status-bar ${activeStep === 2 ? 'prepare-status' : ''}`}><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.'}</p>{room && activeStep === 2 && <button className={`edge-edit-button ${isCorrectingEdges ? 'is-active' : ''}`} type="button" onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine correzione' : room.sourceType === 'floorplan' ? 'Correggi il perimetro' : 'Correggi i bordi'}</button>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && <button className="continue-products-button" type="button" onClick={() => goToStep(3)}>Continua ai prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
         </section>
@@ -1582,7 +1594,13 @@ export function RoomStudio() {
           {room && <div className="asset-card"><span>{room.sourceType === 'floorplan' ? 'PLAN' : 'IMG'}</span><div><strong>{room.file.name}</strong><small>{room.sourceType === 'floorplan' ? 'Planimetria originale' : importedCaption}</small></div><label htmlFor={room.sourceType === 'floorplan' ? 'floorplan-file' : 'room-file'}>Sostituisci</label></div>}
           {selected ? <><div className="property-section"><div className="property-title"><span>Nome superficie</span><span className="editable-badge">Personalizzabile</span></div><div className="rename-control"><input aria-label="Nome superficie" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} /><button type="button" onClick={renameSelected} disabled={!renameDraft.trim() || renameDraft.trim() === selected.name}>Salva</button></div></div><div className="property-section"><div className="property-title"><span>Protezione superficie</span><span className={`editable-badge ${selected.frozen ? 'frozen' : ''}`}>{selected.frozen ? 'Frozen' : 'Modificabile'}</span></div><button className={`freeze-button ${selected.frozen ? 'is-active' : ''}`} type="button" aria-label={selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'} onClick={toggleFreeze}><span>{selected.frozen ? '◆' : '◇'}</span>{selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'}<small>{selected.frozen ? 'Protetta' : 'Attivo subito'}</small></button><button className="freeze-others-button" type="button" onClick={freezeAllExceptSelected}>Blocca tutto tranne {selected.name}</button></div>
             <div className="property-section product-search-section">
-              <div className="property-title"><span>Cerca un prodotto preciso</span><button type="button" onClick={() => materialInputRef.current?.click()}>Carica campione</button></div>
+              <div className="property-title"><span>Come vuoi inserire il prodotto?</span></div>
+              <div className="product-entry-cards" aria-label="Modalità inserimento prodotto">
+                <button type="button" className="product-entry-card is-primary" onClick={() => document.querySelector<HTMLInputElement>('.guided-search input')?.focus()}><span>⌕</span><strong>Cerca online</strong><small>Marca, modello, colore o link</small></button>
+                <button type="button" className="product-entry-card" onClick={() => furnitureInputRef.current?.click()}><span>▣</span><strong>Foto prodotto</strong><small>BRIA rimuove lo sfondo</small></button>
+                <button type="button" className="product-entry-card" onClick={() => materialInputRef.current?.click()}><span>▦</span><strong>Campione materiale</strong><small>Per pavimenti e pareti</small></button>
+              </div>
+              <div className="product-search-heading"><strong>Ricerca normale</strong><span>oppure incolla il link del prodotto</span></div>
               {aiStatus !== 'ready' && <div className="ai-setup-banner"><strong>{aiStatus === 'missing' ? 'IA non configurata sul server' : 'IA momentaneamente non raggiungibile'}</strong><span>La chiave resta protetta sul server. Puoi comunque premere il comando: l’app riproverà il collegamento.</span></div>}
               <div className="guided-search" aria-label="Criteri di ricerca prodotto"><label><span>Marca o produttore</span><input aria-label="Marca o produttore" value={searchBrand} onChange={(event) => setSearchBrand(event.target.value)} placeholder="Es. Lea Ceramiche" /></label><label><span>Modello o collezione</span><input aria-label="Modello o collezione" value={searchModel} onChange={(event) => setSearchModel(event.target.value)} placeholder="Es. Intense" /></label><label><span>Colore</span><input aria-label="Colore prodotto" value={searchColor} onChange={(event) => setSearchColor(event.target.value)} placeholder="Es. Clair" /></label><label><span>Tipo prodotto</span><select aria-label="Tipo prodotto" value={searchCategory} onChange={(event) => setSearchCategory(event.target.value as ProductSearchCategory)}><option value="">Tutti</option><option value="Pavimenti">Pavimenti</option><option value="Rivestimenti">Rivestimenti</option><option value="Colori">Colori parete</option><option value="Arredi">Mobili e arredi</option></select></label></div>
               <label className="free-search-label"><span>Altri dettagli facoltativi</span><input className="material-search" aria-label="Cerca materiali, colori o mobili" value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchProductsOnline(); }} placeholder="Es. effetto pietra, 60 × 120, opaco" /></label>
