@@ -16,6 +16,7 @@ import {
 import { drawImageCover } from '../lib/canvas-draw';
 import { AcceptedRoomFile, validateRoomFile } from '../lib/file-validation';
 import { furnitureEditRect, hasCompatibleImageGeometry, rectPoints } from '../lib/render-geometry';
+import { NormalizedProductBounds, removeConnectedProductBackground } from '../lib/product-cutout';
 import {
   isValidPolygon,
   nextSurfaceName,
@@ -56,9 +57,10 @@ type PlacedFurniture = {
   rotation: number;
   frozen: boolean;
   previewUrl?: string;
+  cutoutUrl?: string;
   description?: string;
 };
-type PendingFurniture = { name: string; previewUrl?: string; description?: string; file?: File };
+type PendingFurniture = { name: string; previewUrl?: string; cutoutUrl?: string; description?: string; file?: File };
 type DragFurniture = { id: string; pointerId: number };
 type AiStatus = 'checking' | 'ready' | 'missing' | 'unreachable';
 type DetectedSurface = { name: string; kind: SurfaceKind; points: Point[]; confidence: number };
@@ -117,6 +119,21 @@ function surfaceLabelPoint(surface: Surface) {
 
 function surfaceCenter(surface: Surface) {
   return surfaceLabelPoint(surface);
+}
+
+function floorContactYAtX(surface: Surface | undefined, x: number) {
+  if (!surface || surface.points.length < 3) return .58;
+  const intersections: number[] = [];
+  for (let index = 0; index < surface.points.length; index += 1) {
+    const first = surface.points[index];
+    const second = surface.points[(index + 1) % surface.points.length];
+    if ((first.x <= x && second.x >= x) || (second.x <= x && first.x >= x)) {
+      if (Math.abs(second.x - first.x) < .0001) continue;
+      const ratio = (x - first.x) / (second.x - first.x);
+      if (ratio >= 0 && ratio <= 1) intersections.push(first.y + (second.y - first.y) * ratio);
+    }
+  }
+  return intersections.length ? Math.min(...intersections) : Math.min(...surface.points.map((point) => point.y));
 }
 
 function inheritSurfaceState(detected: Surface[], previous: Surface[]) {
@@ -952,7 +969,71 @@ export function RoomStudio() {
     return protectedUrl;
   }
 
-  async function overlayExactFurniture(baseSource: string, items: PlacedFurniture[], referenceBounds?: { left: number; top: number; right: number; bottom: number }) {
+  async function createFurnitureCutout(
+    previewUrl: string,
+    productName: string,
+    suppliedBounds?: NormalizedProductBounds,
+    askAi = true,
+    description?: string,
+  ) {
+    let bounds = suppliedBounds;
+    if (!bounds && askAi && previewUrl.startsWith('http')) {
+      const { response, result } = await requestJson<{ bounds?: NormalizedProductBounds; message?: string }>(endpoint('/api/product-bounds'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageUrl: previewUrl, productName }),
+      }, 60000);
+      if (response.ok && result.bounds) bounds = result.bounds;
+    }
+    const source = previewUrl.startsWith('http')
+      ? endpoint(`/api/product-image?url=${encodeURIComponent(previewUrl)}`)
+      : previewUrl;
+    const product = await loadImageSource(source);
+    const productScale = Math.min(1, 1200 / Math.max(product.naturalWidth, product.naturalHeight));
+    const width = Math.max(1, Math.round(product.naturalWidth * productScale));
+    const height = Math.max(1, Math.round(product.naturalHeight * productScale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width; canvas.height = height;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) throw new Error('Non posso scontornare la foto del prodotto.');
+    context.drawImage(product, 0, 0, width, height);
+    const pixels = context.getImageData(0, 0, width, height);
+    const cutout = removeConnectedProductBackground(pixels.data, width, height, bounds);
+    pixels.data.set(cutout.data);
+    context.putImageData(pixels, 0, 0);
+    const cropWidth = Math.max(1, cutout.crop.right - cutout.crop.left);
+    const length = description?.match(/\bL\s*(\d+(?:[.,]\d+)?)\s*cm/i)?.[1];
+    const physicalHeight = description?.match(/\bH\s*(\d+(?:[.,]\d+)?)\s*cm/i)?.[1];
+    if (length && physicalHeight) {
+      for (let y = cutout.crop.top; y < cutout.crop.bottom; y += 1) {
+        let run = 0; let longestRun = 0;
+        for (let x = cutout.crop.left; x < cutout.crop.right; x += 1) {
+          if (cutout.data[(y * width + x) * 4 + 3] >= 32) {
+            run += 1;
+            longestRun = Math.max(longestRun, run);
+          } else run = 0;
+        }
+        if (longestRun >= cropWidth * .5) {
+          cutout.crop.top = Math.max(cutout.crop.top, y + 1);
+          break;
+        }
+      }
+      const physicalAspect = Number(length.replace(',', '.')) / Number(physicalHeight.replace(',', '.'));
+      const expectedHeight = cropWidth / physicalAspect;
+      if (Number.isFinite(expectedHeight) && expectedHeight > 0) {
+        cutout.crop.bottom = Math.min(cutout.crop.bottom, Math.ceil(cutout.crop.top + expectedHeight * 1.08));
+      }
+    }
+    const cropHeight = Math.max(1, cutout.crop.bottom - cutout.crop.top);
+    const cropped = document.createElement('canvas');
+    cropped.width = cropWidth; cropped.height = cropHeight;
+    const croppedContext = cropped.getContext('2d');
+    if (!croppedContext) throw new Error('Non posso preparare la sagoma del prodotto.');
+    croppedContext.drawImage(canvas, cutout.crop.left, cutout.crop.top, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+    return cropped.toDataURL('image/png');
+  }
+
+  async function overlayExactFurniture(baseSource: string, items: PlacedFurniture[], referenceBounds?: NormalizedProductBounds) {
     const base = await loadImageSource(baseSource);
     const maxSide = 1536;
     const scale = Math.min(1, maxSide / Math.max(base.naturalWidth, base.naturalHeight));
@@ -966,79 +1047,11 @@ export function RoomStudio() {
 
     for (const item of items) {
       if (!item.previewUrl) continue;
-      let itemBounds = referenceBounds;
-      if (item.previewUrl.startsWith('http')) {
-        try {
-          const { response, result } = await requestJson<{ bounds?: { left: number; top: number; right: number; bottom: number }; message?: string }>(endpoint('/api/product-bounds'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ imageUrl: item.previewUrl, productName: item.name }),
-          }, 60000);
-          if (response.ok && result.bounds) itemBounds = result.bounds;
-        } catch {
-          // The full reference remains usable when the optional crop audit times out.
-        }
-      }
-      const source = item.previewUrl.startsWith('http')
-        ? endpoint(`/api/product-image?url=${encodeURIComponent(item.previewUrl)}`)
-        : item.previewUrl;
-      const product = await loadImageSource(source);
-      const productScale = Math.min(1, 1200 / Math.max(product.naturalWidth, product.naturalHeight));
-      const productCanvas = document.createElement('canvas');
-      productCanvas.width = Math.max(1, Math.round(product.naturalWidth * productScale));
-      productCanvas.height = Math.max(1, Math.round(product.naturalHeight * productScale));
-      const productContext = productCanvas.getContext('2d', { willReadFrequently: true });
-      if (!productContext) continue;
-      productContext.drawImage(product, 0, 0, productCanvas.width, productCanvas.height);
-
-      const pixels = productContext.getImageData(0, 0, productCanvas.width, productCanvas.height);
-      const boundLeft = itemBounds ? Math.max(0, Math.floor(itemBounds.left * productCanvas.width)) : 0;
-      let boundTop = itemBounds ? Math.max(0, Math.floor(itemBounds.top * productCanvas.height)) : 0;
-      const boundRight = itemBounds ? Math.min(productCanvas.width - 1, Math.ceil(itemBounds.right * productCanvas.width)) : productCanvas.width - 1;
-      const boundBottom = itemBounds ? Math.min(productCanvas.height - 1, Math.ceil(itemBounds.bottom * productCanvas.height)) : productCanvas.height - 1;
-      const length = item.description?.match(/\bL\s*(\d+(?:[.,]\d+)?)\s*cm/i)?.[1];
-      const physicalHeight = item.description?.match(/\bH\s*(\d+(?:[.,]\d+)?)\s*cm/i)?.[1];
-      if (length && physicalHeight) {
-        const physicalAspect = Number(length.replace(',', '.')) / Number(physicalHeight.replace(',', '.'));
-        if (Number.isFinite(physicalAspect) && physicalAspect > 1) {
-          const expectedPixelHeight = (boundRight - boundLeft) / physicalAspect;
-          boundTop = Math.max(boundTop, Math.floor(boundBottom - expectedPixelHeight * 1.12));
-        }
-      }
-      const pixelOffset = (x: number, y: number) => (y * productCanvas.width + x) * 4;
-      const corners = [
-        pixelOffset(boundLeft, boundTop),
-        pixelOffset(boundRight, boundTop),
-        pixelOffset(boundLeft, boundBottom),
-        pixelOffset(boundRight, boundBottom),
-      ];
-      const backgroundColors = corners.map((offset) => ({
-        r: pixels.data[offset], g: pixels.data[offset + 1], b: pixels.data[offset + 2],
-      }));
-      for (let offset = 0; offset < pixels.data.length; offset += 4) {
-        const index = offset / 4; const x = index % productCanvas.width; const y = Math.floor(index / productCanvas.width);
-        if (x < boundLeft || x > boundRight || y < boundTop || y > boundBottom) { pixels.data[offset + 3] = 0; continue; }
-        const distance = Math.min(...backgroundColors.map((background) => Math.hypot(
-          pixels.data[offset] - background.r,
-          pixels.data[offset + 1] - background.g,
-          pixels.data[offset + 2] - background.b,
-        )));
-        if (distance <= 18) pixels.data[offset + 3] = 0;
-        else if (distance < 60) pixels.data[offset + 3] = Math.round(pixels.data[offset + 3] * (distance - 18) / 42);
-      }
-      productContext.putImageData(pixels, 0, 0);
-
-      const cleaned = productContext.getImageData(0, 0, productCanvas.width, productCanvas.height).data;
-      let left = productCanvas.width; let top = productCanvas.height; let right = 0; let bottom = 0;
-      for (let y = 0; y < productCanvas.height; y += 2) {
-        for (let x = 0; x < productCanvas.width; x += 2) {
-          if (cleaned[(y * productCanvas.width + x) * 4 + 3] < 36) continue;
-          left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
-        }
-      }
-      if (right <= left || bottom <= top) { left = 0; top = 0; right = productCanvas.width; bottom = productCanvas.height; }
-      const cropWidth = Math.max(1, right - left);
-      const cropHeight = Math.max(1, bottom - top);
+      let cutoutUrl = item.cutoutUrl;
+      if (!cutoutUrl) cutoutUrl = await createFurnitureCutout(item.previewUrl, item.name, referenceBounds, true, item.description);
+      const product = await loadImageSource(cutoutUrl);
+      const cropWidth = product.naturalWidth;
+      const cropHeight = product.naturalHeight;
       let targetWidth = width * item.scale / 100;
       let targetHeight = targetWidth * cropHeight / cropWidth;
       if (targetHeight > height * .75) {
@@ -1049,8 +1062,15 @@ export function RoomStudio() {
       context.save();
       context.translate(anchorX, anchorY);
       context.rotate(item.rotation * Math.PI / 180);
-      context.shadowColor = 'rgba(0,0,0,.3)'; context.shadowBlur = Math.max(4, targetWidth * .035); context.shadowOffsetY = Math.max(2, targetHeight * .025);
-      context.drawImage(productCanvas, left, top, cropWidth, cropHeight, -targetWidth / 2, -targetHeight, targetWidth, targetHeight);
+      context.save();
+      context.fillStyle = 'rgba(25,22,18,.2)';
+      context.filter = `blur(${Math.max(3, targetWidth * .025)}px)`;
+      context.beginPath();
+      context.ellipse(0, 0, targetWidth * .46, Math.max(2, targetHeight * .08), 0, 0, Math.PI * 2);
+      context.fill();
+      context.restore();
+      context.shadowColor = 'rgba(0,0,0,.24)'; context.shadowBlur = Math.max(4, targetWidth * .025); context.shadowOffsetY = Math.max(1, targetHeight * .015);
+      context.drawImage(product, -targetWidth / 2, -targetHeight, targetWidth, targetHeight);
       context.restore();
     }
 
@@ -1111,36 +1131,49 @@ export function RoomStudio() {
     setNotice(`${next.name} selezionato. Ora applicalo alla superficie scelta.`);
   }
 
-  function chooseOnlineProduct(next: StudioMaterial) {
+  async function chooseOnlineProduct(next: StudioMaterial) {
     if (next.category === 'Arredi') {
-      startFurniturePlacement(`${next.brand ? `${next.brand} ` : ''}${next.name}`.trim(), next.previewUrl, next.description);
+      const name = `${next.brand ? `${next.brand} ` : ''}${next.name}`.trim();
+      setError(null);
+      setNotice(`Scontorno “${name}” e preparo la sagoma trasparente…`);
+      let cutoutUrl: string | undefined;
+      try {
+        if (next.previewUrl) cutoutUrl = await createFurnitureCutout(next.previewUrl, name, undefined, true, next.description);
+      } catch {
+        // The exact product photo remains available to the render engine.
+      }
+      startFurniturePlacement(name, next.previewUrl, next.description, undefined, cutoutUrl);
       return;
     }
     chooseMaterial(next);
   }
 
-  function startFurniturePlacement(name: string, previewUrl?: string, description?: string, file?: File) {
+  function startFurniturePlacement(name: string, previewUrl?: string, description?: string, file?: File, cutoutUrl?: string) {
     if (!room || room.sourceType !== 'photo') {
       setError('Per posizionare un mobile serve una foto della stanza.');
       return;
     }
-    setPendingFurniture({ name, previewUrl, description, file });
+    setPendingFurniture({ name, previewUrl, cutoutUrl, description, file });
     setSelectedFurnitureId(null);
     setNotice(`Tocca il punto del pavimento dove vuoi mettere “${name}”.`);
   }
 
-  function importFurniture(file?: File) {
+  async function importFurniture(file?: File) {
     if (!file) return;
     if (!['image/jpeg', 'image/png'].includes(file.type)) { setError('La foto del mobile deve essere JPG o PNG.'); return; }
     if (file.size > 20 * 1024 * 1024) { setError('La foto del mobile supera il limite di 20 MB.'); return; }
     const previewUrl = URL.createObjectURL(file);
     furnitureBlobUrlsRef.current.push(previewUrl);
-    startFurniturePlacement(file.name.replace(/\.[^.]+$/, ''), previewUrl, undefined, file);
+    const name = file.name.replace(/\.[^.]+$/, '');
+    setNotice(`Scontorno “${name}” e preparo la sagoma trasparente…`);
+    let cutoutUrl: string | undefined;
+    try { cutoutUrl = await createFurnitureCutout(previewUrl, name, undefined, false); } catch { /* keep original */ }
+    startFurniturePlacement(name, previewUrl, undefined, file, cutoutUrl);
     setError(null);
   }
 
   function onFurnitureInput(event: ChangeEvent<HTMLInputElement>) {
-    importFurniture(event.currentTarget.files?.[0]);
+    void importFurniture(event.currentTarget.files?.[0]);
     event.currentTarget.value = '';
   }
 
@@ -1148,10 +1181,12 @@ export function RoomStudio() {
     if (!pendingFurniture || activeStep !== 3) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const x = Math.min(.94, Math.max(.06, (event.clientX - rect.left) / rect.width));
-    const y = Math.min(.94, Math.max(.28, (event.clientY - rect.top) / rect.height));
+    const requestedY = (event.clientY - rect.top) / rect.height;
+    const floorContact = floorContactYAtX(surfaces.find((surface) => surface.kind === 'floor'), x);
+    const y = Math.min(.94, Math.max(floorContact + .015, requestedY));
     furnitureIdRef.current += 1;
     const id = `furniture-${furnitureIdRef.current}`;
-    const placed: PlacedFurniture = { id, name: pendingFurniture.name, x, y, scale: 24, rotation: 0, frozen: false, previewUrl: pendingFurniture.previewUrl, description: pendingFurniture.description };
+    const placed: PlacedFurniture = { id, name: pendingFurniture.name, x, y, scale: 24, rotation: 0, frozen: false, previewUrl: pendingFurniture.previewUrl, cutoutUrl: pendingFurniture.cutoutUrl, description: pendingFurniture.description };
     if (pendingFurniture.file) furnitureFilesRef.current.set(id, pendingFurniture.file);
     setPlacedFurniture((current) => [...current, placed]);
     setSelectedFurnitureId(id);
@@ -1409,12 +1444,12 @@ export function RoomStudio() {
       const exactFurnitureOnly = !editableMaterialSurfaces.length
         && !customRequests.length
         && placedFurniture.length > 0
-        && placedFurniture.every((item) => item.previewUrl);
+        && placedFurniture.every((item) => item.cutoutUrl || item.previewUrl);
       if (exactFurnitureOnly) {
         const exactPreview = await overlayExactFurniture(sourceUrl, placedFurniture);
         processedSurfacesRef.current = surfaces;
         setProcessedPreview(exactPreview); setProcessedLabel('Render controllato'); setShowProcessedPreview(true); setActiveStep(4);
-        setNotice('Render controllato pronto: foto prodotto ritagliata e composta nel punto e nella misura scelti. Nessuna parte della stanza è stata rigenerata.');
+        setNotice('Render controllato pronto: sagoma reale scontornata, agganciata al pavimento e adattata a misura con ombra di contatto. Colore e forma del prodotto non sono stati reinterpretati.');
         return;
       }
       const { inputImage, mask } = await createMaskedInput({
@@ -1435,12 +1470,17 @@ export function RoomStudio() {
       if (materialAssignments.length) form.append('referenceType', material?.referenceKind ?? 'metadata-only');
       const furnitureWithPhoto = placedFurniture.find((item) => furnitureFilesRef.current.has(item.id));
       const furnitureReference = furnitureWithPhoto ? furnitureFilesRef.current.get(furnitureWithPhoto.id) : null;
-      if (furnitureReference && furnitureWithPhoto) {
+      const furnitureWithCutout = placedFurniture.find((item) => item.cutoutUrl);
+      if (furnitureWithCutout?.cutoutUrl) {
+        const cutoutBlob = await fetch(furnitureWithCutout.cutoutUrl).then((response) => response.blob());
+        form.append('furnitureReference', cutoutBlob, 'furniture-cutout.png');
+        form.append('furnitureReferenceName', furnitureWithCutout.name);
+      } else if (furnitureReference && furnitureWithPhoto) {
         form.append('furnitureReference', furnitureReference, furnitureReference.name);
         form.append('furnitureReferenceName', furnitureWithPhoto.name);
       }
       const furnitureWithRemotePhoto = placedFurniture.find((item) => item.previewUrl?.startsWith('http'));
-      if (!furnitureReference && furnitureWithRemotePhoto?.previewUrl) {
+      if (!furnitureWithCutout && !furnitureReference && furnitureWithRemotePhoto?.previewUrl) {
         form.append('furnitureReferenceUrl', furnitureWithRemotePhoto.previewUrl);
         form.append('furnitureReferenceName', furnitureWithRemotePhoto.name);
       }
@@ -1464,12 +1504,14 @@ export function RoomStudio() {
         right: result.verification.referenceRight,
         bottom: result.verification.referenceBottom,
       } : undefined;
-      if (hasExactFurnitureReference) protectedPreview = await overlayExactFurniture(sourceUrl, placedFurniture, referenceBounds);
+      if (hasExactFurnitureReference) {
+        protectedPreview = await overlayExactFurniture(protectedPreview, placedFurniture, referenceBounds);
+      }
       processedSurfacesRef.current = surfaces;
       setProcessedPreview(protectedPreview); setProcessedLabel('Render controllato'); setShowProcessedPreview(true);
       setActiveStep(4);
       setNotice(hasExactFurnitureReference
-        ? 'Render controllato pronto: l’app ha composto la foto prodotto esatta nel punto e nella misura scelti. La stanza è rimasta intatta.'
+        ? 'Render controllato pronto: materiali elaborati dall’IA e mobile reale scontornato sovrapposto senza reinterpretarne colore o forma.'
         : 'Render controllato pronto: fuori dalle aree autorizzate i pixel sono identici; porte, finestre, soffitto e Freeze sono stati ricopiati dalla foto di partenza.');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Non sono riuscito a creare il render.');
@@ -1550,7 +1592,7 @@ export function RoomStudio() {
                 })}
                 {draft.length > 0 && <><polyline points={pointsToSvg(draft)} fill="none" stroke="#d7f05c" strokeWidth="5" vectorEffect="non-scaling-stroke" />{draft.map((point, index) => <circle key={index} cx={point.x * 1000} cy={point.y * 625} r="9" className="draft-vertex" />)}</>}
               </svg>
-              {activeStep === 3 && <div className="furniture-placement-layer" aria-label="Mobili posizionati">{placedFurniture.map((item) => <button key={item.id} type="button" className={`placed-furniture ${selectedFurnitureId === item.id ? 'is-selected' : ''} ${item.frozen ? 'is-frozen' : ''}`} style={{ left: `${item.x * 100}%`, top: `${item.y * 100}%`, width: `${item.scale}%`, transform: `translate(-50%,-100%) rotate(${item.rotation}deg)` }} aria-label={`Sposta ${item.name}`} onClick={(event) => { event.stopPropagation(); setSelectedFurnitureId(item.id); }} onPointerDown={(event) => beginFurnitureDrag(event, item.id)} onPointerMove={moveFurniture} onPointerUp={endFurnitureDrag} onPointerCancel={endFurnitureDrag}>{item.previewUrl ? <img src={item.previewUrl} alt="" /> : <span className="placed-furniture-placeholder">▰</span>}<strong>{item.name}</strong><i aria-hidden="true" /></button>)}</div>}
+              {activeStep === 3 && <div className="furniture-placement-layer" aria-label="Mobili posizionati">{placedFurniture.map((item) => <button key={item.id} type="button" className={`placed-furniture ${selectedFurnitureId === item.id ? 'is-selected' : ''} ${item.frozen ? 'is-frozen' : ''}`} style={{ left: `${item.x * 100}%`, top: `${item.y * 100}%`, width: `${item.scale}%`, transform: `translate(-50%,-100%) rotate(${item.rotation}deg)` }} aria-label={`Sposta ${item.name}`} onClick={(event) => { event.stopPropagation(); setSelectedFurnitureId(item.id); }} onPointerDown={(event) => beginFurnitureDrag(event, item.id)} onPointerMove={moveFurniture} onPointerUp={endFurnitureDrag} onPointerCancel={endFurnitureDrag}>{item.cutoutUrl || item.previewUrl ? <img src={item.cutoutUrl ?? item.previewUrl} alt="" /> : <span className="placed-furniture-placeholder">▰</span>}<strong>{item.name}</strong><i aria-hidden="true" /></button>)}</div>}
               {pendingFurniture && <div className="placement-hint" role="status"><strong>Tocca il punto sul pavimento</strong><span>Posiziona “{pendingFurniture.name}”</span><button type="button" onClick={(event) => { event.stopPropagation(); setPendingFurniture(null); setNotice('Inserimento mobile annullato.'); }}>Annulla</button></div>}
               <div className="import-status"><span className="status-dot" /><div><strong>{showProcessedPreview ? processedLabel : 'Originale intatto'}</strong><small>{showProcessedPreview ? 'Elaborazione IA · originale sempre disponibile' : importedCaption}</small></div></div>
               <button className="replace-button" type="button" onClick={() => roomInputRef.current?.click()}>↑ Carica la tua foto</button>
@@ -1576,7 +1618,7 @@ export function RoomStudio() {
               <label className="free-search-label"><span>Link prodotto facoltativo · ricerca più veloce</span><input className="material-search" type="url" inputMode="url" aria-label="Link prodotto" value={searchSourceUrl} onChange={(event) => setSearchSourceUrl(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchProductsOnline(); }} placeholder="https://sito-produttore.it/prodotto" /></label>
               <div className="guided-search-actions"><button type="button" className="reset-search-button" onClick={resetProductSearch}>Azzera</button><button type="button" className="guided-search-button" onClick={() => void searchProductsOnline()} disabled={isSearchingProducts}>{isSearchingProducts ? 'Cerco nei cataloghi…' : `Cerca con ${aiProviderLabel ?? 'IA'}`}</button></div>
               <div className="search-scope"><span>Materiali</span><span>Colori</span><span>Arredi</span><span className="internet-ready">Prodotti reali con fonte</span></div>
-              {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={`Riferimento ${item.name}`} /> : <span className="catalog-swatch tile" /> }<button type="button" onClick={() => chooseOnlineProduct(item)}><strong>{item.brand} · {item.name}</strong><span className={`reference-badge reference-${item.referenceKind ?? 'metadata-only'}`}>{materialReferenceLabel(item)}</span><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a></div>)}</div>}
+              {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={`Riferimento ${item.name}`} /> : <span className="catalog-swatch tile" /> }<button type="button" onClick={() => void chooseOnlineProduct(item)}><strong>{item.brand} · {item.name}</strong><span className={`reference-badge reference-${item.referenceKind ?? 'metadata-only'}`}>{materialReferenceLabel(item)}</span><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a></div>)}</div>}
               <div className="material-results">{filteredMaterials.map((item) => <button type="button" key={item.id} className={`material-result ${material?.id === item.id ? 'is-selected' : ''}`} onClick={() => chooseMaterial(item)}><span className={`catalog-swatch ${item.pattern ?? 'color'}`} style={{ '--swatch-color': item.color } as CSSProperties} /><span><strong>{item.name}</strong><small>{item.category} · {item.description}</small></span></button>)}{filteredFurniture.map((item) => <button type="button" key={item.name} className={`material-result furniture-result ${pendingFurniture?.name === item.name ? 'is-selected' : ''}`} onClick={() => startFurniturePlacement(item.name)}><span className="furniture-icon">＋</span><span><strong>{item.name}</strong><small>Tocca e poi scegli il punto nella stanza · {item.description}</small></span></button>)}{filteredMaterials.length === 0 && filteredFurniture.length === 0 && onlineMaterials.length === 0 && <div className="custom-search-result"><p>Nessun campione incluso corrisponde. Per trovare marca e prodotto esatti serve la ricerca IA attiva.</p><button type="button" onClick={addCustomRequest}>Aggiungi “{materialQuery.trim()}” alla richiesta</button></div>}</div>
               <div className="custom-color"><input type="color" aria-label="Scegli colore personalizzato" value={customColor} onChange={(event) => setCustomColor(event.target.value)} /><button type="button" onClick={chooseCustomColor}>Usa questo colore</button></div>
               {material && <div className="loaded-material">{material.previewUrl ? <img src={material.previewUrl} alt={`Campione ${material.name}`} /> : <span className="catalog-swatch tile" />}<div><strong>{material.name}</strong><small>{materialReferenceLabel(material)}</small></div></div>}
