@@ -102,6 +102,21 @@ describe('RoomStudio', () => {
     expect(document.querySelector('.surface-vertex-hit')).not.toBeInTheDocument();
   });
 
+  it('continues moving a correction handle from window pointer events', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Correggi i bordi' }));
+    const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+    const selectedPolygon = document.querySelector('.is-selected-surface polygon') as SVGPolygonElement;
+    const before = selectedPolygon.getAttribute('points');
+    const handle = document.querySelector('.surface-vertex-hit') as SVGCircleElement;
+    fireEvent.pointerDown(handle, { pointerId: 9, clientX: 218, clientY: 81 });
+    fireEvent.pointerMove(window, { pointerId: 9, clientX: 300, clientY: 125 });
+    fireEvent.pointerUp(window, { pointerId: 9 });
+    expect(selectedPolygon.getAttribute('points')).not.toBe(before);
+  });
+
   it('loads a local material and applies it to one surface', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));

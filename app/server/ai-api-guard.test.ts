@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aiCorsHeaders, handleAiOptions, isAllowedAiOrigin } from './ai-api-guard';
+import { aiCorsHeaders, handleAiOptions, isAllowedAiOrigin, isAllowedAiRequest } from './ai-api-guard';
 
 describe('AI API origin protection', () => {
   it('accepts the hosted site and the Capacitor iOS origin', () => {
@@ -10,6 +10,17 @@ describe('AI API origin protection', () => {
   it('rejects absent and unrelated origins', () => {
     expect(isAllowedAiOrigin(null)).toBe(false);
     expect(isAllowedAiOrigin('https://attacker.example')).toBe(false);
+  });
+
+  it('accepts an origin-less request only from the identified iOS native client', () => {
+    expect(isAllowedAiRequest(new Request('https://example.test/api', { headers: {
+      'X-Materia-Client': 'capacitor-ios',
+      'User-Agent': 'App/22 CFNetwork/3860.600.12 Darwin/25.5.0',
+    } }))).toBe(true);
+    expect(isAllowedAiRequest(new Request('https://example.test/api', { headers: {
+      'X-Materia-Client': 'capacitor-ios',
+      'User-Agent': 'curl/8.0',
+    } }))).toBe(false);
   });
 
   it('reflects only an allowed origin instead of using a wildcard', () => {

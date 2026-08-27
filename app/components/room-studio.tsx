@@ -84,6 +84,12 @@ function isNativeApp() {
   return typeof window !== 'undefined' && window.location.protocol === 'capacitor:';
 }
 
+function isAppleTouchDevice() {
+  if (typeof navigator === 'undefined') return false;
+  return /iPad|iPhone|iPod/i.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
 function studioEndpoint(path: string) {
   return isNativeApp() ? `${HOSTED_SITE}${path}` : path;
 }
@@ -308,9 +314,16 @@ function optimizedPreviewUrl(file: File): string | Promise<string> {
     const sourceUrl = URL.createObjectURL(file);
     let bitmap: ImageBitmap | null = null;
     try {
+      const maximumSide = isAppleTouchDevice() ? 1280 : 1800;
       if (typeof createImageBitmap === 'function') {
         try {
-          bitmap = await createImageBitmap(file);
+          // Decode camera photos already resized: decoding a full 12–48 MP
+          // iPhone image before shrinking can terminate the iOS WebView.
+          bitmap = await createImageBitmap(file, {
+            resizeWidth: maximumSide,
+            resizeQuality: 'high',
+            imageOrientation: 'from-image',
+          });
         } catch {
           bitmap = null;
         }
@@ -321,7 +334,6 @@ function optimizedPreviewUrl(file: File): string | Promise<string> {
       if (!context) throw new Error('encode');
 
       if (bitmap) {
-        const maximumSide = 1800;
         const scale = Math.min(1, maximumSide / Math.max(bitmap.width, bitmap.height));
         canvas.width = Math.max(1, Math.round(bitmap.width * scale));
         canvas.height = Math.max(1, Math.round(bitmap.height * scale));
@@ -335,7 +347,6 @@ function optimizedPreviewUrl(file: File): string | Promise<string> {
           image.onerror = () => { window.clearTimeout(timer); reject(new Error('decode')); };
           image.src = sourceUrl;
         });
-        const maximumSide = 1800;
         const scale = Math.min(1, maximumSide / Math.max(image.naturalWidth, image.naturalHeight));
         canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
         canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
@@ -418,7 +429,9 @@ async function requestJson<T>(url: string, init: RequestInit, timeoutMs: number)
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
+    const headers = new Headers(init.headers);
+    if (isNativeApp()) headers.set('X-Materia-Client', 'capacitor-ios');
+    const response = await fetch(url, { ...init, headers, signal: controller.signal });
     const text = await response.text();
     let result: T;
     try {
@@ -484,11 +497,13 @@ export function RoomStudio() {
   const [dragVertex, setDragVertex] = useState<DragVertex | null>(null);
   const [isCorrectingEdges, setIsCorrectingEdges] = useState(false);
   const roomInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const floorplanInputRef = useRef<HTMLInputElement>(null);
   const materialInputRef = useRef<HTMLInputElement>(null);
   const furnitureInputRef = useRef<HTMLInputElement>(null);
   const shellRef = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const surfaceOverlayRef = useRef<SVGSVGElement>(null);
   const roomBlobRef = useRef<string | null>(null);
   const materialBlobRef = useRef<string | null>(null);
   const furnitureBlobUrlsRef = useRef<string[]>([]);
@@ -541,8 +556,24 @@ export function RoomStudio() {
   useEffect(() => {
     if (!dragVertex) return;
     const preventTouchScroll = (event: TouchEvent) => event.preventDefault();
+    const move = (event: PointerEvent) => {
+      if (event.pointerId !== dragVertex.pointerId) return;
+      event.preventDefault();
+      moveDraggedVertexAt(event.clientX, event.clientY);
+    };
+    const finish = (event: PointerEvent) => {
+      if (event.pointerId === dragVertex.pointerId) finishVertexDrag(event.pointerId);
+    };
     document.addEventListener('touchmove', preventTouchScroll, { passive: false });
-    return () => document.removeEventListener('touchmove', preventTouchScroll);
+    window.addEventListener('pointermove', move, { passive: false });
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
+    return () => {
+      document.removeEventListener('touchmove', preventTouchScroll);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+    };
   }, [dragVertex]);
 
   const selected = surfaces.find((surface) => surface.id === selectedId) ?? null;
@@ -697,16 +728,20 @@ export function RoomStudio() {
   function beginVertexDrag(event: ReactPointerEvent<SVGCircleElement>, surfaceId: string, vertexIndex: number) {
     const surface = surfaces.find((item) => item.id === surfaceId);
     if (!surface || surface.frozen || !isCorrectingEdges) return;
-    event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault(); event.stopPropagation();
     shellRef.current?.classList.add('is-moving-vertex');
     dragStartRef.current = surfaces;
     setDragVertex({ surfaceId, vertexIndex, pointerId: event.pointerId, origin: surface.points[vertexIndex] });
   }
 
-  function moveDraggedVertex(event: ReactPointerEvent<SVGSVGElement>) {
-    if (!dragVertex || event.pointerId !== dragVertex.pointerId) return;
-    event.preventDefault();
-    const point = eventPoint(event);
+  function moveDraggedVertexAt(clientX: number, clientY: number) {
+    if (!dragVertex || !surfaceOverlayRef.current) return;
+    const rect = surfaceOverlayRef.current.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const point = {
+      x: Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)),
+      y: Math.min(1, Math.max(0, (clientY - rect.top) / rect.height)),
+    };
     setSurfaces((current) => current.map((surface) => {
       if (surface.frozen) return surface;
       const linkedPoints = surface.points.map((candidate, index) => {
@@ -718,8 +753,8 @@ export function RoomStudio() {
     }));
   }
 
-  function endVertexDrag(event: ReactPointerEvent<SVGSVGElement>) {
-    if (dragVertex && event.pointerId === dragVertex.pointerId) {
+  function finishVertexDrag(pointerId: number) {
+    if (dragVertex && pointerId === dragVertex.pointerId) {
       if (dragStartRef.current) {
         setPastSurfaces((history) => [...history, dragStartRef.current as Surface[]].slice(-40));
         setFutureSurfaces([]);
@@ -883,7 +918,7 @@ export function RoomStudio() {
     const sourceUrl = options.sourceUrl ?? room?.previewUrl;
     if (!sourceUrl) throw new Error('La foto della stanza non è pronta.');
     const image = await loadImageSource(sourceUrl);
-    const maxSide = 1536;
+    const maxSide = isAppleTouchDevice() ? 1280 : 1536;
     const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
     const width = Math.max(1, Math.round(image.naturalWidth * scale));
     const height = Math.max(1, Math.round(image.naturalHeight * scale));
@@ -949,7 +984,7 @@ export function RoomStudio() {
     if (!hasCompatibleImageGeometry(original.naturalWidth, original.naturalHeight, generated.naturalWidth, generated.naturalHeight)) {
       throw new Error('Il risultato IA ha cambiato taglio o proporzioni: è stato scartato e la stanza è rimasta intatta.');
     }
-    const maxSide = 1536;
+    const maxSide = isAppleTouchDevice() ? 1280 : 1536;
     const scale = Math.min(1, maxSide / Math.max(original.naturalWidth, original.naturalHeight));
     const width = Math.max(1, Math.round(original.naturalWidth * scale));
     const height = Math.max(1, Math.round(original.naturalHeight * scale));
@@ -1563,7 +1598,7 @@ export function RoomStudio() {
           <div className="canvas-wrap"><div ref={canvasRef} className={`canvas ${isDraggingFile ? 'is-dragging' : ''} ${pendingFurniture ? 'is-placing-furniture' : ''}`} id="editor-title" style={room ? { aspectRatio: roomRatio } : undefined} onClick={placePendingFurniture} onDragEnter={() => setIsDraggingFile(true)} onDragLeave={() => setIsDraggingFile(false)} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
             {room?.previewUrl ? <div className="editor-media">
               <img ref={roomImageRef} src={showProcessedPreview && processedPreview ? processedPreview : room.previewUrl} alt={showProcessedPreview ? `Anteprima elaborata: ${processedLabel}` : `Originale importato: ${room.file.name}`} onLoad={(event) => onRoomImageLoad(event.currentTarget)} />
-              <svg className={`surface-overlay ${drawKind ? 'is-drawing' : ''} ${isCorrectingEdges ? 'is-correcting' : ''}`} viewBox="0 0 1000 625" preserveAspectRatio="none" onPointerDown={addDraftPoint} onPointerMove={moveDraggedVertex} onPointerUp={endVertexDrag} onPointerCancel={endVertexDrag}>
+              <svg ref={surfaceOverlayRef} className={`surface-overlay ${drawKind ? 'is-drawing' : ''} ${isCorrectingEdges ? 'is-correcting' : ''}`} viewBox="0 0 1000 625" preserveAspectRatio="none" onPointerDown={addDraftPoint}>
                 <defs>
                   {catalogMaterials.filter((item) => item.pattern).map((item) => <pattern id={`catalog-material-${item.id}`} key={item.id} width={item.pattern === 'wood' ? 180 : 120} height={item.pattern === 'wood' ? 42 : 120} patternUnits="userSpaceOnUse"><rect width="100%" height="100%" fill={item.color} /><path d={item.pattern === 'wood' ? 'M0 2H180 M0 40H180 M45 2V40 M135 2V40' : 'M0 1H120 M1 0V120'} stroke="rgba(67,55,43,.22)" strokeWidth="3" /><path d={item.pattern === 'stone' ? 'M8 38 C38 17 64 55 110 25 M14 92 C45 68 77 106 116 74' : ''} fill="none" stroke="rgba(255,255,255,.24)" strokeWidth="5" /></pattern>)}
                   {material?.previewUrl && <pattern id={`uploaded-material-${material.id}`} width="140" height="140" patternUnits="userSpaceOnUse"><image href={material.previewUrl} width="140" height="140" preserveAspectRatio="xMidYMid slice" /></pattern>}
@@ -1571,7 +1606,7 @@ export function RoomStudio() {
                 {surfaces.map((surface) => {
                   const labelPoint = surfaceLabelPoint(surface);
                   const showLabel = surface.kind === 'window' || surface.kind === 'door';
-                  return <g key={surface.id} className={`surface-kind-${surface.kind} ${surface.frozen ? 'is-frozen ' : ''}${surface.id === selectedId ? 'is-selected-surface' : ''}`}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{showLabel && <text className="surface-name" x={labelPoint.x * 1000} y={labelPoint.y * 625}>{surface.name}</text>}{isCorrectingEdges && !surface.frozen && surface.id === selectedId && surface.points.map((point, index) => <g key={`${surface.id}-${index}`}><circle cx={point.x * 1000} cy={point.y * 625} r="32" className="surface-vertex-hit" onPointerDown={(event) => beginVertexDrag(event, surface.id, index)} /><circle cx={point.x * 1000} cy={point.y * 625} r="14" className="surface-vertex" aria-hidden="true" /></g>)}</g>;
+                  return <g key={surface.id} className={`surface-kind-${surface.kind} ${surface.frozen ? 'is-frozen ' : ''}${surface.id === selectedId ? 'is-selected-surface' : ''}`}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{showLabel && <text className="surface-name" x={labelPoint.x * 1000} y={labelPoint.y * 625}>{surface.name}</text>}{isCorrectingEdges && !surface.frozen && surface.id === selectedId && surface.points.map((point, index) => <g key={`${surface.id}-${index}`}><circle cx={point.x * 1000} cy={point.y * 625} r="52" className="surface-vertex-hit" onPointerDown={(event) => beginVertexDrag(event, surface.id, index)} /><circle cx={point.x * 1000} cy={point.y * 625} r="16" className="surface-vertex" aria-hidden="true" /></g>)}</g>;
                 })}
                 {draft.length > 0 && <><polyline points={pointsToSvg(draft)} fill="none" stroke="#d7f05c" strokeWidth="5" vectorEffect="non-scaling-stroke" />{draft.map((point, index) => <circle key={index} cx={point.x * 1000} cy={point.y * 625} r="9" className="draft-vertex" />)}</>}
               </svg>
@@ -1580,11 +1615,11 @@ export function RoomStudio() {
               <div className="import-status"><span className="status-dot" /><div><strong>{showProcessedPreview ? processedLabel : 'Originale intatto'}</strong><small>{showProcessedPreview ? 'Elaborazione IA · originale sempre disponibile' : importedCaption}</small></div></div>
               <button className="replace-button" type="button" onClick={() => roomInputRef.current?.click()}>↑ Carica la tua foto</button>
               {processedPreview && <div className="before-after-toggle" aria-label="Confronta originale e risultato"><button type="button" className={!showProcessedPreview ? 'is-active' : ''} onClick={showOriginalRoom}>Originale</button><button type="button" className={showProcessedPreview ? 'is-active' : ''} onClick={showProcessedRoom}>{processedLabel}</button></div>}
-            </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Inizia da ciò che hai</p><h1>Cosa vuoi caricare?</h1><p>Scegli una foto della stanza oppure una planimetria. L’originale resterà sempre intatto.</p><div className="source-actions"><label className="source-card is-primary" htmlFor="room-file"><span>▣</span><strong>Foto stanza</strong><small>Apri direttamente Foto su iPhone e iPad</small></label><label className="source-card" htmlFor="floorplan-file"><span>⌗</span><strong>Planimetria</strong><small>Ricalca perimetro e pareti interne</small></label></div><button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>JPG, PNG o HEIC · massimo 20 MB</small></div></>}
+            </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Inizia da ciò che hai</p><h1>Cosa vuoi caricare?</h1><p>Scegli una foto della stanza oppure una planimetria. L’originale resterà sempre intatto.</p><div className="source-actions"><label className="source-card is-primary" htmlFor="room-file"><span>▣</span><strong>Libreria foto</strong><small>Scegli una foto già presente su iPhone o iPad</small></label><label className="source-card" htmlFor="camera-file"><span>●</span><strong>Scatta foto</strong><small>Usa direttamente la fotocamera posteriore</small></label><label className="source-card" htmlFor="floorplan-file"><span>⌗</span><strong>Planimetria</strong><small>Ricalca perimetro e pareti interne</small></label></div><button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>JPG, PNG o HEIC · massimo 20 MB</small></div></>}
             {isDraggingFile && <div className="drop-overlay"><strong>Rilascia per importare</strong><span>La foto resterà nel browser.</span></div>}
             {isImportingRoom && <div className="processing-overlay" role="status"><span className="processing-spinner" /><strong>Preparo la foto…</strong><small>Le immagini grandi vengono ottimizzate per evitare blocchi.</small></div>}
           </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
-          <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onMaterialInput} /><input ref={furnitureInputRef} id="furniture-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onFurnitureInput} />
+          <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onRoomInput} /><input ref={cameraInputRef} id="camera-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" capture="environment" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onMaterialInput} /><input ref={furnitureInputRef} id="furniture-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onFurnitureInput} />
           {room?.sourceType === 'photo' && activeStep === 2 && <section className="empty-room-choice" aria-label="Svuota la stanza"><div><strong>Vuoi svuotare la stanza?</strong><span>Opzionale: rimuove mobili e decorazioni lasciando intatta la struttura.</span></div><button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button></section>}
           <div className={`status-bar ${activeStep === 2 ? 'prepare-status' : ''}`}><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.'}</p>{room && activeStep === 2 && <button className={`edge-edit-button ${isCorrectingEdges ? 'is-active' : ''}`} type="button" onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine correzione' : room.sourceType === 'floorplan' ? 'Correggi il perimetro' : 'Correggi i bordi'}</button>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && <button className="continue-products-button" type="button" onClick={() => goToStep(3)}>Continua ai prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
         </section>

@@ -57,12 +57,21 @@ export function isAllowedAiOrigin(origin: string | null) {
   return false;
 }
 
+export function isAllowedAiRequest(request: Request) {
+  if (isAllowedAiOrigin(request.headers.get('Origin'))) return true;
+  // CapacitorHttp performs iOS requests through CFNetwork. Unlike WKWebView
+  // fetch it intentionally strips Origin, so authenticate the native client
+  // with an explicit app header plus the native networking user agent.
+  return request.headers.get('X-Materia-Client') === 'capacitor-ios'
+    && /\bCFNetwork\//i.test(request.headers.get('User-Agent') ?? '');
+}
+
 export function aiCorsHeaders(request: Request, methods = 'POST, OPTIONS') {
   const headers = new Headers({
     'Access-Control-Allow-Methods': methods,
     // Older TestFlight builds may still send the former Sites header. It is
     // accepted for CORS compatibility only and is never treated as authority.
-    'Access-Control-Allow-Headers': 'Content-Type, OAI-Sites-Authorization',
+    'Access-Control-Allow-Headers': 'Content-Type, OAI-Sites-Authorization, X-Materia-Client',
     'Cache-Control': 'no-store',
     Vary: 'Origin',
   });
@@ -131,8 +140,7 @@ async function increment(
 }
 
 export async function guardAiRequest(request: Request, route: AiRoute): Promise<GuardSuccess | GuardFailure> {
-  const origin = request.headers.get('Origin');
-  if (!isAllowedAiOrigin(origin)) return { ok: false, response: deniedOrigin(request) };
+  if (!isAllowedAiRequest(request)) return { ok: false, response: deniedOrigin(request) };
 
   const headers = aiCorsHeaders(request);
   try {
