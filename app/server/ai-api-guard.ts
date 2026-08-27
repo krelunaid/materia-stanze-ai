@@ -60,10 +60,15 @@ export function isAllowedAiOrigin(origin: string | null) {
 export function isAllowedAiRequest(request: Request) {
   if (isAllowedAiOrigin(request.headers.get('Origin'))) return true;
   // CapacitorHttp performs iOS requests through CFNetwork. Unlike WKWebView
-  // fetch it intentionally strips Origin, so authenticate the native client
-  // with an explicit app header plus the native networking user agent.
-  return request.headers.get('X-Materia-Client') === 'capacitor-ios'
-    && /\bCFNetwork\//i.test(request.headers.get('User-Agent') ?? '');
+  // fetch it intentionally strips Origin. Build 23+ also sends the explicit
+  // app header; accept the distinctive legacy App/… CFNetwork transport so
+  // already-installed TestFlight builds keep working during the rollout.
+  const userAgent = request.headers.get('User-Agent') ?? '';
+  const nativeTransport = /^App\/\d+\s+CFNetwork\//i.test(userAgent);
+  return nativeTransport && (
+    request.headers.get('X-Materia-Client') === 'capacitor-ios'
+    || !request.headers.has('X-Materia-Client')
+  );
 }
 
 export function aiCorsHeaders(request: Request, methods = 'POST, OPTIONS') {

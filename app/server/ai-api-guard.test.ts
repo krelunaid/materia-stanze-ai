@@ -21,6 +21,9 @@ describe('AI API origin protection', () => {
       'X-Materia-Client': 'capacitor-ios',
       'User-Agent': 'curl/8.0',
     } }))).toBe(false);
+    expect(isAllowedAiRequest(new Request('https://example.test/api', { headers: {
+      'User-Agent': 'App/22 CFNetwork/3860.600.12 Darwin/25.5.0',
+    } }))).toBe(true);
   });
 
   it('reflects only an allowed origin instead of using a wildcard', () => {
