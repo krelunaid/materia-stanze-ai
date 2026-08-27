@@ -1494,7 +1494,7 @@ export function RoomStudio() {
       setProcessedPreview(protectedPreview); setProcessedLabel('Render controllato'); setShowProcessedPreview(true);
       setActiveStep(4);
       setNotice(placedFurniture.length
-        ? 'Render fotografico pronto: il mobile è stato integrato dall’IA e ha superato il controllo di presenza, posizione e somiglianza.'
+        ? 'Render fotografico pronto: il mobile ha superato i controlli di presenza, posizione, appoggio, ombra di contatto e somiglianza.'
         : 'Render controllato pronto: fuori dalle aree autorizzate i pixel sono identici; porte, finestre, soffitto e Freeze sono stati ricopiati dalla foto di partenza.');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Non sono riuscito a creare il render.');

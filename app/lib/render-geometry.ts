@@ -12,11 +12,16 @@ function clamp(value: number) {
 export function furnitureEditRect(item: FurniturePlacement): NormalizedRect {
   const width = Math.min(.9, Math.max(.06, item.scale / 100));
   const height = Math.min(.9, Math.max(.1, width * 1.35));
+  // The editable window must include enough real floor around the contact
+  // point for the image model to synthesize ambient occlusion and a soft cast
+  // shadow. A narrow strip makes a correct cutout look visibly suspended.
+  const horizontalShadowRoom = width * .76;
+  const floorShadowRoom = Math.max(.065, width * .34);
   return {
-    left: clamp(item.x - width * .58),
+    left: clamp(item.x - horizontalShadowRoom),
     top: clamp(item.y - height),
-    right: clamp(item.x + width * .58),
-    bottom: clamp(item.y + Math.max(.025, width * .12)),
+    right: clamp(item.x + horizontalShadowRoom),
+    bottom: clamp(item.y + floorShadowRoom),
   };
 }
 

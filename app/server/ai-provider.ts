@@ -54,6 +54,7 @@ export type FurnitureRenderVerification = {
   atRequestedAnchor: boolean;
   resemblesReference: boolean;
   physicallyGrounded: boolean;
+  contactShadow: boolean;
   structurallyComplete: boolean;
   realisticLighting: boolean;
   confidence: number;
@@ -69,6 +70,7 @@ export function acceptsFurnitureRender(verification: FurnitureRenderVerification
     && verification.atRequestedAnchor
     && (!referenceRequired || verification.resemblesReference)
     && verification.physicallyGrounded
+    && verification.contactShadow
     && verification.structurallyComplete
     && verification.realisticLighting
     && verification.confidence >= .8;
@@ -82,6 +84,7 @@ const furnitureVerificationSchema = {
     atRequestedAnchor: { type: 'boolean' },
     resemblesReference: { type: 'boolean' },
     physicallyGrounded: { type: 'boolean' },
+    contactShadow: { type: 'boolean' },
     structurallyComplete: { type: 'boolean' },
     realisticLighting: { type: 'boolean' },
     confidence: { type: 'number', minimum: 0, maximum: 1 },
@@ -91,7 +94,7 @@ const furnitureVerificationSchema = {
     referenceRight: { type: 'number', minimum: 0, maximum: 1 },
     referenceBottom: { type: 'number', minimum: 0, maximum: 1 },
   },
-  required: ['visible', 'atRequestedAnchor', 'resemblesReference', 'physicallyGrounded', 'structurallyComplete', 'realisticLighting', 'confidence', 'reason', 'referenceLeft', 'referenceTop', 'referenceRight', 'referenceBottom'],
+  required: ['visible', 'atRequestedAnchor', 'resemblesReference', 'physicallyGrounded', 'contactShadow', 'structurallyComplete', 'realisticLighting', 'confidence', 'reason', 'referenceLeft', 'referenceTop', 'referenceRight', 'referenceBottom'],
 } as const;
 
 const productBoundsSchema = {
@@ -1074,8 +1077,9 @@ export async function verifyFurniturePlacement(provider: AiProvider, input: {
       'Set atRequestedAnchor=true only if each floor-contact point is close to the requested x/y percentage and the visible size is close to the requested width.',
       'Set resemblesReference=true only if the rendered item preserves the recognizable shape, proportions, material and color of the supplied product reference. If no reference is present, judge the requested description conservatively.',
       'Set physicallyGrounded=true only if every leg or base visibly meets the detected floor plane, without floating, sinking or wall-mounting, and the contact shadow follows the room light.',
+      'Set contactShadow=true only when image 2 has a visible but natural soft contact shadow or ambient-occlusion darkening directly beneath every floor contact. A uniformly crisp pasted lower edge, a bright gap, or an object with no localized floor darkening must be false even if its outline touches the floor.',
       'Set structurallyComplete=true only if no leg, door, handle, edge or other visible product part from the reference was removed, merged, cropped or invented.',
-      'Set realisticLighting=true only if perspective, illumination, color temperature, sharpness and shadows make the furniture look photographed inside image 1 rather than pasted on top.',
+      'Set realisticLighting=true only if perspective, illumination, color temperature, sharpness and directional shadows make the furniture look photographed inside image 1 rather than pasted on top.',
       'When image 3 is present, return the tight normalized bounding box of the furniture body only in referenceLeft/referenceTop/referenceRight/referenceBottom. Exclude wall, floor, artwork, lamps, books, labels, arrows, dimension text, shadows and foreground objects. If no reference exists, return 0,0,1,1.',
       'A room that looks unchanged or omits the item must fail. Return only the structured result.',
     ].join('\n'),

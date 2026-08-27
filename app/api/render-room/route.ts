@@ -51,7 +51,7 @@ export async function POST(request: Request) {
       imageUrl && referenceType === 'uploaded-sample' ? 'Use the supplied user sample as the material reference.' : '',
       materials && referenceType === 'metadata-only' ? 'No verified texture is supplied. Keep any product visualization restrained and approximate; do not invent distinctive graphics or claim exact visual fidelity.' : '',
       furniture ? `Insert these furniture elements at the exact user-selected image anchors, approximate sizes and rotations below. Treat x/y as percentages of the full source photograph; keep each item's floor contact point at its anchor and preserve the user's composition:\n${furniture}` : '',
-      furniture ? 'MANDATORY: every listed furniture item must be clearly visible in the final photograph, entirely inside its transparent mask window. A clean room with the furniture omitted is an invalid result. Put the furniture floor-contact point exactly at the requested anchor and keep its real product proportions.' : '',
+      furniture ? 'MANDATORY: every listed furniture item must be clearly visible in the final photograph, entirely inside its transparent mask window. A clean room with the furniture omitted is an invalid result. Put the furniture floor-contact point exactly at the requested anchor and keep its real product proportions. Use the editable floor band beneath it to create a visible, soft contact shadow and ambient occlusion at every leg or base contact. Match the shadow direction, softness, intensity and color to the existing room light; never leave a bright gap or a uniformly sharp pasted lower edge.' : '',
       furnitureReference instanceof File ? `Use the supplied furniture reference image to preserve the exact appearance of “${furnitureReferenceName || 'the selected furniture'}”. It may already be a transparent cutout: never recreate its former catalog background. Integrate only the physical object with correct floor contact, perspective, scale, room lighting and a natural contact shadow.` : '',
       furnitureReferenceUrl && !(furnitureReference instanceof File) ? `Use the supplied online product photograph to preserve the appearance and proportions of “${furnitureReferenceName || 'the selected furniture'}”; remove its original photo background before integrating it.` : '',
       requests ? `Also follow these user requests: ${requests}.` : '',
@@ -68,7 +68,7 @@ export async function POST(request: Request) {
         : referenceType === 'metadata-only' ? null : imageUrl) || null,
       referenceImageFile: furnitureReference instanceof File ? furnitureReference : null,
       prompt,
-      maskExplanation: 'transparent pixels are the complete and only editable product/furniture regions; every solid white pixel is protected and must remain unchanged.',
+      maskExplanation: 'transparent pixels are the complete and only editable product/furniture regions, including a controlled floor band reserved for natural contact shadows; every solid white pixel is protected and must remain unchanged.',
     };
     let result = await editImage(provider, editInput);
     let verification = null;
@@ -86,7 +86,7 @@ export async function POST(request: Request) {
       if (!accepted) {
         result = await editImage(provider, {
           ...editInput,
-          prompt: `${prompt}\nQUALITY-CONTROL RETRY: the previous attempt omitted, misplaced, distorted or failed to ground the requested furniture. Preserve every visible leg, door, handle and edge from the reference. Put every leg or base exactly on the floor plane, with perspective-correct scale and a natural contact shadow matching the room light. Do not return an empty room or a wall-mounted/floating object.`,
+          prompt: `${prompt}\nQUALITY-CONTROL RETRY: the previous attempt omitted, misplaced, distorted, lacked a visible contact shadow, or failed to ground the requested furniture. Preserve every visible leg, door, handle and edge from the reference. Put every leg or base exactly on the floor plane. Add localized ambient-occlusion darkening at the contact points plus a soft cast shadow extending naturally across the editable floor band, with direction and softness matching the room light. A crisp cutout edge touching an unchanged bright floor is invalid. Do not return an empty room or a wall-mounted/floating object.`,
         });
         verification = await verify(result);
         const retryAccepted = acceptsFurnitureRender(verification, referenceRequired);

@@ -402,13 +402,14 @@ describe('getAiProvider', () => {
 describe('acceptsFurnitureRender', () => {
   const good = {
     visible: true, atRequestedAnchor: true, resemblesReference: true,
-    physicallyGrounded: true, structurallyComplete: true, realisticLighting: true,
+    physicallyGrounded: true, contactShadow: true, structurallyComplete: true, realisticLighting: true,
     confidence: .9, reason: 'ok', referenceLeft: 0, referenceTop: 0, referenceRight: 1, referenceBottom: 1,
   };
 
   it('accepts only a complete, grounded and realistically integrated product', () => {
     expect(acceptsFurnitureRender(good, true)).toBe(true);
     expect(acceptsFurnitureRender({ ...good, physicallyGrounded: false }, true)).toBe(false);
+    expect(acceptsFurnitureRender({ ...good, contactShadow: false }, true)).toBe(false);
     expect(acceptsFurnitureRender({ ...good, structurallyComplete: false }, true)).toBe(false);
     expect(acceptsFurnitureRender({ ...good, realisticLighting: false }, true)).toBe(false);
     expect(acceptsFurnitureRender({ ...good, confidence: .79 }, true)).toBe(false);

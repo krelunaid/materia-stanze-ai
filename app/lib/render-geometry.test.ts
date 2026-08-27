@@ -4,11 +4,18 @@ import { furnitureContactGeometry, furnitureEditRect, hasCompatibleImageGeometry
 describe('controlled render geometry', () => {
   it('opens only a bounded area around the furniture floor anchor', () => {
     const rect = furnitureEditRect({ x: .5, y: .8, scale: 24 });
-    expect(rect.left).toBeCloseTo(.3608);
+    expect(rect.left).toBeCloseTo(.3176);
     expect(rect.top).toBeCloseTo(.476);
-    expect(rect.right).toBeCloseTo(.6392);
-    expect(rect.bottom).toBeCloseTo(.8288);
+    expect(rect.right).toBeCloseTo(.6824);
+    expect(rect.bottom).toBeCloseTo(.8816);
     expect(rectPoints(rect)).toHaveLength(4);
+  });
+
+  it('keeps a visible floor band for a natural furniture contact shadow', () => {
+    const placement = { x: .5, y: .7, scale: 20 };
+    const rect = furnitureEditRect(placement);
+    expect(rect.bottom - placement.y).toBeGreaterThanOrEqual(.065);
+    expect(rect.right - rect.left).toBeGreaterThan(placement.scale / 100);
   });
 
   it('clamps furniture editing to the photograph', () => {
