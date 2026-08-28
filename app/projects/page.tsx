@@ -1,5 +1,7 @@
 /* eslint-disable @next/next/no-html-link-for-pages -- Vinext 1.0.0-beta.3 genera errori runtime nel prefetch di next/link. */
 
+import { ProjectsList } from './projects-list';
+
 export const metadata = {
   title: 'Progetti — Materia',
   description: 'I progetti locali del configuratore Materia.',
@@ -22,7 +24,7 @@ export default function ProjectsPage() {
         <div>
           <p className="eyebrow">I tuoi spazi</p>
           <h1>Progetti</h1>
-          <p>Ogni stanza parte da un originale intatto. Disegna le superfici, blocca quelle da proteggere e prova un materiale locale.</p>
+          <p>Ogni stanza parte da un originale intatto. I contorni approvati restano in questo browser: svuotare o renderizzare non li riscrive.</p>
         </div>
         <a className="primary-button" href="/">Crea nuovo progetto</a>
       </section>
@@ -34,18 +36,7 @@ export default function ProjectsPage() {
           <p>Importa una fotografia JPG, PNG o HEIC, oppure una planimetria.</p>
           <a href="/">Apri l’editor <span aria-hidden="true">→</span></a>
         </article>
-
-        <article className="roadmap-card">
-          <div className="roadmap-visual">
-            <span className="roadmap-wall one" /><span className="roadmap-wall two" /><span className="roadmap-floor" />
-          </div>
-          <div className="roadmap-copy">
-            <span className="phase-pill">Versione 0.1</span>
-            <h2>Editor manuale attivo</h2>
-            <p>Caricamento, tracciatura guidata o libera, correzione dei vertici, Freeze e campioni locali.</p>
-            <a href="/">Continua <span aria-hidden="true">→</span></a>
-          </div>
-        </article>
+        <ProjectsList />
       </section>
 
       <footer className="projects-footer">
