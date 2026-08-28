@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { mergeDetectedSurfaces, RoomStudio } from './room-studio';
+import { geometryForDerivedImage, surfacesMatch } from '../geometry/model';
 
 beforeAll(() => {
   URL.createObjectURL = vi.fn(() => 'blob:room-preview');
@@ -25,6 +26,18 @@ describe('RoomStudio', () => {
     expect(merged.find((surface) => surface.id === 'frozen-wall')).toEqual(previous[1]);
     expect(merged.some((surface) => surface.id === 'duplicate-wall')).toBe(false);
     expect(merged.some((surface) => surface.id === 'new-wall')).toBe(true);
+  });
+
+  it('does not let a generated empty-room image replace approved contours', () => {
+    const previous = [
+      { id: 'old-floor', name: 'Pavimento', kind: 'floor' as const, frozen: false, points: [{ x: 0, y: .6 }, { x: 1, y: .6 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+    ];
+    const detected = [
+      { id: 'new-floor', name: 'Pavimento', kind: 'floor' as const, frozen: false, points: [{ x: 0, y: .4 }, { x: 1, y: .4 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+    ];
+    const kept = geometryForDerivedImage(previous);
+    expect(surfacesMatch(kept, previous)).toBe(true);
+    expect(surfacesMatch(kept, mergeDetectedSurfaces(detected, previous))).toBe(false);
   });
 
   it('shows the product-specific import flow', () => {

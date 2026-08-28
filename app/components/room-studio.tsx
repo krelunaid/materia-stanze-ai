@@ -14,9 +14,11 @@ import {
   useState,
 } from 'react';
 import { drawImageCover } from '../lib/canvas-draw';
-import { AcceptedRoomFile, validateRoomFile } from '../lib/file-validation';
+import { AcceptedRoomFile, formatBytes, validateRoomFile } from '../lib/file-validation';
 import { furnitureEditRect, hasCompatibleImageGeometry, rectPoints } from '../lib/render-geometry';
 import { NormalizedProductBounds, removeConnectedProductBackground } from '../lib/product-cutout';
+import { geometryForDerivedImage } from '../geometry/model';
+import { buildStoredProject, loadProject, saveProject } from '../geometry/project-store';
 import {
   isValidPolygon,
   nextSurfaceName,
@@ -515,6 +517,8 @@ export function RoomStudio() {
   const autoFitPreviewRef = useRef<string | null>(null);
   const originalSurfacesRef = useRef<Surface[]>([]);
   const processedSurfacesRef = useRef<Surface[] | null>(null);
+  const projectIdRef = useRef('draft');
+  const skipAutosaveRef = useRef(false);
 
   useEffect(() => {
     shellRef.current?.setAttribute('data-hydrated', 'true');
@@ -546,6 +550,96 @@ export function RoomStudio() {
   useEffect(() => {
     shellRef.current?.scrollTo?.({ top: 0, left: 0, behavior: 'auto' });
   }, [activeStep]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('project');
+    if (!id) return;
+    let cancelled = false;
+    skipAutosaveRef.current = true;
+    void loadProject(id)
+      .then((project) => {
+        if (cancelled || !project) return;
+        projectIdRef.current = project.id;
+        const previewUrl = URL.createObjectURL(project.original);
+        if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
+        roomBlobRef.current = previewUrl;
+        const file = new File([project.original], project.fileName, { type: project.mime || 'image/jpeg' });
+        setRoom({
+          file,
+          kind: 'image',
+          canPreview: true,
+          displaySize: formatBytes(project.original.size),
+          projectName: project.title,
+          previewUrl,
+          sourceType: project.sourceType,
+        });
+        originalSurfacesRef.current = project.originalSurfaces;
+        processedSurfacesRef.current = project.processedSurfaces;
+        setSurfaces(project.geometry.surfaces);
+        setPastSurfaces([]);
+        setFutureSurfaces([]);
+        const preferred = project.geometry.surfaces.find((surface) => surface.kind === 'floor')
+          ?? project.geometry.surfaces[0]
+          ?? null;
+        setSelectedId(preferred?.id ?? null);
+        setRenameDraft(preferred?.name ?? '');
+        if (project.processed) {
+          const processedUrl = URL.createObjectURL(project.processed);
+          if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
+          processedBlobRef.current = processedUrl;
+          setProcessedPreview(processedUrl);
+          setProcessedLabel(project.processedLabel);
+          setShowProcessedPreview(Boolean(project.processedSurfaces?.length));
+        }
+        autoFitPreviewRef.current = previewUrl;
+        setActiveStep(2);
+        setNotice('Progetto ripristinato. I contorni approvati non sono stati ricalcolati.');
+      })
+      .catch(() => {
+        if (!cancelled) setError('Non sono riuscito a riaprire il progetto salvato in locale.');
+      })
+      .finally(() => {
+        skipAutosaveRef.current = false;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!room || skipAutosaveRef.current || surfaces.length === 0) return;
+    const handle = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const original = room.file.size > 0
+            ? room.file
+            : await (await fetch(room.previewUrl ?? '/demo-room.jpg')).blob();
+          const processed = processedPreview
+            ? await (await fetch(processedPreview)).blob()
+            : null;
+          if (projectIdRef.current === 'draft') projectIdRef.current = crypto.randomUUID();
+          await saveProject(buildStoredProject({
+            id: projectIdRef.current,
+            title: room.projectName,
+            sourceType: room.sourceType,
+            fileName: room.file.name,
+            mime: room.file.type || original.type || 'image/jpeg',
+            original,
+            processed,
+            processedLabel,
+            surfaces,
+            originalSurfaces: originalSurfacesRef.current.length ? originalSurfacesRef.current : surfaces,
+            processedSurfaces: processedSurfacesRef.current,
+            source: 'manual',
+          }));
+        } catch {
+          // Local persistence is best-effort; the editor stays usable.
+        }
+      })();
+    }, 500);
+    return () => window.clearTimeout(handle);
+  }, [processedLabel, processedPreview, room, surfaces]);
 
   useEffect(() => {
     if (!room || room.sourceType !== 'photo') return;
@@ -636,6 +730,7 @@ export function RoomStudio() {
       if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
       roomBlobRef.current = previewUrl;
       processedBlobRef.current = null;
+      projectIdRef.current = crypto.randomUUID();
       const initialSurfaces = sourceType === 'floorplan' ? createFloorplanOutline() : [];
       setRoom({ ...result.value, previewUrl, sourceType });
       setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]);
@@ -1323,8 +1418,7 @@ export function RoomStudio() {
 
       if (aiStatus === 'ready' || aiStatus === 'checking') {
         try {
-          const source = showProcessedPreview && processedPreview ? processedPreview : room.previewUrl;
-          detected = await detectSurfacesForPreview(source, room.file.name);
+          detected = await detectSurfacesForPreview(room.previewUrl, room.file.name);
           usedGrok = detected.length > 0;
         } catch (caught) {
           grokError = caught instanceof Error ? caught : new Error('Grok non ha completato il riconoscimento.');
@@ -1388,28 +1482,14 @@ export function RoomStudio() {
           throw new Error('Grok ha cambiato l’inquadratura della foto: il risultato è stato scartato e l’originale è rimasto intatto. Riprova tra poco.');
         }
 
-        setNotice('Stanza svuotata. Grok sta riconoscendo di nuovo pavimento, muri, soffitto, porte e finestre…');
-        let processedSurfaces = baselineSurfaces;
-        let detectionSucceeded = false;
-        try {
-          const detected = await detectSurfacesForPreview(protectedPreview, room.file.name);
-          if (detected.length) {
-            processedSurfaces = mergeDetectedSurfaces(detected, baselineSurfaces);
-            detectionSucceeded = processedSurfaces.length > 0;
-          }
-        } catch {
-          // La stanza vuota resta utilizzabile anche se la seconda analisi non risponde.
-        }
-
-        originalSurfacesRef.current = baselineSurfaces;
-        processedSurfacesRef.current = processedSurfaces;
-        setSurfaces(processedSurfaces); setPastSurfaces([]); setFutureSurfaces([]);
-        const preferred = processedSurfaces.find((surface) => surface.kind === 'floor') ?? processedSurfaces[0] ?? null;
+        const approved = geometryForDerivedImage(baselineSurfaces);
+        originalSurfacesRef.current = geometryForDerivedImage(baselineSurfaces);
+        processedSurfacesRef.current = approved;
+        setSurfaces(approved); setPastSurfaces([]); setFutureSurfaces([]);
+        const preferred = approved.find((surface) => surface.kind === 'floor') ?? approved[0] ?? null;
         setSelectedId(preferred?.id ?? null); setRenameDraft(preferred?.name ?? '');
         setProcessedPreview(protectedPreview); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
-        setNotice(detectionSucceeded
-          ? `Stanza vuota pronta: ${processedSurfaces.length} superfici riconosciute di nuovo e pavimento attivato.`
-          : 'Stanza vuota pronta, ma la seconda analisi non ha risposto: mantengo i contorni precedenti e puoi riprovare con “Adatta alla foto”.');
+        setNotice('Stanza vuota pronta. I contorni approvati restano quelli della foto originale: l’IA non li ha ricalcolati.');
         return;
       }
     } catch (caught) {
@@ -1442,7 +1522,7 @@ export function RoomStudio() {
       setSelectedId(preferred.id); setRenameDraft(preferred.name);
     }
     setShowProcessedPreview(true);
-    setNotice(`${processedLabel}: contorni ricalcolati sulla stessa immagine.`);
+    setNotice(`${processedLabel}: stessi contorni approvati sulla stanza svuotata.`);
   }
 
   async function createFinalRender() {
