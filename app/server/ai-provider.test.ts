@@ -241,6 +241,26 @@ describe('getAiProvider', () => {
     ]);
   });
 
+  it('enriches furniture from schema.org microdata when Grok omits the image', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(`<!doctype html>
+      <div itemscope itemtype="http://schema.org/Product">
+        <div itemprop="name">Divano moderno Modena</div>
+        <div itemprop="image" src="/modules/catalogue/images/53_0.jpg?divano_moderno_modena_viola_1.jpg">
+          Divano moderno Modena
+        </div>
+      </div>`, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
+    const product = {
+      name: 'Divano moderno Modena', brand: 'Santambrogio', collection: '', category: 'Arredi' as const, color: '', effect: '', format: '', finish: '',
+      description: 'Divano moderno', sourceUrl: 'https://www.divanisantambrogio.it/divani_moderni/divano_moderno_modena-60.html', productImageUrl: '', textureImageUrl: '', roomImageUrls: [],
+      confidence: .75, official: true, correction: '',
+    };
+
+    await expect(enrichFurnitureProductImages([product])).resolves.toEqual([{
+      ...product,
+      productImageUrl: 'https://www.divanisantambrogio.it/modules/catalogue/images/53_0.jpg?divano_moderno_modena_viola_1.jpg',
+    }]);
+  });
+
   it('does not fetch or alter furniture that already has a verified image', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch');
     const product = {

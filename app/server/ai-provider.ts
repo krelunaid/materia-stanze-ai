@@ -343,6 +343,20 @@ function pageImage(html: string, base: URL) {
       if (candidate) return candidate;
     }
   }
+
+  // Some furniture catalogues expose schema.org Product microdata without
+  // JSON-LD or Open Graph tags. Accept only an element explicitly marked as
+  // the product image; a generic page <img> could be a logo or room scene.
+  const microdataTag = html.match(/<[^>]+itemprop=["']image["'][^>]*>/i)?.[0]
+    ?? html.match(/<[^>]+itemprop=image(?:\s|>)[^>]*>/i)?.[0]
+    ?? '';
+  if (microdataTag) {
+    const candidate = absolutePublicUrl(
+      microdataTag.match(/(?:content|src|href)=["']([^"']+)["']/i)?.[1] ?? '',
+      base,
+    );
+    if (candidate) return candidate;
+  }
   return '';
 }
 
@@ -377,6 +391,31 @@ async function fetchProductHtml(source: URL, signal = AbortSignal.timeout(8000))
     return { response, source: current };
   }
   return null;
+}
+
+async function readProductPageImage(sourceUrl: string, signal?: AbortSignal) {
+  const initialSource = validPublicUrl(sourceUrl);
+  if (!initialSource || !initialSource.hostname.includes('.') || initialSource.hostname.endsWith('.local') || initialSource.hostname.endsWith('.internal')) return '';
+  try {
+    const fetched = await fetchProductHtml(initialSource, signal ?? AbortSignal.timeout(8000));
+    if (!fetched) return '';
+    const { response, source } = fetched;
+    if (!response.ok || !(response.headers.get('content-type') ?? '').includes('text/html')) return '';
+    const contentLength = Number(response.headers.get('content-length') ?? 0);
+    if (contentLength > 3_000_000) return '';
+    const html = (await response.text()).slice(0, 3_000_000);
+    const scripts = [...html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
+    for (const script of scripts) {
+      try {
+        const product = findStructuredProduct(JSON.parse(script[1]));
+        const image = product ? absolutePublicUrl(structuredImage(product.image), source) : '';
+        if (image) return image;
+      } catch { /* Ignore malformed structured data and use declared page metadata. */ }
+    }
+    return pageImage(html, source);
+  } catch {
+    return '';
+  }
 }
 
 export async function readProductPage(
@@ -470,8 +509,7 @@ export async function enrichFurnitureProductImages(
         enriched[index] = { ...product, productImageUrl: knownImage };
         continue;
       }
-      const pageProducts = await readProductPage(product.sourceUrl, 'Arredi', signal);
-      const productImageUrl = pageProducts[0]?.productImageUrl;
+      const productImageUrl = await readProductPageImage(product.sourceUrl, signal);
       if (productImageUrl) enriched[index] = { ...product, productImageUrl };
     }
   };
