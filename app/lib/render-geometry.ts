@@ -42,7 +42,7 @@ export function hasCompatibleImageGeometry(
   // xAI returns the nearest supported photographic ratio (for example 3:2
   // for a 16:10 source). The generated pixels are subsequently cropped only
   // inside the authorised edit polygons, never across the whole photograph.
-  tolerance = .15,
+  tolerance = .08,
 ) {
   if ([sourceWidth, sourceHeight, generatedWidth, generatedHeight].some((value) => !Number.isFinite(value) || value <= 0)) return false;
   const sourceRatio = sourceWidth / sourceHeight;

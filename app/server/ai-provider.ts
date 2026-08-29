@@ -38,6 +38,12 @@ export type DetectedRoomSurface = {
   confidence: number;
 };
 
+export type DetectedObjectRegion = {
+  label: string;
+  points: Array<{ x: number; y: number }>;
+  confidence: number;
+};
+
 type ResponsesPayload = {
   output_text?: string;
   output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
@@ -52,6 +58,7 @@ type ImagePayload = {
 export type FurnitureRenderVerification = {
   visible: boolean;
   atRequestedAnchor: boolean;
+  atRequestedOrientation: boolean;
   resemblesReference: boolean;
   physicallyGrounded: boolean;
   contactShadow: boolean;
@@ -68,6 +75,7 @@ export type FurnitureRenderVerification = {
 export function acceptsFurnitureRender(verification: FurnitureRenderVerification, referenceRequired: boolean) {
   return verification.visible
     && verification.atRequestedAnchor
+    && verification.atRequestedOrientation
     && (!referenceRequired || verification.resemblesReference)
     && verification.physicallyGrounded
     && verification.contactShadow
@@ -82,6 +90,7 @@ const furnitureVerificationSchema = {
   properties: {
     visible: { type: 'boolean' },
     atRequestedAnchor: { type: 'boolean' },
+    atRequestedOrientation: { type: 'boolean' },
     resemblesReference: { type: 'boolean' },
     physicallyGrounded: { type: 'boolean' },
     contactShadow: { type: 'boolean' },
@@ -94,7 +103,7 @@ const furnitureVerificationSchema = {
     referenceRight: { type: 'number', minimum: 0, maximum: 1 },
     referenceBottom: { type: 'number', minimum: 0, maximum: 1 },
   },
-  required: ['visible', 'atRequestedAnchor', 'resemblesReference', 'physicallyGrounded', 'contactShadow', 'structurallyComplete', 'realisticLighting', 'confidence', 'reason', 'referenceLeft', 'referenceTop', 'referenceRight', 'referenceBottom'],
+  required: ['visible', 'atRequestedAnchor', 'atRequestedOrientation', 'resemblesReference', 'physicallyGrounded', 'contactShadow', 'structurallyComplete', 'realisticLighting', 'confidence', 'reason', 'referenceLeft', 'referenceTop', 'referenceRight', 'referenceBottom'],
 } as const;
 
 const productBoundsSchema = {
@@ -108,6 +117,25 @@ const productBoundsSchema = {
     confidence: { type: 'number', minimum: 0, maximum: 1 },
   },
   required: ['left', 'top', 'right', 'bottom', 'confidence'],
+} as const;
+
+const objectRegionSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    found: { type: 'boolean' },
+    label: { type: 'string' },
+    points: {
+      type: 'array', minItems: 0, maxItems: 16,
+      items: {
+        type: 'object', additionalProperties: false,
+        properties: { x: { type: 'number', minimum: 0, maximum: 1 }, y: { type: 'number', minimum: 0, maximum: 1 } },
+        required: ['x', 'y'],
+      },
+    },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
+  },
+  required: ['found', 'label', 'points', 'confidence'],
 } as const;
 
 const productSchema = {
@@ -581,6 +609,25 @@ function polygonArea(points: Array<{ x: number; y: number }>) {
   }, 0) / 2);
 }
 
+function isSimpleRoomPolygon(points: Array<{ x: number; y: number }>) {
+  if (points.length < 3 || polygonArea(points) <= .001) return false;
+  if (points.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))) return false;
+  const cross = (a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }) => (
+    (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+  );
+  for (let first = 0; first < points.length; first += 1) {
+    const firstNext = (first + 1) % points.length;
+    if (Math.hypot(points[first].x - points[firstNext].x, points[first].y - points[firstNext].y) < .002) return false;
+    for (let second = first + 1; second < points.length; second += 1) {
+      const secondNext = (second + 1) % points.length;
+      if (firstNext === second || secondNext === first) continue;
+      if (cross(points[first], points[firstNext], points[second]) * cross(points[first], points[firstNext], points[secondNext]) < -1e-10
+        && cross(points[second], points[secondNext], points[first]) * cross(points[second], points[secondNext], points[firstNext]) < -1e-10) return false;
+    }
+  }
+  return true;
+}
+
 function looksLikeFrontalWallStrip(surface: DetectedRoomSurface) {
   if (surface.kind !== 'wall' || surface.points.length !== 4) return false;
   const orderedByY = [...surface.points].sort((a, b) => a.y - b.y);
@@ -655,7 +702,7 @@ export function normalizeRoomSurfaces(surfaces: DetectedRoomSurface[]) {
     })),
   })).filter((surface) => {
     const minimumConfidence = surface.kind === 'window' || surface.kind === 'door' ? .3 : .45;
-    return validKinds.has(surface.kind) && surface.confidence >= minimumConfidence && surface.points.length >= 3 && polygonArea(surface.points) > .001;
+    return validKinds.has(surface.kind) && surface.confidence >= minimumConfidence && isSimpleRoomPolygon(surface.points);
   });
 
   const withoutFalseCeiling = cleaned.filter((surface) => {
@@ -725,8 +772,16 @@ function geometryScore(candidate: DetectedRoomSurface[]) {
   const floor = candidate.find((surface) => surface.kind === 'floor');
   const openings = candidate.filter((surface) => surface.kind === 'door' || surface.kind === 'window');
   const walls = candidate.filter((surface) => surface.kind === 'wall');
-  return candidate.reduce((total, surface) => total + surface.confidence, 0)
-    + Math.min(walls.length, 5) * 1.2
+  const tinyWallFragments = walls.filter((wall) => {
+    const bounds = surfaceBounds(wall);
+    return (bounds.right - bounds.left) * (bounds.bottom - bounds.top) < .055;
+  }).length;
+  const nonWallConfidence = candidate.filter((surface) => surface.kind !== 'wall').reduce((total, surface) => total + surface.confidence, 0);
+  const wallConfidence = walls.length ? walls.reduce((total, wall) => total + wall.confidence, 0) / walls.length : 0;
+  return nonWallConfidence + wallConfidence
+    + (walls.length ? 1.2 : 0)
+    - Math.max(0, walls.length - 3) * .65
+    - tinyWallFragments * .8
     + (floor ? 4 + Math.min(floor.points.length, 12) * .12 : 0)
     + openings.reduce((total, opening) => total + (opening.points.length === 4 ? 2 : 0), 0);
 }
@@ -934,6 +989,44 @@ export async function detectRoomSurfaces(provider: AiProvider, image: File) {
   return surfaces;
 }
 
+export async function detectObjectRegion(provider: AiProvider, image: File, point: { x: number; y: number }) {
+  const x = Math.min(1, Math.max(0, Number(point.x)));
+  const y = Math.min(1, Math.max(0, Number(point.y)));
+  if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('Punto di pulizia non valido.');
+  const imageUrl = await fileToDataUri(image);
+  const response = await fetch(provider.id === 'grok' ? 'https://api.x.ai/v1/responses' : 'https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: provider.id === 'grok' ? 'grok-4.6' : 'gpt-5.4-mini',
+      input: [{ role: 'user', content: [
+        { type: 'input_image', image_url: imageUrl, detail: 'high' },
+        { type: 'input_text', text: [
+          `The user clicked normalized image coordinate x=${x.toFixed(4)}, y=${y.toFixed(4)} in an interior photograph after an empty-room edit.`,
+          'Identify the single movable or decorative residual object whose visible pixels contain that point (furniture, lamp, rug, curtain, picture, loose decoration).',
+          'Never select a wall, floor, ceiling, door, window, opening, radiator, skirting or other fixed architectural element.',
+          'If a removable object is present, return a tight clockwise polygon around its complete visible silhouette, with 4 to 16 normalized points and a short Italian label.',
+          'Include a small 1-2% repair margin around the silhouette, but do not include unrelated architecture. If the point is only on architecture or empty space, found must be false and points must be empty.',
+          'Return only the structured result.',
+        ].join('\n') },
+      ] }],
+      max_output_tokens: 650,
+      reasoning: { effort: 'low' },
+      text: { format: { type: 'json_schema', name: 'residual_object_region', schema: objectRegionSchema, strict: true } },
+      store: false,
+    }),
+    signal: AbortSignal.timeout(45000),
+  });
+  const payload = await response.json() as ResponsesPayload;
+  if (!response.ok) throw new Error(payload.error?.message ?? 'Riconoscimento dell’oggetto non disponibile.');
+  const parsed = JSON.parse(responseText(payload).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) as { found?: boolean; label?: string; points?: Array<{ x: number; y: number }>; confidence?: number };
+  const points = (parsed.points ?? []).slice(0, 16).map((candidate) => ({
+    x: Math.min(1, Math.max(0, Number(candidate.x))), y: Math.min(1, Math.max(0, Number(candidate.y))),
+  }));
+  if (!parsed.found || Number(parsed.confidence) < .45 || !isSimpleRoomPolygon(points)) return null;
+  return { label: String(parsed.label || 'Oggetto residuo').trim().slice(0, 80), points, confidence: Math.min(1, Math.max(0, Number(parsed.confidence))) } satisfies DetectedObjectRegion;
+}
+
 async function remoteImageToDataUri(value: string) {
   const url = validPublicUrl(value);
   if (!url) throw new Error('Il motore ha restituito un indirizzo immagine non valido.');
@@ -1112,6 +1205,7 @@ export async function verifyFurniturePlacement(provider: AiProvider, input: {
       `Required furniture and placement: ${input.furniture}`,
       'Set visible=true only if every requested furniture item is clearly visible in image 2.',
       'Set atRequestedAnchor=true only if each floor-contact point is close to the requested x/y percentage and the visible size is close to the requested width.',
+      'Set atRequestedOrientation=true only if each item uses the requested floor-plane yaw relative to the front, left or right wall. The furniture must remain upright: a rolled or tilted catalog image is false.',
       'Set resemblesReference=true only if the rendered item preserves the recognizable shape, proportions, material and color of the supplied product reference. If no reference is present, judge the requested description conservatively.',
       'Set physicallyGrounded=true only if every leg or base visibly meets the detected floor plane, without floating, sinking or wall-mounting, and the contact shadow follows the room light.',
       'Set contactShadow=true only when image 2 has a visible but natural soft contact shadow or ambient-occlusion darkening directly beneath every floor contact. A uniformly crisp pasted lower edge, a bright gap, or an object with no localized floor darkening must be false even if its outline touches the floor.',

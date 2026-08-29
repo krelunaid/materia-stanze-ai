@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { acceptsFurnitureRender, chooseSupportedImageAspectRatio, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, knownRetailerProductImage, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
+import { acceptsFurnitureRender, chooseSupportedImageAspectRatio, detectObjectRegion, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, knownRetailerProductImage, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -309,6 +309,27 @@ describe('getAiProvider', () => {
     expect(result.find((surface) => surface.kind === 'door')).toBeTruthy();
   });
 
+  it('rejects self-intersecting and microscopic detected polygons', () => {
+    const result = normalizeRoomSurfaces([
+      { name: 'bow tie', kind: 'wall', confidence: .99, points: [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 1, y: 0 }, { x: 0, y: 1 }] },
+      { name: 'tiny edge', kind: 'wall', confidence: .99, points: [{ x: 0, y: 0 }, { x: .001, y: 0 }, { x: 1, y: .7 }, { x: 0, y: .7 }] },
+      { name: 'floor', kind: 'floor', confidence: .95, points: [{ x: 0, y: .7 }, { x: 1, y: .7 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+    ]);
+    expect(result.map((surface) => surface.kind)).toEqual(['floor']);
+  });
+
+  it('does not prefer fragmented wall candidates merely because they contain more walls', () => {
+    const floor = { name: 'floor', kind: 'floor' as const, confidence: .95, points: [{ x: 0, y: .7 }, { x: 1, y: .7 }, { x: 1, y: 1 }, { x: 0, y: 1 }] };
+    const accurate = { name: 'wall', kind: 'wall' as const, confidence: .94, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .7 }, { x: 0, y: .7 }] };
+    const fragments = Array.from({ length: 4 }, (_, index) => ({
+      name: `strip ${index}`, kind: 'wall' as const, confidence: .9,
+      points: [{ x: index / 4, y: 0 }, { x: (index + 1) / 4, y: 0 }, { x: (index + 1) / 4, y: .7 }, { x: index / 4, y: .7 }],
+    }));
+    const result = reconcileRoomSurfaceCandidates([[accurate, floor], [...fragments, floor]]);
+    expect(result.filter((surface) => surface.kind === 'wall')).toHaveLength(1);
+    expect(result.find((surface) => surface.kind === 'wall')?.points).toEqual(accurate.points);
+  });
+
   it('extends a single full-width frontal wall to the top when no ceiling is visible', () => {
     const result = normalizeRoomSurfaces([
       { name: 'back wall', kind: 'wall', confidence: .92, points: [{ x: 0, y: .08 }, { x: 1, y: .08 }, { x: 1, y: .53 }, { x: 0, y: .56 }] },
@@ -336,6 +357,21 @@ describe('getAiProvider', () => {
     expect(result.find((surface) => surface.kind === 'window')?.points).toEqual([
       { x: .32, y: .2 }, { x: .68, y: .2 }, { x: .68, y: .6 }, { x: .32, y: .6 },
     ]);
+  });
+
+  it('detects a removable object around the user-selected point', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ output: [{ content: [{
+      type: 'output_text', text: JSON.stringify({ found: true, label: 'Sedia', confidence: .91, points: [
+        { x: .3, y: .4 }, { x: .5, y: .4 }, { x: .5, y: .8 }, { x: .3, y: .8 },
+      ] }),
+    }] }] }), { status: 200 }));
+    const result = await detectObjectRegion(
+      { id: 'grok', label: 'Grok', apiKey: 'xai-test' },
+      new File(['room'], 'room.jpg', { type: 'image/jpeg' }),
+      { x: .4, y: .6 },
+    );
+    expect(result).toMatchObject({ label: 'Sedia', confidence: .91 });
+    expect(result?.points).toHaveLength(4);
   });
 
   it('merges two partially overlapping traces of the same window', () => {
@@ -429,7 +465,7 @@ describe('getAiProvider', () => {
 
 describe('acceptsFurnitureRender', () => {
   const good = {
-    visible: true, atRequestedAnchor: true, resemblesReference: true,
+    visible: true, atRequestedAnchor: true, atRequestedOrientation: true, resemblesReference: true,
     physicallyGrounded: true, contactShadow: true, structurallyComplete: true, realisticLighting: true,
     confidence: .9, reason: 'ok', referenceLeft: 0, referenceTop: 0, referenceRight: 1, referenceBottom: 1,
   };
@@ -440,6 +476,7 @@ describe('acceptsFurnitureRender', () => {
     expect(acceptsFurnitureRender({ ...good, contactShadow: false }, true)).toBe(false);
     expect(acceptsFurnitureRender({ ...good, structurallyComplete: false }, true)).toBe(false);
     expect(acceptsFurnitureRender({ ...good, realisticLighting: false }, true)).toBe(false);
+    expect(acceptsFurnitureRender({ ...good, atRequestedOrientation: false }, true)).toBe(false);
     expect(acceptsFurnitureRender({ ...good, confidence: .79 }, true)).toBe(false);
   });
 });

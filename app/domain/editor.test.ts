@@ -19,6 +19,12 @@ describe('editor geometry', () => {
     expect(isValidPolygon(wall.points)).toBe(true);
   });
 
+  it('rejects self-intersections, duplicate edges and non-finite points', () => {
+    expect(isValidPolygon([{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 1, y: 0 }, { x: 0, y: 1 }])).toBe(false);
+    expect(isValidPolygon([{ x: 0, y: 0 }, { x: .001, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }])).toBe(false);
+    expect(isValidPolygon([{ x: 0, y: 0 }, { x: Number.NaN, y: 0 }, { x: 1, y: 1 }])).toBe(false);
+  });
+
   it('numbers walls deterministically', () => {
     expect(nextSurfaceName('wall', [wall])).toBe('Muro 2');
     expect(nextSurfaceName('wall', [wall, { ...wall, id: 'wall-3', name: 'Muro 3' }])).toBe('Muro 4');

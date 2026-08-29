@@ -1,6 +1,6 @@
 import { aiRateLimitSchema, aiRateLimitUpdatedAtIndex } from '../../db/schema';
 
-type AiRoute = 'apply-product' | 'clean-product' | 'detect-surfaces' | 'empty-room' | 'render-room' | 'search-products';
+type AiRoute = 'apply-product' | 'clean-product' | 'clean-room-region' | 'detect-object' | 'detect-surfaces' | 'empty-room' | 'render-room' | 'search-products';
 
 type LimitPolicy = {
   hourly: number;
@@ -27,6 +27,8 @@ const NATIVE_ORIGIN = 'capacitor://localhost';
 const policies: Record<AiRoute, LimitPolicy> = {
   'apply-product': { hourly: 8, daily: 24 },
   'clean-product': { hourly: 12, daily: 36 },
+  'clean-room-region': { hourly: 16, daily: 48 },
+  'detect-object': { hourly: 24, daily: 72 },
   'detect-surfaces': { hourly: 20, daily: 60 },
   'empty-room': { hourly: 6, daily: 18 },
   'render-room': { hourly: 6, daily: 18 },

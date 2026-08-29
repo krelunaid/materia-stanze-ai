@@ -29,6 +29,26 @@ export function clampPoint(point: Point): Point {
 
 export function isValidPolygon(points: Point[]) {
   if (points.length < 3) return false;
+  if (points.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))) return false;
+  const minimumEdge = .002;
+  for (let index = 0; index < points.length; index += 1) {
+    const next = points[(index + 1) % points.length];
+    if (Math.hypot(points[index].x - next.x, points[index].y - next.y) < minimumEdge) return false;
+  }
+  const orientation = (a: Point, b: Point, c: Point) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+  const intersects = (a: Point, b: Point, c: Point, d: Point) => {
+    const abC = orientation(a, b, c); const abD = orientation(a, b, d);
+    const cdA = orientation(c, d, a); const cdB = orientation(c, d, b);
+    return abC * abD < -1e-10 && cdA * cdB < -1e-10;
+  };
+  for (let first = 0; first < points.length; first += 1) {
+    const firstNext = (first + 1) % points.length;
+    for (let second = first + 1; second < points.length; second += 1) {
+      const secondNext = (second + 1) % points.length;
+      if (first === second || firstNext === second || secondNext === first) continue;
+      if (intersects(points[first], points[firstNext], points[second], points[secondNext])) return false;
+    }
+  }
   const area = points.reduce((sum, point, index) => {
     const next = points[(index + 1) % points.length];
     return sum + point.x * next.y - next.x * point.y;

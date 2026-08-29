@@ -134,6 +134,22 @@ describe('RoomStudio', () => {
     expect(selectedPolygon.getAttribute('points')).not.toBe(before);
   });
 
+  it('keeps every shared corner linked across repeated pointer moves', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Correggi i bordi' }));
+    const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+    const handle = screen.getByLabelText('Sposta punto 1 di Muro 1');
+    fireEvent.pointerDown(handle, { pointerId: 17, clientX: 218, clientY: 81 });
+    fireEvent.pointerMove(window, { pointerId: 17, clientX: 300, clientY: 120 });
+    fireEvent.pointerMove(window, { pointerId: 17, clientX: 330, clientY: 150 });
+    fireEvent.pointerUp(window, { pointerId: 17 });
+    const polygons = document.querySelectorAll('.surface-overlay polygon');
+    expect(polygons[0]).toHaveAttribute('points', expect.stringContaining('330,150'));
+    expect(polygons[1]).toHaveAttribute('points', expect.stringContaining('330,150'));
+  });
+
   it('loads a local material and applies it to one surface', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
@@ -218,6 +234,38 @@ describe('RoomStudio', () => {
     fireEvent.change(search, { target: { value: 'pianoforte nero a coda' } });
     fireEvent.click(screen.getByRole('button', { name: /Aggiungi “pianoforte nero a coda” alla richiesta/ }));
     expect(screen.getByText('pianoforte nero a coda', { selector: '.selected-assets button' })).toBeInTheDocument();
+  });
+
+  it('orients furniture by room wall without tilting the product image', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+    fireEvent.change(screen.getByLabelText('Cerca materiali, colori o mobili'), { target: { value: 'divano' } });
+    fireEvent.click(screen.getByRole('button', { name: /Divano chiaro/ }));
+    const canvas = document.querySelector('.canvas') as HTMLDivElement;
+    vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+    fireEvent.click(canvas, { clientX: 500, clientY: 500 });
+    expect(screen.getByRole('button', { name: 'Muro frontale' })).toHaveClass('is-active');
+    fireEvent.click(screen.getByRole('button', { name: 'Muro sinistro' }));
+    const furniture = screen.getByRole('button', { name: 'Sposta Divano chiaro' });
+    expect(furniture).toHaveClass('facing-left-wall');
+    expect(furniture.getAttribute('style')).not.toContain('rotate(');
+  });
+
+  it('keeps dragged furniture anchored below the detected floor boundary', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+    fireEvent.change(screen.getByLabelText('Cerca materiali, colori o mobili'), { target: { value: 'divano' } });
+    fireEvent.click(screen.getByRole('button', { name: /Divano chiaro/ }));
+    const canvas = document.querySelector('.canvas') as HTMLDivElement;
+    vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+    fireEvent.click(canvas, { clientX: 500, clientY: 500 });
+    const furniture = screen.getByRole('button', { name: 'Sposta Divano chiaro' });
+    fireEvent.pointerDown(furniture, { pointerId: 21, clientX: 500, clientY: 500 });
+    fireEvent.pointerMove(furniture, { pointerId: 21, clientX: 500, clientY: 100 });
+    fireEvent.pointerUp(furniture, { pointerId: 21 });
+    expect(Number.parseFloat((furniture as HTMLElement).style.top)).toBeGreaterThan(70);
   });
 
   it('offers separate brand, model, color and product type criteria', () => {
