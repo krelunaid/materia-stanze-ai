@@ -1870,7 +1870,11 @@ export function RoomStudio() {
             {activeStep === 3 && selectedFurniture && <div className="furniture-pencil-toolbar" role="group" aria-label="Comandi Apple Pencil per il mobile">
               <div className="furniture-pencil-heading">
                 <div><strong>{selectedFurniture.name}</strong><span>Tastiera semplice · tocca un comando</span></div>
-                {selectedFurniture.frozen && <button type="button" className="pencil-unlock" onClick={() => updateSelectedFurniture({ frozen: false })}>◇ SBLOCCA</button>}
+                <div className="furniture-pencil-heading-actions">
+                  <button type="button" className={`pencil-auto-size ${selectedFurniture.autoScale ? 'is-active' : ''}`} aria-label={`Misura automatica per ${selectedFurniture.name}`} onClick={restoreAutomaticFurnitureScale} disabled={selectedFurniture.frozen || selectedFurniture.autoScale}>{selectedFurniture.autoScale ? `✓ AUTO ${Math.round(selectedFurniture.scale)}%` : '◎ AUTO'}</button>
+                  <button type="button" className={`pencil-freeze ${selectedFurniture.frozen ? 'is-active' : ''}`} aria-label={selectedFurniture.frozen ? `Sblocca ${selectedFurniture.name}` : `Blocca ${selectedFurniture.name}`} onClick={() => updateSelectedFurniture({ frozen: !selectedFurniture.frozen })}>{selectedFurniture.frozen ? '◇' : '◆'}</button>
+                  <button type="button" className="pencil-delete" aria-label={`Elimina ${selectedFurniture.name}`} onClick={removeSelectedFurniture} disabled={selectedFurniture.frozen}>⌫</button>
+                </div>
               </div>
               <div className="furniture-pencil-walls" role="group" aria-label="Scegli il muro del mobile">
                 {(Object.keys(furnitureFacingLabels) as FurnitureFacing[]).map((facing) => <button type="button" key={facing} aria-label={`Orienta ${selectedFurniture.name}: ${furnitureFacingLabels[facing]}`} className={selectedFurniture.facing === facing ? 'is-active' : ''} onClick={() => orientSelectedFurniture(facing)} disabled={selectedFurniture.frozen}>{facing === 'front-wall' ? '↑ FRONTE' : facing === 'left-wall' ? '↙ MURO SX' : 'MURO DX ↘'}</button>)}
