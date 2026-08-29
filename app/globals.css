@@ -272,16 +272,19 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .placed-furniture-placeholder { font-size:24px; line-height:1; }
 .placed-furniture i { position:absolute; left:50%; bottom:-9px; width:16px; height:16px; border:3px solid #fff; border-radius:50%; background:#d7f05c; transform:translateX(-50%); box-shadow:0 2px 6px rgba(0,0,0,.28); }
 .canvas-ipad-controls { position:absolute; z-index:12; height:132px; background:transparent; pointer-events:none; transform:translate(-50%,-100%); }
-.canvas-ipad-controls button { position:absolute; display:grid; place-items:center; width:44px; height:44px; padding:0; border:2px solid rgba(255,255,255,.9); border-radius:50%; background:rgba(19,35,32,.92); color:#fff; font-size:22px; font-weight:850; line-height:1; cursor:pointer; pointer-events:auto; touch-action:manipulation; box-shadow:0 3px 9px rgba(0,0,0,.32); }
+.canvas-ipad-controls button { position:absolute; display:grid; place-items:center; width:50px; height:50px; padding:0; border:2px solid rgba(255,255,255,.9); border-radius:50%; background:rgba(19,35,32,.94); color:#fff; font-size:25px; font-weight:850; line-height:1; cursor:pointer; pointer-events:auto; touch-action:manipulation; box-shadow:0 3px 9px rgba(0,0,0,.34); }
 .canvas-ipad-controls button:active { background:#d7f05c; color:#26322f; transform:scale(.92); }
-.canvas-ipad-controls .control-rotate-left { top:-52px; left:-8px; }
-.canvas-ipad-controls .control-move-up { top:-52px; left:50%; transform:translateX(-50%); }
-.canvas-ipad-controls .control-rotate-right { top:-52px; right:-8px; }
-.canvas-ipad-controls .control-move-left { top:50%; left:-52px; transform:translateY(-50%); }
-.canvas-ipad-controls .control-move-right { top:50%; right:-52px; transform:translateY(-50%); }
-.canvas-ipad-controls .control-size-down { bottom:-52px; left:-8px; }
-.canvas-ipad-controls .control-move-down { bottom:-52px; left:50%; transform:translateX(-50%); }
-.canvas-ipad-controls .control-size-up { right:-8px; bottom:-52px; }
+.canvas-ipad-controls .control-rotate-left { top:-58px; left:-8px; }
+.canvas-ipad-controls .control-move-up { top:-58px; left:50%; transform:translateX(-50%); }
+.canvas-ipad-controls .control-rotate-right { top:-58px; right:-8px; }
+.canvas-ipad-controls .control-move-left { top:50%; left:-58px; transform:translateY(-50%); }
+.canvas-ipad-controls .control-move-right { top:50%; right:-58px; transform:translateY(-50%); }
+.canvas-ipad-controls .control-size-down { bottom:-58px; left:-8px; }
+.canvas-ipad-controls .control-move-down { bottom:-58px; left:50%; transform:translateX(-50%); }
+.canvas-ipad-controls .control-size-up { right:-8px; bottom:-58px; }
+.canvas-wall-switch { position:absolute; top:-116px; left:50%; display:flex; gap:5px; padding:5px; border:1px solid rgba(255,255,255,.75); border-radius:24px; background:rgba(19,35,32,.9); pointer-events:auto; transform:translateX(-50%); box-shadow:0 4px 14px rgba(0,0,0,.28); }
+.canvas-ipad-controls .canvas-wall-switch button { position:static; width:68px; height:38px; border-width:1px; border-radius:19px; background:rgba(255,255,255,.12); font-size:9px; white-space:nowrap; box-shadow:none; }
+.canvas-ipad-controls .canvas-wall-switch button.is-active { border-color:#d7f05c; background:#d7f05c; color:#26322f; }
 .canvas.is-placing-furniture { cursor:crosshair; box-shadow:0 0 0 4px #d7f05c,0 18px 45px rgba(31,49,44,.14); }
 .placement-hint { position:absolute; z-index:8; top:12px; left:50%; display:grid; grid-template-columns:auto auto; align-items:center; gap:2px 10px; width:min(360px,calc(100% - 24px)); padding:10px 12px; border-radius:12px; background:rgba(20,36,33,.94); color:#fff; text-align:left; transform:translateX(-50%); box-shadow:0 8px 24px rgba(0,0,0,.28); }
 .placement-hint strong,.placement-hint span { display:block; }

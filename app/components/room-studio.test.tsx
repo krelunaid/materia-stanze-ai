@@ -250,6 +250,7 @@ describe('RoomStudio', () => {
     expect(initiallyFront.querySelector('img')).toHaveAttribute('src', '/demo-sofa.png');
     expect(Number.parseFloat((initiallyFront as HTMLElement).style.width)).toBeGreaterThan(30);
     expect(screen.getByRole('group', { name: 'Comandi attorno al mobile' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Scegli il muro del mobile' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Misura automatica' })).toBeDisabled();
     const automaticWidth = Number.parseFloat((initiallyFront as HTMLElement).style.width);
     fireEvent.click(screen.getByRole('button', { name: 'Ingrandisci Divano chiaro' }));
