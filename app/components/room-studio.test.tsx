@@ -1,11 +1,15 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mergeDetectedSurfaces, RoomStudio } from './room-studio';
 import { geometryForDerivedImage, surfacesMatch } from '../geometry/model';
 
 beforeAll(() => {
   URL.createObjectURL = vi.fn(() => 'blob:room-preview');
   URL.revokeObjectURL = vi.fn();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('RoomStudio', () => {
@@ -248,6 +252,35 @@ describe('RoomStudio', () => {
     expect(screen.getByRole('button', { name: /Cerca online/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Foto prodotto/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Campione materiale/ })).toBeInTheDocument();
+  });
+
+  it('does not place an online furniture result when its product image is unavailable', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/capabilities')) {
+        return new Response(JSON.stringify({ aiReady: true, providerLabel: 'Grok' }), { status: 200 });
+      }
+      if (url.includes('/api/search-products')) {
+        return new Response(JSON.stringify({ products: [{
+          name: 'Divano Dorian', brand: 'divani.store', collection: '', category: 'Arredi', color: 'Beige', effect: '', format: '', finish: '',
+          description: 'Divano beige', sourceUrl: 'https://divani.store/products/dorian', productImageUrl: '', textureImageUrl: '', roomImageUrls: [],
+          confidence: .7, official: false, correction: '',
+        }] }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+    fireEvent.change(screen.getByLabelText('Tipo prodotto'), { target: { value: 'Arredi' } });
+    fireEvent.change(screen.getByLabelText('Cerca materiali, colori o mobili'), { target: { value: 'divano beige' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Cerca con Grok' }));
+
+    const unavailable = await screen.findByRole('button', { name: /divani\.store · Divano Dorian.*Foto prodotto non disponibile/ });
+    expect(unavailable).toBeDisabled();
+    expect(screen.getByRole('link', { name: 'Fonte' })).toHaveAttribute('href', 'https://divani.store/products/dorian');
+    expect(document.querySelector('.placed-furniture-placeholder')).not.toBeInTheDocument();
   });
 
   it('starts with a four-step workflow and only exposes the simple mode', () => {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { acceptsFurnitureRender, chooseSupportedImageAspectRatio, detectRoomSurfaces, editImage, getAiProvider, getProductCleaner, getRenderProvider, knownRetailerProductImage, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
+import { acceptsFurnitureRender, chooseSupportedImageAspectRatio, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, knownRetailerProductImage, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -223,6 +223,34 @@ describe('getAiProvider', () => {
         productImageUrl: 'https://media.tikamoon.com/images/mobile-bagno-milo.jpg?width=1200&quality=90',
       }),
     ]);
+  });
+
+  it('enriches furniture returned by Grok when the verified page contains the missing product image', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(`<!doctype html><script type="application/ld+json">${JSON.stringify({
+      '@context': 'https://schema.org', '@type': 'Product', name: 'Dorian', brand: { '@type': 'Brand', name: 'divani.store' },
+      image: 'https://divani.store/cdn/shop/files/dorian.jpg', description: 'Divano beige.',
+    })}</script>`, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
+    const product = {
+      name: 'Dorian', brand: 'divani.store', collection: '', category: 'Arredi' as const, color: 'Beige', effect: '', format: '', finish: '',
+      description: 'Divano beige', sourceUrl: 'https://divani.store/products/dorian', productImageUrl: '', textureImageUrl: '', roomImageUrls: [],
+      confidence: .7, official: false, correction: '',
+    };
+
+    await expect(enrichFurnitureProductImages([product])).resolves.toEqual([
+      { ...product, productImageUrl: 'https://divani.store/cdn/shop/files/dorian.jpg' },
+    ]);
+  });
+
+  it('does not fetch or alter furniture that already has a verified image', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    const product = {
+      name: 'Dorian', brand: 'divani.store', collection: '', category: 'Arredi' as const, color: 'Beige', effect: '', format: '', finish: '',
+      description: 'Divano beige', sourceUrl: 'https://divani.store/products/dorian', productImageUrl: 'https://divani.store/dorian.jpg', textureImageUrl: '', roomImageUrls: [],
+      confidence: .7, official: false, correction: '',
+    };
+
+    await expect(enrichFurnitureProductImages([product])).resolves.toEqual([product]);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('asks Grok vision for normalized architectural polygons', async () => {

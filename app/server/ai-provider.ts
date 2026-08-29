@@ -330,12 +330,12 @@ export function knownRetailerProductImage(sourceUrl: string) {
   return '';
 }
 
-async function fetchProductHtml(source: URL) {
+async function fetchProductHtml(source: URL, signal = AbortSignal.timeout(8000)) {
   let current = source;
   for (let redirectCount = 0; redirectCount <= 4; redirectCount += 1) {
     const response = await fetch(current, {
       redirect: 'manual',
-      signal: AbortSignal.timeout(8000),
+      signal,
       headers: { Accept: 'text/html,application/xhtml+xml' },
     });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
@@ -351,11 +351,15 @@ async function fetchProductHtml(source: URL) {
   return null;
 }
 
-export async function readProductPage(sourceUrl: string, category: MaterialProduct['category'] = 'Arredi') {
+export async function readProductPage(
+  sourceUrl: string,
+  category: MaterialProduct['category'] = 'Arredi',
+  signal?: AbortSignal,
+) {
   const initialSource = validPublicUrl(sourceUrl);
   if (!initialSource || !initialSource.hostname.includes('.') || initialSource.hostname.endsWith('.local') || initialSource.hostname.endsWith('.internal')) return [];
   try {
-    const fetched = await fetchProductHtml(initialSource);
+    const fetched = await fetchProductHtml(initialSource, signal ?? AbortSignal.timeout(8000));
     if (!fetched) return [];
     const { response, source } = fetched;
     if (!response.ok || !(response.headers.get('content-type') ?? '').includes('text/html')) return [];
@@ -412,6 +416,39 @@ export async function readProductPage(sourceUrl: string, category: MaterialProdu
   } catch {
     return [];
   }
+}
+
+export async function enrichFurnitureProductImages(
+  products: MaterialProduct[],
+  options: { concurrency?: number; maxLookups?: number; timeoutMs?: number } = {},
+) {
+  const enriched = products.map((product) => ({ ...product }));
+  const maxLookups = Math.max(0, options.maxLookups ?? 4);
+  const candidateIndexes = enriched
+    .map((product, index) => product.category === 'Arredi' && !product.productImageUrl ? index : -1)
+    .filter((index) => index >= 0)
+    .slice(0, maxLookups);
+  if (!candidateIndexes.length) return enriched;
+
+  const signal = AbortSignal.timeout(Math.max(250, options.timeoutMs ?? 5000));
+  const concurrency = Math.max(1, Math.min(options.concurrency ?? 2, candidateIndexes.length));
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < candidateIndexes.length && !signal.aborted) {
+      const index = candidateIndexes[cursor++];
+      const product = enriched[index];
+      const knownImage = knownRetailerProductImage(product.sourceUrl);
+      if (knownImage) {
+        enriched[index] = { ...product, productImageUrl: knownImage };
+        continue;
+      }
+      const pageProducts = await readProductPage(product.sourceUrl, 'Arredi', signal);
+      const productImageUrl = pageProducts[0]?.productImageUrl;
+      if (productImageUrl) enriched[index] = { ...product, productImageUrl };
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  return enriched;
 }
 
 export async function searchMaterials(provider: AiProvider, query: string) {

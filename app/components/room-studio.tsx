@@ -126,6 +126,7 @@ const kindColors: Record<SurfaceKind, string> = {
 };
 
 function materialReferenceLabel(item: StudioMaterial) {
+  if (item.category === 'Arredi' && !item.previewUrl) return 'Foto prodotto non disponibile';
   if (item.referenceKind === 'verified-texture') return 'Texture ufficiale verificata';
   if (item.referenceKind === 'official-product-image') return item.official ? 'Foto prodotto ufficiale' : 'Foto prodotto verificata';
   if (item.referenceKind === 'uploaded-sample') return 'Campione caricato da te';
@@ -650,6 +651,34 @@ export function RoomStudio() {
   useEffect(() => {
     if (!dragVertex) return;
     const preventTouchScroll = (event: TouchEvent) => event.preventDefault();
+    const moveDraggedVertexAt = (clientX: number, clientY: number) => {
+      if (!surfaceOverlayRef.current) return;
+      const rect = surfaceOverlayRef.current.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const point = {
+        x: Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)),
+        y: Math.min(1, Math.max(0, (clientY - rect.top) / rect.height)),
+      };
+      setSurfaces((current) => current.map((surface) => {
+        if (surface.frozen) return surface;
+        const linkedPoints = surface.points.map((candidate, index) => {
+          const isDragged = surface.id === dragVertex.surfaceId && index === dragVertex.vertexIndex;
+          const isShared = Math.abs(candidate.x - dragVertex.origin.x) < .004 && Math.abs(candidate.y - dragVertex.origin.y) < .004;
+          return isDragged || isShared ? point : candidate;
+        });
+        return { ...surface, points: linkedPoints };
+      }));
+    };
+    const finishVertexDrag = (pointerId: number) => {
+      if (pointerId !== dragVertex.pointerId) return;
+      if (dragStartRef.current) {
+        setPastSurfaces((history) => [...history, dragStartRef.current as Surface[]].slice(-40));
+        setFutureSurfaces([]);
+      }
+      dragStartRef.current = null;
+      setDragVertex(null);
+      shellRef.current?.classList.remove('is-moving-vertex');
+    };
     const move = (event: PointerEvent) => {
       if (event.pointerId !== dragVertex.pointerId) return;
       event.preventDefault();
@@ -827,37 +856,6 @@ export function RoomStudio() {
     shellRef.current?.classList.add('is-moving-vertex');
     dragStartRef.current = surfaces;
     setDragVertex({ surfaceId, vertexIndex, pointerId: event.pointerId, origin: surface.points[vertexIndex] });
-  }
-
-  function moveDraggedVertexAt(clientX: number, clientY: number) {
-    if (!dragVertex || !surfaceOverlayRef.current) return;
-    const rect = surfaceOverlayRef.current.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    const point = {
-      x: Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)),
-      y: Math.min(1, Math.max(0, (clientY - rect.top) / rect.height)),
-    };
-    setSurfaces((current) => current.map((surface) => {
-      if (surface.frozen) return surface;
-      const linkedPoints = surface.points.map((candidate, index) => {
-        const isDragged = surface.id === dragVertex.surfaceId && index === dragVertex.vertexIndex;
-        const isShared = Math.abs(candidate.x - dragVertex.origin.x) < .004 && Math.abs(candidate.y - dragVertex.origin.y) < .004;
-        return isDragged || isShared ? point : candidate;
-      });
-      return { ...surface, points: linkedPoints };
-    }));
-  }
-
-  function finishVertexDrag(pointerId: number) {
-    if (dragVertex && pointerId === dragVertex.pointerId) {
-      if (dragStartRef.current) {
-        setPastSurfaces((history) => [...history, dragStartRef.current as Surface[]].slice(-40));
-        setFutureSurfaces([]);
-      }
-      dragStartRef.current = null;
-      setDragVertex(null);
-      shellRef.current?.classList.remove('is-moving-vertex');
-    }
   }
 
   function toggleEdgeCorrection() {
@@ -1257,6 +1255,11 @@ export function RoomStudio() {
   async function chooseOnlineProduct(next: StudioMaterial) {
     if (next.category === 'Arredi') {
       const name = `${next.brand ? `${next.brand} ` : ''}${next.name}`.trim();
+      if (!next.previewUrl) {
+        setError(`“${name}” non include una foto prodotto verificata. Apri la fonte oppure carica una foto del mobile.`);
+        setNotice(null);
+        return;
+      }
       setError(null);
       setNotice(`Grok ripulisce “${name}” da sfondo, decorazioni e ombre…`);
       let cutoutUrl: string | undefined;
@@ -1722,7 +1725,7 @@ export function RoomStudio() {
               <label className="free-search-label"><span>Link prodotto facoltativo · ricerca più veloce</span><input className="material-search" type="url" inputMode="url" aria-label="Link prodotto" value={searchSourceUrl} onChange={(event) => setSearchSourceUrl(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchProductsOnline(); }} placeholder="https://sito-produttore.it/prodotto" /></label>
               <div className="guided-search-actions"><button type="button" className="reset-search-button" onClick={resetProductSearch}>Azzera</button><button type="button" className="guided-search-button" onClick={() => void searchProductsOnline()} disabled={isSearchingProducts}>{isSearchingProducts ? 'Cerco nei cataloghi…' : `Cerca con ${aiProviderLabel ?? 'IA'}`}</button></div>
               <div className="search-scope"><span>Materiali</span><span>Colori</span><span>Arredi</span><span className="internet-ready">Prodotti reali con fonte</span></div>
-              {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={`Riferimento ${item.name}`} /> : <span className="catalog-swatch tile" /> }<button type="button" onClick={() => void chooseOnlineProduct(item)}><strong>{item.brand} · {item.name}</strong><span className={`reference-badge reference-${item.referenceKind ?? 'metadata-only'}`}>{materialReferenceLabel(item)}</span><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a></div>)}</div>}
+              {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => { const missingFurnitureImage = item.category === 'Arredi' && !item.previewUrl; return <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={`Riferimento ${item.name}`} /> : <span className="catalog-swatch tile" /> }<button type="button" onClick={() => void chooseOnlineProduct(item)} disabled={missingFurnitureImage} title={missingFurnitureImage ? 'Serve una foto prodotto prima di inserire questo mobile' : undefined}><strong>{item.brand} · {item.name}</strong><span className={`reference-badge reference-${item.referenceKind ?? 'metadata-only'}`}>{materialReferenceLabel(item)}</span><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a></div>; })}</div>}
               <div className="material-results">{filteredMaterials.map((item) => <button type="button" key={item.id} className={`material-result ${material?.id === item.id ? 'is-selected' : ''}`} onClick={() => chooseMaterial(item)}><span className={`catalog-swatch ${item.pattern ?? 'color'}`} style={{ '--swatch-color': item.color } as CSSProperties} /><span><strong>{item.name}</strong><small>{item.category} · {item.description}</small></span></button>)}{filteredFurniture.map((item) => <button type="button" key={item.name} className={`material-result furniture-result ${pendingFurniture?.name === item.name ? 'is-selected' : ''}`} onClick={() => startFurniturePlacement(item.name)}><span className="furniture-icon">＋</span><span><strong>{item.name}</strong><small>Tocca e poi scegli il punto nella stanza · {item.description}</small></span></button>)}{filteredMaterials.length === 0 && filteredFurniture.length === 0 && onlineMaterials.length === 0 && <div className="custom-search-result"><p>Nessun campione incluso corrisponde. Per trovare marca e prodotto esatti serve la ricerca IA attiva.</p><button type="button" onClick={addCustomRequest}>Aggiungi “{materialQuery.trim()}” alla richiesta</button></div>}</div>
               <div className="custom-color"><input type="color" aria-label="Scegli colore personalizzato" value={customColor} onChange={(event) => setCustomColor(event.target.value)} /><button type="button" onClick={chooseCustomColor}>Usa questo colore</button></div>
               {material && <div className="loaded-material">{material.previewUrl ? <img src={material.previewUrl} alt={`Campione ${material.name}`} /> : <span className="catalog-swatch tile" />}<div><strong>{material.name}</strong><small>{materialReferenceLabel(material)}</small></div></div>}
