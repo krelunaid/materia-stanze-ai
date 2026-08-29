@@ -272,11 +272,18 @@ describe('RoomStudio', () => {
     const initialLeft = Number.parseFloat((furniture as HTMLElement).style.left);
     fireEvent.click(screen.getByRole('button', { name: 'Sposta mobile a destra' }));
     expect(Number.parseFloat((furniture as HTMLElement).style.left)).toBeGreaterThan(initialLeft);
+    const initialTop = Number.parseFloat((furniture as HTMLElement).style.top);
+    fireEvent.click(screen.getByRole('button', { name: 'Sposta Divano chiaro in alto' }));
+    expect(Number.parseFloat((furniture as HTMLElement).style.top)).toBeLessThan(initialTop);
     fireEvent.click(screen.getByRole('button', { name: 'Ruota mobile a destra' }));
     expect(furniture.getAttribute('style')).toContain('rotate(5deg)');
     expect(screen.getByRole('button', { name: 'Raddrizza mobile' })).toHaveTextContent('5°');
+    for (let step = 0; step < 20; step += 1) fireEvent.click(screen.getByRole('button', { name: 'Ruota Divano chiaro a destra' }));
+    expect(furniture.getAttribute('style')).toContain('rotate(60deg)');
     fireEvent.click(screen.getByRole('button', { name: 'Raddrizza Divano chiaro' }));
     expect(furniture.getAttribute('style')).not.toContain('rotate(');
+    expect(furniture).toHaveClass('facing-front-wall');
+    expect(furniture.querySelector('img')).toHaveAttribute('src', '/demo-sofa.png');
     fireEvent.click(screen.getByRole('button', { name: '↘ Destra' }));
     expect(furniture).toHaveClass('facing-right-wall');
     fireEvent.click(screen.getByRole('button', { name: '◆ Blocca' }));

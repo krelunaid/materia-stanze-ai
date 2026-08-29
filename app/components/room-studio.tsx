@@ -1454,27 +1454,33 @@ export function RoomStudio() {
 
   function nudgeSelectedFurniture(deltaX: number, deltaY: number) {
     if (!selectedFurniture) return;
-    const x = Math.min(.96, Math.max(.04, selectedFurniture.x + deltaX));
-    const floorContact = floorContactYAtX(surfaces.find((surface) => surface.kind === 'floor'), x);
-    const y = Math.min(.96, Math.max(floorContact + .015, selectedFurniture.y + deltaY));
-    updateSelectedFurniture({
-      x,
-      y,
-      scale: selectedFurniture.autoScale
-        ? perspectiveFurnitureScale(selectedFurniture.name, selectedFurniture.description, y, floorContact)
-        : selectedFurniture.scale,
-    });
+    setPlacedFurniture((current) => current.map((item) => {
+      if (item.id !== selectedFurniture.id || item.frozen) return item;
+      const x = Math.min(.96, Math.max(.04, item.x + deltaX));
+      const y = Math.min(.96, Math.max(.08, item.y + deltaY));
+      const floorContact = floorContactYAtX(surfaces.find((surface) => surface.kind === 'floor'), x);
+      return {
+        ...item,
+        x,
+        y,
+        scale: item.autoScale
+          ? perspectiveFurnitureScale(item.name, item.description, y, floorContact)
+          : item.scale,
+      };
+    }));
   }
 
   function rotateSelectedFurniture(delta: number) {
     if (!selectedFurniture) return;
-    updateSelectedFurniture({ rotation: Math.min(35, Math.max(-35, selectedFurniture.rotation + delta)) });
+    setPlacedFurniture((current) => current.map((item) => item.id === selectedFurniture.id && !item.frozen
+      ? { ...item, rotation: Math.min(60, Math.max(-60, item.rotation + delta)) }
+      : item));
   }
 
   function straightenSelectedFurniture() {
     if (!selectedFurniture) return;
-    updateSelectedFurniture({ rotation: 0 });
-    setNotice(`${selectedFurniture.name} raddrizzato a 0°.`);
+    updateSelectedFurniture({ rotation: 0, facing: 'front-wall' });
+    setNotice(`${selectedFurniture.name} frontale e raddrizzato a 0°.`);
   }
 
   function restoreAutomaticFurnitureScale() {
