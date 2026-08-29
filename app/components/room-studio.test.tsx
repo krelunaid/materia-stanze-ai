@@ -236,7 +236,7 @@ describe('RoomStudio', () => {
     expect(screen.getByText('pianoforte nero a coda', { selector: '.selected-assets button' })).toBeInTheDocument();
   });
 
-  it('orients furniture by room wall without tilting the product image', () => {
+  it('shows a real side preview and on-canvas controls when furniture orientation changes', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
     fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
@@ -250,6 +250,10 @@ describe('RoomStudio', () => {
     const furniture = screen.getByRole('button', { name: 'Sposta Divano chiaro' });
     expect(furniture).toHaveClass('facing-left-wall');
     expect(furniture.getAttribute('style')).not.toContain('rotate(');
+    expect(furniture.querySelector('img')).toHaveAttribute('src', '/demo-sofa-side.png');
+    expect(screen.getByRole('group', { name: 'Gira il mobile' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Orienta Divano chiaro: Muro destro' }));
+    expect(furniture).toHaveClass('facing-right-wall');
   });
 
   it('keeps dragged furniture anchored below the detected floor boundary', () => {
