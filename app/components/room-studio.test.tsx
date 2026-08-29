@@ -246,7 +246,10 @@ describe('RoomStudio', () => {
     vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
     fireEvent.click(canvas, { clientX: 500, clientY: 500 });
     expect(screen.getByRole('button', { name: 'Muro frontale' })).toHaveClass('is-active');
-    expect(screen.getByRole('button', { name: 'Sposta Divano chiaro' }).querySelector('img')).toHaveAttribute('src', '/demo-sofa.png');
+    const initiallyFront = screen.getByRole('button', { name: 'Sposta Divano chiaro' });
+    expect(initiallyFront.querySelector('img')).toHaveAttribute('src', '/demo-sofa.png');
+    expect(Number.parseFloat((initiallyFront as HTMLElement).style.width)).toBeGreaterThan(30);
+    expect(screen.getByRole('group', { name: 'Dimensione del mobile' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Muro sinistro' }));
     const furniture = screen.getByRole('button', { name: 'Sposta Divano chiaro' });
     expect(furniture).toHaveClass('facing-left-wall');
@@ -267,10 +270,13 @@ describe('RoomStudio', () => {
     vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
     fireEvent.click(canvas, { clientX: 500, clientY: 500 });
     const furniture = screen.getByRole('button', { name: 'Sposta Divano chiaro' });
+    const initialWidth = Number.parseFloat((furniture as HTMLElement).style.width);
     fireEvent.pointerDown(furniture, { pointerId: 21, clientX: 500, clientY: 500 });
     fireEvent.pointerMove(furniture, { pointerId: 21, clientX: 500, clientY: 100 });
+    fireEvent.pointerMove(furniture, { pointerId: 21, clientX: 500, clientY: 610 });
     fireEvent.pointerUp(furniture, { pointerId: 21 });
     expect(Number.parseFloat((furniture as HTMLElement).style.top)).toBeGreaterThan(70);
+    expect(Number.parseFloat((furniture as HTMLElement).style.width)).toBeGreaterThan(initialWidth);
   });
 
   it('offers separate brand, model, color and product type criteria', () => {

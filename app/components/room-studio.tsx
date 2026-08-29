@@ -58,6 +58,7 @@ type PlacedFurniture = {
   x: number;
   y: number;
   scale: number;
+  autoScale: boolean;
   facing: FurnitureFacing;
   frozen: boolean;
   previewUrl?: string;
@@ -96,6 +97,28 @@ function furnitureWidthHeightRatio(description?: string) {
   const parsedHeight = Number(height[1].replace(',', '.'));
   const ratio = parsedWidth / parsedHeight;
   return Number.isFinite(ratio) && ratio > 1 && ratio < 12 ? ratio : undefined;
+}
+
+function furnitureBaseScale(name: string, description?: string) {
+  const normalized = `${name} ${description ?? ''}`.toLocaleLowerCase('it');
+  const width = description?.match(/(?:^|[·\s])L\s*([\d.,]+)\s*cm/i);
+  if (width) {
+    const measuredWidth = Number(width[1].replace(',', '.'));
+    if (Number.isFinite(measuredWidth)) return Math.min(46, Math.max(14, measuredWidth / 6.2));
+  }
+  if (/divano|sofa/.test(normalized)) return 40;
+  if (/letto/.test(normalized)) return 36;
+  if (/tavolo/.test(normalized)) return 32;
+  if (/tappeto|cucina/.test(normalized)) return 38;
+  if (/armadio|mobile tv/.test(normalized)) return 28;
+  if (/poltrona|sedia|sedie/.test(normalized)) return 20;
+  if (/lampada/.test(normalized)) return 14;
+  return 25;
+}
+
+function perspectiveFurnitureScale(name: string, description: string | undefined, y: number, floorContact: number) {
+  const depth = Math.min(1, Math.max(0, (y - floorContact) / Math.max(.08, .96 - floorContact)));
+  return Math.round(Math.min(55, Math.max(12, furnitureBaseScale(name, description) * (.84 + depth * .34))) * 10) / 10;
 }
 
 function isNativeApp() {
@@ -1373,7 +1396,8 @@ export function RoomStudio() {
     const y = Math.min(.94, Math.max(floorContact + .015, requestedY));
     furnitureIdRef.current += 1;
     const id = `furniture-${furnitureIdRef.current}`;
-    const placed: PlacedFurniture = { id, name: pendingFurniture.name, x, y, scale: 24, facing: 'front-wall', frozen: false, previewUrl: pendingFurniture.previewUrl, sidePreviewUrl: pendingFurniture.sidePreviewUrl, cutoutUrl: pendingFurniture.cutoutUrl, description: pendingFurniture.description };
+    const scale = perspectiveFurnitureScale(pendingFurniture.name, pendingFurniture.description, y, floorContact);
+    const placed: PlacedFurniture = { id, name: pendingFurniture.name, x, y, scale, autoScale: true, facing: 'front-wall', frozen: false, previewUrl: pendingFurniture.previewUrl, sidePreviewUrl: pendingFurniture.sidePreviewUrl, cutoutUrl: pendingFurniture.cutoutUrl, description: pendingFurniture.description };
     if (pendingFurniture.file) furnitureFilesRef.current.set(id, pendingFurniture.file);
     setPlacedFurniture((current) => [...current, placed]);
     setSelectedFurnitureId(id);
@@ -1398,7 +1422,7 @@ export function RoomStudio() {
     const requestedY = (event.clientY - rect.top) / rect.height;
     const floorContact = floorContactYAtX(surfaces.find((surface) => surface.kind === 'floor'), x);
     const y = Math.min(.96, Math.max(floorContact + .015, requestedY));
-    setPlacedFurniture((current) => current.map((item) => item.id === dragFurniture.id ? { ...item, x, y } : item));
+    setPlacedFurniture((current) => current.map((item) => item.id === dragFurniture.id ? { ...item, x, y, scale: item.autoScale ? perspectiveFurnitureScale(item.name, item.description, y, floorContact) : item.scale } : item));
   }
 
   function endFurnitureDrag(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -1415,6 +1439,18 @@ export function RoomStudio() {
   function orientSelectedFurniture(facing: FurnitureFacing) {
     updateSelectedFurniture({ facing });
     if (selectedFurniture) setNotice(`${selectedFurniture.name}: ${furnitureFacingLabels[facing].toLocaleLowerCase('it')}. L’anteprima mostra subito l’orientamento; Grok rifinisce prospettiva e ombre nel render.`);
+  }
+
+  function resizeSelectedFurniture(delta: number) {
+    if (!selectedFurniture) return;
+    updateSelectedFurniture({ scale: Math.min(55, Math.max(12, selectedFurniture.scale + delta)), autoScale: false });
+  }
+
+  function restoreAutomaticFurnitureScale() {
+    if (!selectedFurniture) return;
+    const floorContact = floorContactYAtX(surfaces.find((surface) => surface.kind === 'floor'), selectedFurniture.x);
+    updateSelectedFurniture({ scale: perspectiveFurnitureScale(selectedFurniture.name, selectedFurniture.description, selectedFurniture.y, floorContact), autoScale: true });
+    setNotice(`${selectedFurniture.name}: misura automatica adattata alla profondità della stanza.`);
   }
 
   function removeSelectedFurniture() {
@@ -1812,7 +1848,7 @@ export function RoomStudio() {
                 const usesSideAsset = item.facing !== 'front-wall' && Boolean(item.sidePreviewUrl);
                 const imageUrl = usesSideAsset ? item.sidePreviewUrl : item.cutoutUrl ?? item.previewUrl;
                 return <button key={item.id} type="button" className={`placed-furniture facing-${item.facing} ${usesSideAsset ? 'has-side-preview' : ''} ${selectedFurnitureId === item.id ? 'is-selected' : ''} ${item.frozen ? 'is-frozen' : ''}`} style={{ left: `${item.x * 100}%`, top: `${item.y * 100}%`, width: `${item.scale}%`, transform: 'translate(-50%,-100%)' }} aria-label={`Sposta ${item.name}`} onClick={(event) => { event.stopPropagation(); setSelectedFurnitureId(item.id); }} onPointerDown={(event) => beginFurnitureDrag(event, item.id)} onPointerMove={moveFurniture} onPointerUp={endFurnitureDrag} onPointerCancel={endFurnitureDrag}>{imageUrl ? <img src={imageUrl} alt="" /> : <span className="placed-furniture-placeholder">▰</span>}<strong>{item.name}</strong><span className="furniture-facing-badge">{furnitureFacingLabels[item.facing]}</span><i aria-hidden="true" /></button>;
-              })}{selectedFurniture && !selectedFurniture.frozen && <div className="canvas-facing-controls" role="group" aria-label="Gira il mobile" style={{ left: `${selectedFurniture.x * 100}%`, top: `${selectedFurniture.y * 100}%` }} onClick={(event) => event.stopPropagation()}>{(Object.keys(furnitureFacingLabels) as FurnitureFacing[]).map((facing) => <button type="button" key={facing} aria-label={`Orienta ${selectedFurniture.name}: ${furnitureFacingLabels[facing]}`} className={selectedFurniture.facing === facing ? 'is-active' : ''} onClick={() => orientSelectedFurniture(facing)}>{facing === 'front-wall' ? '↑ Frontale' : facing === 'left-wall' ? '↙ Sinistra' : '↘ Destra'}</button>)}</div>}</div>}
+              })}{selectedFurniture && !selectedFurniture.frozen && <><div className="canvas-facing-controls" role="group" aria-label="Gira il mobile" style={{ left: `${selectedFurniture.x * 100}%`, top: `${selectedFurniture.y * 100}%` }} onClick={(event) => event.stopPropagation()}>{(Object.keys(furnitureFacingLabels) as FurnitureFacing[]).map((facing) => <button type="button" key={facing} aria-label={`Orienta ${selectedFurniture.name}: ${furnitureFacingLabels[facing]}`} className={selectedFurniture.facing === facing ? 'is-active' : ''} onClick={() => orientSelectedFurniture(facing)}>{facing === 'front-wall' ? '↑ Frontale' : facing === 'left-wall' ? '↙ Sinistra' : '↘ Destra'}</button>)}</div><div className="canvas-size-controls" role="group" aria-label="Dimensione del mobile" style={{ left: `${selectedFurniture.x * 100}%`, top: `${selectedFurniture.y * 100}%` }} onClick={(event) => event.stopPropagation()}><button type="button" aria-label={`Rimpicciolisci ${selectedFurniture.name}`} onClick={() => resizeSelectedFurniture(-3)}>−</button><button type="button" className={selectedFurniture.autoScale ? 'is-active' : ''} aria-label={`Adatta automaticamente ${selectedFurniture.name} alla stanza`} onClick={restoreAutomaticFurnitureScale}>Auto {Math.round(selectedFurniture.scale)}%</button><button type="button" aria-label={`Ingrandisci ${selectedFurniture.name}`} onClick={() => resizeSelectedFurniture(3)}>＋</button></div></>}</div>}
               {pendingFurniture && <div className="placement-hint" role="status"><strong>Tocca il punto sul pavimento</strong><span>Posiziona “{pendingFurniture.name}”</span><button type="button" onClick={(event) => { event.stopPropagation(); setPendingFurniture(null); setNotice('Inserimento mobile annullato.'); }}>Annulla</button></div>}
               <div className="import-status"><span className="status-dot" /><div><strong>{showProcessedPreview ? processedLabel : 'Originale intatto'}</strong><small>{showProcessedPreview ? 'Elaborazione IA · originale sempre disponibile' : importedCaption}</small></div></div>
               <button className="replace-button" type="button" onClick={() => roomInputRef.current?.click()}>↑ Carica la tua foto</button>
@@ -1853,7 +1889,7 @@ export function RoomStudio() {
               <button className="apply-button secondary-apply" type="button" aria-label={`Applica a ${selected.name}`} onClick={applyMaterial} disabled={!material || selected.frozen || materialNeedsSample}>Oppure applica solo a {selected.name}</button>
               <p className="material-search-note">L’app sceglie pavimento o muro, corregge prospettiva e scala, e lascia identiche tutte le zone Freeze. La resa è fedele al prodotto solo quando compare “Texture ufficiale verificata” o usi un tuo campione.</p>
             </div>
-            <div className="property-section furniture-section"><div className="property-title"><span>Mobili nella stanza</span><span className="editable-badge">{placedFurniture.length + customRequests.length} scelti</span></div><button className="upload-furniture-button" type="button" onClick={() => furnitureInputRef.current?.click()}>＋ Carica la foto di un mobile</button>{placedFurniture.length || customRequests.length ? <div className="selected-assets">{placedFurniture.map((item, index) => <button type="button" className={selectedFurnitureId === item.id ? 'is-selected' : ''} key={item.id} onClick={() => setSelectedFurnitureId(item.id)}>{item.name} {placedFurniture.filter((candidate) => candidate.name === item.name).length > 1 ? index + 1 : ''}<span>{item.frozen ? '◆' : '›'}</span></button>)}{customRequests.map((item) => <button type="button" key={item} onClick={() => setCustomRequests((current) => current.filter((name) => name !== item))}>{item}<span>×</span></button>)}</div> : <p className="no-results">Cerca un mobile, toccalo e poi indica direttamente il punto sul pavimento.</p>}{selectedFurniture && <div className="furniture-controls"><div><strong>{selectedFurniture.name}</strong><span>{selectedFurniture.frozen ? 'Posizione bloccata' : 'Trascinalo sulla foto oppure correggilo qui'}</span></div><div className="furniture-facing-controls" aria-label="Parete di orientamento"><span>Schienale verso</span>{(Object.keys(furnitureFacingLabels) as FurnitureFacing[]).map((facing) => <button type="button" key={facing} className={selectedFurniture.facing === facing ? 'is-active' : ''} onClick={() => orientSelectedFurniture(facing)} disabled={selectedFurniture.frozen}>{furnitureFacingLabels[facing]}</button>)}</div><div className="furniture-control-grid"><button type="button" onClick={() => updateSelectedFurniture({ scale: Math.max(12, selectedFurniture.scale - 3) })} disabled={selectedFurniture.frozen} aria-label="Rimpicciolisci mobile">− Piccolo</button><button type="button" onClick={() => updateSelectedFurniture({ scale: Math.min(55, selectedFurniture.scale + 3) })} disabled={selectedFurniture.frozen} aria-label="Ingrandisci mobile">＋ Grande</button></div><button className={`freeze-furniture-button ${selectedFurniture.frozen ? 'is-active' : ''}`} type="button" onClick={() => updateSelectedFurniture({ frozen: !selectedFurniture.frozen })}>{selectedFurniture.frozen ? '◇ Sblocca posizione' : '◆ Blocca posizione'}</button><button className="remove-furniture-button" type="button" onClick={removeSelectedFurniture} disabled={selectedFurniture.frozen}>Rimuovi mobile</button></div>}<p className="material-search-note">L’IA usa punto, dimensione e parete scelta per adattare prospettiva, luci e ombre della stanza.</p></div>
+            <div className="property-section furniture-section"><div className="property-title"><span>Mobili nella stanza</span><span className="editable-badge">{placedFurniture.length + customRequests.length} scelti</span></div><button className="upload-furniture-button" type="button" onClick={() => furnitureInputRef.current?.click()}>＋ Carica la foto di un mobile</button>{placedFurniture.length || customRequests.length ? <div className="selected-assets">{placedFurniture.map((item, index) => <button type="button" className={selectedFurnitureId === item.id ? 'is-selected' : ''} key={item.id} onClick={() => setSelectedFurnitureId(item.id)}>{item.name} {placedFurniture.filter((candidate) => candidate.name === item.name).length > 1 ? index + 1 : ''}<span>{item.frozen ? '◆' : '›'}</span></button>)}{customRequests.map((item) => <button type="button" key={item} onClick={() => setCustomRequests((current) => current.filter((name) => name !== item))}>{item}<span>×</span></button>)}</div> : <p className="no-results">Cerca un mobile, toccalo e poi indica direttamente il punto sul pavimento.</p>}{selectedFurniture && <div className="furniture-controls"><div><strong>{selectedFurniture.name}</strong><span>{selectedFurniture.frozen ? 'Posizione bloccata' : selectedFurniture.autoScale ? 'Misura automatica attiva: trascinandolo in profondità cambia scala' : 'Misura manuale attiva'}</span></div><div className="furniture-facing-controls" aria-label="Parete di orientamento"><span>Schienale verso</span>{(Object.keys(furnitureFacingLabels) as FurnitureFacing[]).map((facing) => <button type="button" key={facing} className={selectedFurniture.facing === facing ? 'is-active' : ''} onClick={() => orientSelectedFurniture(facing)} disabled={selectedFurniture.frozen}>{furnitureFacingLabels[facing]}</button>)}</div><div className="furniture-control-grid"><button type="button" onClick={() => resizeSelectedFurniture(-3)} disabled={selectedFurniture.frozen} aria-label="Rimpicciolisci mobile">− Piccolo</button><button type="button" onClick={() => resizeSelectedFurniture(3)} disabled={selectedFurniture.frozen} aria-label="Ingrandisci mobile">＋ Grande</button></div><button className={`auto-size-furniture-button ${selectedFurniture.autoScale ? 'is-active' : ''}`} type="button" onClick={restoreAutomaticFurnitureScale} disabled={selectedFurniture.frozen}>◎ Misura automatica · {Math.round(selectedFurniture.scale)}%</button><button className={`freeze-furniture-button ${selectedFurniture.frozen ? 'is-active' : ''}`} type="button" onClick={() => updateSelectedFurniture({ frozen: !selectedFurniture.frozen })}>{selectedFurniture.frozen ? '◇ Sblocca posizione' : '◆ Blocca posizione'}</button><button className="remove-furniture-button" type="button" onClick={removeSelectedFurniture} disabled={selectedFurniture.frozen}>Rimuovi mobile</button></div>}<p className="material-search-note">La scala automatica considera tipo di mobile e profondità sul pavimento. Grok rifinisce proporzioni, prospettiva, luci e ombre nel render.</p></div>
             <div className="property-section metrics"><div><span>Vertici</span><strong>{selected.points.length}</strong></div><div><span>Stato</span><strong>{selected.frozen ? 'Lock' : 'Edit'}</strong></div><div><span>Texture</span><strong>{selected.materialId ? 'Sì' : 'No'}</strong></div></div><button className="remove-button" type="button" onClick={deleteSelected} disabled={selected.frozen}>Elimina superficie</button></> : room ? <div className="empty-properties"><strong>Seleziona un contorno</strong><p>Tocca una superficie sulla foto o sceglila dall’elenco. Puoi anche disegnarne una nuova.</p></div> : null}
           {room && <button className="remove-room-button" type="button" onClick={removeRoom}>Chiudi progetto</button>}
           <div className="phase-card"><span className="phase-index">0.3</span><div><p className="eyebrow">Modalità prova</p><strong>IA e Freeze pronti</strong><p>Ricerca prodotti, stanza vuota e render vengono elaborati dal server senza mostrare chiavi nell’app.</p></div></div>
