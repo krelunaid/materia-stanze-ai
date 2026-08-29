@@ -276,15 +276,15 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .furniture-pencil-heading strong,.furniture-pencil-heading span { display:block; }
 .furniture-pencil-heading strong { font-size:12px; }
 .furniture-pencil-heading span { margin-top:2px; color:#64736e; font-size:9px; }
-.furniture-pencil-walls { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:6px; }
+.furniture-pencil-walls { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; }
 .furniture-pencil-walls button,.furniture-pencil-actions button,.pencil-unlock { min-height:50px; border:1px solid #b9cbc5; border-radius:12px; background:#fff; color:var(--ink); font-size:10px; font-weight:850; cursor:pointer; touch-action:manipulation; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent; }
 .furniture-pencil-walls button.is-active { border-color:#71882a; background:#edf6ca; color:#374411; box-shadow:inset 0 0 0 1px #a8bf4e; }
-.furniture-pencil-walls .straight-button { border-color:#8ab6aa; background:#e6f3ee; color:#236b5f; }
-.furniture-pencil-actions { display:grid; grid-template-columns:repeat(8,minmax(56px,1fr)); gap:6px; min-width:0; padding-bottom:2px; overflow-x:auto; overscroll-behavior-x:contain; }
-.furniture-pencil-actions button { min-height:56px; border-radius:50%; font-size:23px; }
+.furniture-pencil-actions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; width:100%; max-width:540px; margin:0 auto; }
+.furniture-pencil-actions button { display:flex; min-height:62px; align-items:center; justify-content:center; flex-direction:column; gap:2px; border-radius:14px; font-size:24px; }
 .furniture-pencil-actions button:active,.furniture-pencil-walls button:active { background:#d7f05c; color:#26322f; transform:scale(.96); }
-.furniture-pencil-actions .pencil-size-button { border-radius:16px; background:#18352f; color:#fff; font-size:20px; }
-.pencil-size-button small { display:block; font-size:7px; line-height:1.1; }
+.furniture-pencil-actions .straight-button { border-color:#8ab6aa; background:#e6f3ee; color:#236b5f; }
+.furniture-pencil-actions .pencil-size-button { background:#18352f; color:#fff; }
+.furniture-pencil-actions small { display:block; font-size:8px; font-weight:850; line-height:1.1; letter-spacing:.03em; }
 .furniture-pencil-walls button:disabled,.furniture-pencil-actions button:disabled { opacity:.38; cursor:not-allowed; }
 .pencil-unlock { padding:0 14px; border-color:#d5a85d; background:#fff5e2; color:#785822; }
 .canvas.is-placing-furniture { cursor:crosshair; box-shadow:0 0 0 4px #d7f05c,0 18px 45px rgba(31,49,44,.14); }
