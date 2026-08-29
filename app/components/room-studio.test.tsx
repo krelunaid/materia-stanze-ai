@@ -249,7 +249,7 @@ describe('RoomStudio', () => {
     const initiallyFront = screen.getByRole('button', { name: 'Sposta Divano chiaro' });
     expect(initiallyFront.querySelector('img')).toHaveAttribute('src', '/demo-sofa.png');
     expect(Number.parseFloat((initiallyFront as HTMLElement).style.width)).toBeGreaterThan(30);
-    expect(screen.getByRole('group', { name: 'Comandi attorno al mobile' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Comandi Apple Pencil per il mobile' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Scegli il muro del mobile' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Misura automatica' })).toBeDisabled();
     const automaticWidth = Number.parseFloat((initiallyFront as HTMLElement).style.width);
@@ -267,7 +267,7 @@ describe('RoomStudio', () => {
     expect(furniture).toHaveClass('facing-left-wall');
     expect(furniture.getAttribute('style')).not.toContain('rotate(');
     expect(furniture.querySelector('img')).toHaveAttribute('src', '/demo-sofa-side.png');
-    expect(screen.getByRole('group', { name: 'Comandi attorno al mobile' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Comandi Apple Pencil per il mobile' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Comandi rapidi per il mobile' })).toBeInTheDocument();
     const initialLeft = Number.parseFloat((furniture as HTMLElement).style.left);
     fireEvent.click(screen.getByRole('button', { name: 'Sposta mobile a destra' }));
@@ -275,8 +275,13 @@ describe('RoomStudio', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ruota mobile a destra' }));
     expect(furniture.getAttribute('style')).toContain('rotate(5deg)');
     expect(screen.getByRole('button', { name: 'Raddrizza mobile' })).toHaveTextContent('5°');
+    fireEvent.click(screen.getByRole('button', { name: 'Raddrizza Divano chiaro' }));
+    expect(furniture.getAttribute('style')).not.toContain('rotate(');
     fireEvent.click(screen.getByRole('button', { name: '↘ Destra' }));
     expect(furniture).toHaveClass('facing-right-wall');
+    fireEvent.click(screen.getByRole('button', { name: '◆ Blocca' }));
+    expect(screen.getByRole('group', { name: 'Comandi Apple Pencil per il mobile' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '◇ SBLOCCA' })).toBeInTheDocument();
   });
 
   it('keeps the grabbed point stable while auto-scaling furniture in depth', () => {
