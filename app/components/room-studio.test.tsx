@@ -249,7 +249,7 @@ describe('RoomStudio', () => {
     const initiallyFront = screen.getByRole('button', { name: 'Sposta Divano chiaro' });
     expect(initiallyFront.querySelector('img')).toHaveAttribute('src', '/demo-sofa.png');
     expect(Number.parseFloat((initiallyFront as HTMLElement).style.width)).toBeGreaterThan(30);
-    expect(screen.getByRole('group', { name: 'Comandi sul mobile' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Comandi attorno al mobile' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Misura automatica' })).toBeDisabled();
     const automaticWidth = Number.parseFloat((initiallyFront as HTMLElement).style.width);
     fireEvent.click(screen.getByRole('button', { name: 'Ingrandisci Divano chiaro' }));
@@ -266,7 +266,7 @@ describe('RoomStudio', () => {
     expect(furniture).toHaveClass('facing-left-wall');
     expect(furniture.getAttribute('style')).not.toContain('rotate(');
     expect(furniture.querySelector('img')).toHaveAttribute('src', '/demo-sofa-side.png');
-    expect(screen.getByRole('group', { name: 'Comandi sul mobile' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Comandi attorno al mobile' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Comandi rapidi per il mobile' })).toBeInTheDocument();
     const initialLeft = Number.parseFloat((furniture as HTMLElement).style.left);
     fireEvent.click(screen.getByRole('button', { name: 'Sposta mobile a destra' }));
