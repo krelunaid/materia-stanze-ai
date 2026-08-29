@@ -245,7 +245,7 @@ describe('RoomStudio', () => {
     const canvas = document.querySelector('.canvas') as HTMLDivElement;
     vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
     fireEvent.click(canvas, { clientX: 500, clientY: 500 });
-    expect(screen.getByRole('button', { name: 'Muro frontale' })).toHaveClass('is-active');
+    expect(screen.getByRole('button', { name: '↑ Frontale' })).toHaveClass('is-active');
     const initiallyFront = screen.getByRole('button', { name: 'Sposta Divano chiaro' });
     expect(initiallyFront.querySelector('img')).toHaveAttribute('src', '/demo-sofa.png');
     expect(Number.parseFloat((initiallyFront as HTMLElement).style.width)).toBeGreaterThan(30);
@@ -259,13 +259,13 @@ describe('RoomStudio', () => {
     fireEvent.click(restoreAuto);
     expect(Number.parseFloat((initiallyFront as HTMLElement).style.width)).toBe(automaticWidth);
     expect(screen.getByRole('button', { name: 'Misura automatica attiva per Divano chiaro' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Muro sinistro' }));
+    fireEvent.click(screen.getByRole('button', { name: '↙ Sinistra' }));
     const furniture = screen.getByRole('button', { name: 'Sposta Divano chiaro' });
     expect(furniture).toHaveClass('facing-left-wall');
     expect(furniture.getAttribute('style')).not.toContain('rotate(');
     expect(furniture.querySelector('img')).toHaveAttribute('src', '/demo-sofa-side.png');
     expect(screen.getByRole('group', { name: 'Gira il mobile' })).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'Sposta il mobile con i pulsanti' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Comandi rapidi per il mobile' })).toBeInTheDocument();
     const initialLeft = Number.parseFloat((furniture as HTMLElement).style.left);
     fireEvent.click(screen.getByRole('button', { name: 'Sposta mobile a destra' }));
     expect(Number.parseFloat((furniture as HTMLElement).style.left)).toBeGreaterThan(initialLeft);
