@@ -246,6 +246,7 @@ describe('RoomStudio', () => {
     vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
     fireEvent.click(canvas, { clientX: 500, clientY: 500 });
     expect(screen.getByRole('button', { name: 'Muro frontale' })).toHaveClass('is-active');
+    expect(screen.getByRole('button', { name: 'Sposta Divano chiaro' }).querySelector('img')).toHaveAttribute('src', '/demo-sofa.png');
     fireEvent.click(screen.getByRole('button', { name: 'Muro sinistro' }));
     const furniture = screen.getByRole('button', { name: 'Sposta Divano chiaro' });
     expect(furniture).toHaveClass('facing-left-wall');
