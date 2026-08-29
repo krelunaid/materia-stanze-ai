@@ -249,22 +249,24 @@ describe('RoomStudio', () => {
     const initiallyFront = screen.getByRole('button', { name: 'Sposta Divano chiaro' });
     expect(initiallyFront.querySelector('img')).toHaveAttribute('src', '/demo-sofa.png');
     expect(Number.parseFloat((initiallyFront as HTMLElement).style.width)).toBeGreaterThan(30);
-    expect(screen.getByRole('group', { name: 'Dimensione del mobile' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Misura automatica attiva per Divano chiaro' })).toBeDisabled();
+    expect(screen.getByRole('group', { name: 'Comandi sul mobile' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Misura automatica' })).toBeDisabled();
     const automaticWidth = Number.parseFloat((initiallyFront as HTMLElement).style.width);
     fireEvent.click(screen.getByRole('button', { name: 'Ingrandisci Divano chiaro' }));
     expect(Number.parseFloat((initiallyFront as HTMLElement).style.width)).toBeGreaterThan(automaticWidth);
-    const restoreAuto = screen.getByRole('button', { name: 'Ripristina misura automatica per Divano chiaro' });
+    for (let step = 0; step < 7; step += 1) fireEvent.click(screen.getByRole('button', { name: 'Ingrandisci Divano chiaro' }));
+    expect(Number.parseFloat((initiallyFront as HTMLElement).style.width)).toBeGreaterThan(55);
+    const restoreAuto = screen.getByRole('button', { name: 'Misura automatica' });
     expect(restoreAuto).toBeEnabled();
     fireEvent.click(restoreAuto);
     expect(Number.parseFloat((initiallyFront as HTMLElement).style.width)).toBe(automaticWidth);
-    expect(screen.getByRole('button', { name: 'Misura automatica attiva per Divano chiaro' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Misura automatica' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: '↙ Sinistra' }));
     const furniture = screen.getByRole('button', { name: 'Sposta Divano chiaro' });
     expect(furniture).toHaveClass('facing-left-wall');
     expect(furniture.getAttribute('style')).not.toContain('rotate(');
     expect(furniture.querySelector('img')).toHaveAttribute('src', '/demo-sofa-side.png');
-    expect(screen.getByRole('group', { name: 'Gira il mobile' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Comandi sul mobile' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Comandi rapidi per il mobile' })).toBeInTheDocument();
     const initialLeft = Number.parseFloat((furniture as HTMLElement).style.left);
     fireEvent.click(screen.getByRole('button', { name: 'Sposta mobile a destra' }));
@@ -272,7 +274,7 @@ describe('RoomStudio', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ruota mobile a destra' }));
     expect(furniture.getAttribute('style')).toContain('rotate(5deg)');
     expect(screen.getByRole('button', { name: 'Raddrizza mobile' })).toHaveTextContent('5°');
-    fireEvent.click(screen.getByRole('button', { name: 'Orienta Divano chiaro: Muro destro' }));
+    fireEvent.click(screen.getByRole('button', { name: '↘ Destra' }));
     expect(furniture).toHaveClass('facing-right-wall');
   });
 
