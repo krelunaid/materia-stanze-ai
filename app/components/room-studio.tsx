@@ -67,7 +67,7 @@ type PlacedFurniture = {
   description?: string;
 };
 type PendingFurniture = { name: string; previewUrl?: string; sidePreviewUrl?: string; cutoutUrl?: string; description?: string; file?: File };
-type DragFurniture = { id: string; pointerId: number };
+type DragFurniture = { id: string; pointerId: number; offsetX: number; offsetY: number };
 type CleanupRegion = { label: string; points: Point[]; confidence: number };
 type AiStatus = 'checking' | 'ready' | 'missing' | 'unreachable';
 type DetectedSurface = { name: string; kind: SurfaceKind; points: Point[]; confidence: number };
@@ -1407,19 +1407,22 @@ export function RoomStudio() {
 
   function beginFurnitureDrag(event: ReactPointerEvent<HTMLButtonElement>, id: string) {
     const item = placedFurniture.find((candidate) => candidate.id === id);
-    if (!item || item.frozen) return;
+    if (!item || item.frozen || !canvasRef.current) return;
     event.preventDefault(); event.stopPropagation();
     event.currentTarget.setPointerCapture?.(event.pointerId);
+    const rect = canvasRef.current.getBoundingClientRect();
+    const pointerX = (event.clientX - rect.left) / rect.width;
+    const pointerY = (event.clientY - rect.top) / rect.height;
     setSelectedFurnitureId(id);
-    setDragFurniture({ id, pointerId: event.pointerId });
+    setDragFurniture({ id, pointerId: event.pointerId, offsetX: pointerX - item.x, offsetY: pointerY - item.y });
   }
 
   function moveFurniture(event: ReactPointerEvent<HTMLButtonElement>) {
     if (!dragFurniture || dragFurniture.pointerId !== event.pointerId || !canvasRef.current) return;
     event.preventDefault(); event.stopPropagation();
     const rect = canvasRef.current.getBoundingClientRect();
-    const x = Math.min(.96, Math.max(.04, (event.clientX - rect.left) / rect.width));
-    const requestedY = (event.clientY - rect.top) / rect.height;
+    const x = Math.min(.96, Math.max(.04, (event.clientX - rect.left) / rect.width - dragFurniture.offsetX));
+    const requestedY = (event.clientY - rect.top) / rect.height - dragFurniture.offsetY;
     const floorContact = floorContactYAtX(surfaces.find((surface) => surface.kind === 'floor'), x);
     const y = Math.min(.96, Math.max(floorContact + .015, requestedY));
     setPlacedFurniture((current) => current.map((item) => item.id === dragFurniture.id ? { ...item, x, y, scale: item.autoScale ? perspectiveFurnitureScale(item.name, item.description, y, floorContact) : item.scale } : item));

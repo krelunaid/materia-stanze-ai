@@ -269,7 +269,7 @@ describe('RoomStudio', () => {
     expect(furniture).toHaveClass('facing-right-wall');
   });
 
-  it('keeps dragged furniture anchored below the detected floor boundary', () => {
+  it('keeps the grabbed point stable while auto-scaling furniture in depth', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
     fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
@@ -280,11 +280,13 @@ describe('RoomStudio', () => {
     fireEvent.click(canvas, { clientX: 500, clientY: 500 });
     const furniture = screen.getByRole('button', { name: 'Sposta Divano chiaro' });
     const initialWidth = Number.parseFloat((furniture as HTMLElement).style.width);
-    fireEvent.pointerDown(furniture, { pointerId: 21, clientX: 500, clientY: 500 });
-    fireEvent.pointerMove(furniture, { pointerId: 21, clientX: 500, clientY: 100 });
-    fireEvent.pointerMove(furniture, { pointerId: 21, clientX: 500, clientY: 610 });
+    const initialTop = Number.parseFloat((furniture as HTMLElement).style.top);
+    fireEvent.pointerDown(furniture, { pointerId: 21, clientX: 500, clientY: 400 });
+    fireEvent.pointerMove(furniture, { pointerId: 21, clientX: 500, clientY: 420 });
     fireEvent.pointerUp(furniture, { pointerId: 21 });
-    expect(Number.parseFloat((furniture as HTMLElement).style.top)).toBeGreaterThan(70);
+    const movedTop = Number.parseFloat((furniture as HTMLElement).style.top);
+    expect(movedTop).toBeGreaterThan(initialTop);
+    expect(movedTop - initialTop).toBeLessThan(8);
     expect(Number.parseFloat((furniture as HTMLElement).style.width)).toBeGreaterThan(initialWidth);
   });
 
