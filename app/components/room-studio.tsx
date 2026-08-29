@@ -541,6 +541,7 @@ export function RoomStudio() {
   const [notice, setNotice] = useState<string | null>(null);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [isImportingRoom, setIsImportingRoom] = useState(false);
+  const [isCreatingFloorplanRoom, setIsCreatingFloorplanRoom] = useState(false);
   const [isAutoFitting, setIsAutoFitting] = useState(false);
   const [isEmptyingRoom, setIsEmptyingRoom] = useState(false);
   const [isPickingCleanup, setIsPickingCleanup] = useState(false);
@@ -831,7 +832,7 @@ export function RoomStudio() {
       setSurfaces(initialSurfaces); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(initialSurfaces[0]?.id ?? null); setRenameDraft(initialSurfaces[0]?.name ?? ''); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setError(null);
       setIsCorrectingEdges(false);
       setNotice(sourceType === 'floorplan'
-        ? 'Planimetria riprodotta. Adatta il perimetro con i pallini e aggiungi le pareti interne con due tocchi.'
+        ? 'Planimetria caricata. Creo automaticamente la stanza vuota; potrai correggere il perimetro solo se serve.'
         : 'Foto pronta. Sto riconoscendo pavimento e muri: potrai correggere i pallini solo se serve.');
       setIsImportingRoom(false);
       setActiveStep(2);
@@ -1587,9 +1588,45 @@ export function RoomStudio() {
 
   function onRoomImageLoad(image: HTMLImageElement) {
     setRoomRatio(image.naturalWidth / image.naturalHeight);
+    if (room?.sourceType === 'floorplan' && room.previewUrl && autoFitPreviewRef.current !== room.previewUrl) {
+      autoFitPreviewRef.current = room.previewUrl;
+      window.setTimeout(() => void createRoomFromFloorplan(), 0);
+      return;
+    }
     if (room?.sourceType === 'photo' && room.previewUrl && surfaces.length === 0 && autoFitPreviewRef.current !== room.previewUrl) {
       autoFitPreviewRef.current = room.previewUrl;
       window.setTimeout(() => void autoFitSurfaces(), 0);
+    }
+  }
+
+  async function createRoomFromFloorplan() {
+    if (!room?.previewUrl || room.sourceType !== 'floorplan' || isCreatingFloorplanRoom) return;
+    setIsCreatingFloorplanRoom(true); setError(null);
+    setNotice('L’IA sta leggendo perimetro, pareti, porte e finestre e sta creando la stanza vuota…');
+    try {
+      const form = new FormData();
+      form.append('image', room.file, room.file.name || 'planimetria.png');
+      const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/floorplan-room'), { method: 'POST', body: form }, 180000);
+      if (!response.ok || !result.image) throw new Error(result.message ?? 'Stanza non disponibile.');
+
+      originalSurfacesRef.current = [];
+      processedSurfacesRef.current = null;
+      autoFitPreviewRef.current = null;
+      setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setRenameDraft('');
+      setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota');
+      setRoom((current) => current ? {
+        ...current,
+        previewUrl: result.image,
+        sourceType: 'photo',
+        displaySize: 'creata automaticamente dalla planimetria',
+        projectName: `${current.projectName} · stanza`,
+      } : current);
+      setNotice('Stanza creata dalla planimetria. Pavimento e pareti vengono riconosciuti automaticamente; correggili solo se serve.');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Non sono riuscito a creare la stanza dalla planimetria.');
+      setNotice('La planimetria resta modificabile: puoi correggere il perimetro e aggiungere pareti a mano.');
+    } finally {
+      setIsCreatingFloorplanRoom(false);
     }
   }
 
@@ -1916,9 +1953,9 @@ export function RoomStudio() {
               <div className="import-status"><span className="status-dot" /><div><strong>{showProcessedPreview ? processedLabel : 'Originale intatto'}</strong><small>{showProcessedPreview ? 'Elaborazione IA · originale sempre disponibile' : importedCaption}</small></div></div>
               <button className="replace-button" type="button" onClick={() => roomInputRef.current?.click()}>↑ Carica la tua foto</button>
               {processedPreview && <div className="before-after-toggle" aria-label="Confronta originale e risultato"><button type="button" className={!showProcessedPreview ? 'is-active' : ''} onClick={showOriginalRoom}>Originale</button><button type="button" className={showProcessedPreview ? 'is-active' : ''} onClick={showProcessedRoom}>{processedLabel}</button></div>}
-            </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Inizia da ciò che hai</p><h1>Cosa vuoi caricare?</h1><p>Scegli una foto della stanza oppure una planimetria. L’originale resterà sempre intatto.</p><div className="source-actions"><label className="source-card is-primary" htmlFor="room-file"><span>▣</span><strong>Libreria foto</strong><small>Scegli una foto già presente su iPhone o iPad</small></label><label className="source-card" htmlFor="camera-file"><span>●</span><strong>Scatta foto</strong><small>Usa direttamente la fotocamera posteriore</small></label><label className="source-card" htmlFor="floorplan-file"><span>⌗</span><strong>Planimetria</strong><small>Ricalca perimetro e pareti interne</small></label></div><button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>JPG, PNG o HEIC · massimo 20 MB</small></div></>}
+            </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Inizia da ciò che hai</p><h1>Cosa vuoi caricare?</h1><p>Scegli una foto della stanza oppure una planimetria. L’originale resterà sempre intatto.</p><div className="source-actions"><label className="source-card is-primary" htmlFor="room-file"><span>▣</span><strong>Libreria foto</strong><small>Scegli una foto già presente su iPhone o iPad</small></label><label className="source-card" htmlFor="camera-file"><span>●</span><strong>Scatta foto</strong><small>Usa direttamente la fotocamera posteriore</small></label><label className="source-card" htmlFor="floorplan-file"><span>⌗</span><strong>Planimetria</strong><small>Crea automaticamente la stanza vuota</small></label></div><button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>JPG, PNG o HEIC · massimo 20 MB</small></div></>}
             {isDraggingFile && <div className="drop-overlay"><strong>Rilascia per importare</strong><span>La foto resterà nel browser.</span></div>}
-            {isImportingRoom && <div className="processing-overlay" role="status"><span className="processing-spinner" /><strong>Preparo la foto…</strong><small>Le immagini grandi vengono ottimizzate per evitare blocchi.</small></div>}
+            {(isImportingRoom || isCreatingFloorplanRoom) && <div className="processing-overlay" role="status"><span className="processing-spinner" /><strong>{isCreatingFloorplanRoom ? 'Creo la stanza dalla planimetria…' : 'Preparo la foto…'}</strong><small>{isCreatingFloorplanRoom ? 'Riconosco pareti, porte e finestre. Può richiedere circa un minuto.' : 'Le immagini grandi vengono ottimizzate per evitare blocchi.'}</small></div>}
           </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
           <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onRoomInput} /><input ref={cameraInputRef} id="camera-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" capture="environment" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onMaterialInput} /><input ref={furnitureInputRef} id="furniture-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onFurnitureInput} />
           {room?.sourceType === 'photo' && activeStep === 2 && <section className="empty-room-choice" aria-label="Svuota la stanza"><div><strong>Vuoi svuotare la stanza?</strong><span>Rimuovi tutto oppure indica un oggetto rimasto: fuori dalla selezione i pixel restano identici.</span></div><div className="empty-room-actions"><button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom || isCleaningRegion}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button>{processedPreview && !cleanupRegion && <button type="button" className={isPickingCleanup ? 'is-active' : ''} onClick={() => { setIsPickingCleanup((current) => !current); setError(null); setNotice(isPickingCleanup ? 'Selezione annullata.' : 'Tocca il centro dell’oggetto rimasto nella foto.'); }} disabled={isDetectingCleanup || isCleaningRegion}>{isDetectingCleanup ? 'Riconosco…' : isPickingCleanup ? 'Annulla selezione' : '◎ Pulisci un residuo'}</button>}{cleanupRegion && <><button type="button" className="cleanup-confirm" onClick={() => void cleanResidualRegion()} disabled={isCleaningRegion}>{isCleaningRegion ? 'Pulisco…' : 'Pulisci selezione'}</button><button type="button" onClick={() => setCleanupRegion(null)} disabled={isCleaningRegion}>Annulla</button></>}</div></section>}

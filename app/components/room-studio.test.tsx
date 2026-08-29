@@ -76,11 +76,11 @@ describe('RoomStudio', () => {
     expect(screen.getByRole('button', { name: '⌂ Svuota la stanza' })).toBeInTheDocument();
   });
 
-  it('imports a floorplan, creates its perimeter and offers two-tap internal walls', () => {
+  it('imports a floorplan, starts automatic room creation and keeps manual correction available', () => {
     render(<RoomStudio />);
     fireEvent.change(document.querySelector('#floorplan-file') as HTMLInputElement, { target: { files: [new File(['plan'], 'casa.png', { type: 'image/png' })] } });
     expect(screen.getAllByText('Perimetro planimetria').length).toBeGreaterThan(0);
-    expect(screen.getByText(/Planimetria riprodotta/)).toBeInTheDocument();
+    expect(screen.getByText(/Creo automaticamente la stanza vuota/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Aggiungi parete interna' }));
     const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
     vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
