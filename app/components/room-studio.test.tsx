@@ -265,6 +265,13 @@ describe('RoomStudio', () => {
     expect(furniture.getAttribute('style')).not.toContain('rotate(');
     expect(furniture.querySelector('img')).toHaveAttribute('src', '/demo-sofa-side.png');
     expect(screen.getByRole('group', { name: 'Gira il mobile' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Sposta il mobile con i pulsanti' })).toBeInTheDocument();
+    const initialLeft = Number.parseFloat((furniture as HTMLElement).style.left);
+    fireEvent.click(screen.getByRole('button', { name: 'Sposta mobile a destra' }));
+    expect(Number.parseFloat((furniture as HTMLElement).style.left)).toBeGreaterThan(initialLeft);
+    fireEvent.click(screen.getByRole('button', { name: 'Ruota mobile a destra' }));
+    expect(furniture.getAttribute('style')).toContain('rotate(5deg)');
+    expect(screen.getByRole('button', { name: 'Raddrizza mobile' })).toHaveTextContent('5°');
     fireEvent.click(screen.getByRole('button', { name: 'Orienta Divano chiaro: Muro destro' }));
     expect(furniture).toHaveClass('facing-right-wall');
   });

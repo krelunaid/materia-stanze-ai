@@ -240,8 +240,12 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .furniture-controls>div:first-child strong { font-size:11px; }
 .furniture-controls>div:first-child span { margin-top:3px; color:#6f7b76; font-size:8px; }
 .furniture-control-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
-.furniture-control-grid button,.auto-size-furniture-button,.freeze-furniture-button,.remove-furniture-button { min-height:36px; border:1px solid #cbdad5; border-radius:9px; background:#fff; color:var(--ink); font-size:9px; font-weight:750; cursor:pointer; }
-.furniture-control-grid button:disabled,.remove-furniture-button:disabled { opacity:.42; cursor:not-allowed; }
+.furniture-control-grid button,.furniture-nudge-grid button,.furniture-rotation-grid button,.auto-size-furniture-button,.freeze-furniture-button,.remove-furniture-button { min-height:42px; border:1px solid #cbdad5; border-radius:9px; background:#fff; color:var(--ink); font-size:10px; font-weight:750; cursor:pointer; touch-action:manipulation; }
+.furniture-control-grid button:disabled,.furniture-nudge-grid button:disabled,.furniture-rotation-grid button:disabled,.remove-furniture-button:disabled { opacity:.42; cursor:not-allowed; }
+.furniture-touch-title { margin-top:2px; color:#65716d; font-size:8px; font-weight:850; letter-spacing:.06em; text-transform:uppercase; }
+.furniture-nudge-grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
+.furniture-nudge-grid button:first-child,.furniture-nudge-grid button:last-child { grid-column:1 / -1; }
+.furniture-rotation-grid { display:grid; grid-template-columns:1fr .7fr 1fr; gap:7px; }
 .furniture-facing-controls { display:grid; grid-template-columns:1fr; gap:5px; }
 .furniture-facing-controls>span { color:#65716d; font-size:8px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; }
 .furniture-facing-controls button { min-height:32px; border:1px solid #cbdad5; border-radius:8px; background:#fff; color:var(--ink); font-size:9px; font-weight:750; cursor:pointer; }
@@ -411,7 +415,7 @@ html,body { height:100%; overflow:hidden; overscroll-behavior:none; }
   .product-search-section,.online-search-control,.material-results,.online-results,.custom-color { min-width:0; max-width:100%; }
   .status-bar button { min-height:44px; }
   .placed-furniture { min-width:82px; min-height:62px; }
-  .furniture-control-grid button,.auto-size-furniture-button,.freeze-furniture-button,.remove-furniture-button,.upload-furniture-button { min-height:46px; }
+  .furniture-control-grid button,.furniture-nudge-grid button,.furniture-rotation-grid button,.auto-size-furniture-button,.freeze-furniture-button,.remove-furniture-button,.upload-furniture-button { min-height:50px; font-size:11px; }
 }
 
 @media (max-width:520px) {
