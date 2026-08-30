@@ -18,6 +18,7 @@ import { AcceptedRoomFile, formatBytes, validateRoomFile } from '../lib/file-val
 import { furnitureEditRect, hasCompatibleImageGeometry, rectPoints } from '../lib/render-geometry';
 import { NormalizedProductBounds, removeConnectedProductBackground } from '../lib/product-cutout';
 import { geometryForDerivedImage, geometrySnapshotsAfterEdit } from '../geometry/model';
+import { inferRoomMeasurement, measuredFurnitureScale, productWidthMeters, RoomMeasurement } from '../geometry/measurement';
 import { buildStoredProject, loadProject, saveProject } from '../geometry/project-store';
 import { openingCoverageInWall, validateRoomGeometry } from '../geometry/validate';
 import {
@@ -123,11 +124,8 @@ function furnitureWidthHeightRatio(description?: string) {
 
 function furnitureBaseScale(name: string, description?: string) {
   const normalized = `${name} ${description ?? ''}`.toLocaleLowerCase('it');
-  const width = description?.match(/(?:^|[·\s])L\s*([\d.,]+)\s*cm/i);
-  if (width) {
-    const measuredWidth = Number(width[1].replace(',', '.'));
-    if (Number.isFinite(measuredWidth)) return Math.min(46, Math.max(14, measuredWidth / 6.2));
-  }
+  const measuredWidth = productWidthMeters(name, description);
+  if (measuredWidth) return Math.min(46, Math.max(14, measuredWidth * 100 / 6.2));
   if (/divano|sofa/.test(normalized)) return 40;
   if (/letto/.test(normalized)) return 36;
   if (/tavolo/.test(normalized)) return 32;
@@ -138,9 +136,10 @@ function furnitureBaseScale(name: string, description?: string) {
   return 25;
 }
 
-function perspectiveFurnitureScale(name: string, description: string | undefined, y: number, floorContact: number) {
+function perspectiveFurnitureScale(name: string, description: string | undefined, y: number, floorContact: number, floor: Surface | undefined, roomMeasurement: RoomMeasurement) {
   const depth = Math.min(1, Math.max(0, (y - floorContact) / Math.max(.08, .96 - floorContact)));
-  return Math.round(Math.min(55, Math.max(12, furnitureBaseScale(name, description) * (.84 + depth * .34))) * 10) / 10;
+  const fallback = Math.round(Math.min(55, Math.max(12, furnitureBaseScale(name, description) * (.84 + depth * .34))) * 10) / 10;
+  return measuredFurnitureScale({ name, description, y, floor, room: roomMeasurement, fallback });
 }
 
 function isNativeApp() {
@@ -630,6 +629,9 @@ export function RoomStudio() {
   const [dragVertex, setDragVertex] = useState<DragVertex | null>(null);
   const [isCorrectingEdges, setIsCorrectingEdges] = useState(false);
   const [showSurfaceGuides, setShowSurfaceGuides] = useState(true);
+  const [manualRoomWidth, setManualRoomWidth] = useState<number | null>(null);
+  const [roomWidthDraft, setRoomWidthDraft] = useState('');
+  const [isEditingRoomMeasure, setIsEditingRoomMeasure] = useState(false);
   const roomInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const floorplanInputRef = useRef<HTMLInputElement>(null);
@@ -837,6 +839,7 @@ export function RoomStudio() {
   }, [dragVertex]);
 
   const selected = surfaces.find((surface) => surface.id === selectedId) ?? null;
+  const roomMeasurement = useMemo(() => inferRoomMeasurement(surfaces, roomRatio, manualRoomWidth), [surfaces, roomRatio, manualRoomWidth]);
   const materialNeedsSample = requiresVerifiedSurfaceSample(material);
   const productTargetSurfaces = surfaces.filter((surface) => surface.kind !== 'door' && surface.kind !== 'window');
   const materialTarget = material ? recommendedSurface(material) : selected;
@@ -860,6 +863,23 @@ export function RoomStudio() {
     return furnitureCatalog.filter((item) => `${item.name} ${item.description}`.toLocaleLowerCase('it').includes(query));
   }, [materialQuery, searchBrand, searchModel, searchColor, searchCategory]);
   const materialMap = useMemo(() => new Map(catalogMaterials.concat(onlineMaterials, material ? [material] : []).map((item) => [item.id, item])), [material, onlineMaterials]);
+
+  useEffect(() => {
+    const floor = surfaces.find((surface) => surface.kind === 'floor');
+    if (!floor) return;
+    setPlacedFurniture((current) => {
+      let changed = false;
+      const next = current.map((item) => {
+        if (!item.autoScale) return item;
+        const floorContact = floorContactYAtX(floor, item.x);
+        const scale = perspectiveFurnitureScale(item.name, item.description, item.y, floorContact, floor, roomMeasurement);
+        if (Math.abs(scale - item.scale) < .05) return item;
+        changed = true;
+        return { ...item, scale };
+      });
+      return changed ? next : current;
+    });
+  }, [roomMeasurement, surfaces]);
 
   function syncGeometrySnapshots(next: Surface[]) {
     if (!room || room.sourceType !== 'photo') return;
@@ -918,6 +938,7 @@ export function RoomStudio() {
       setPlacedFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); furnitureFilesRef.current.clear();
       setCleanupRegion(null); setIsPickingCleanup(false);
       setShowSurfaceGuides(true);
+      setManualRoomWidth(null); setRoomWidthDraft(''); setIsEditingRoomMeasure(false);
       autoFitPreviewRef.current = null;
       originalSurfacesRef.current = initialSurfaces;
       processedSurfacesRef.current = null;
@@ -967,7 +988,7 @@ export function RoomStudio() {
     furnitureBlobUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     furnitureBlobUrlsRef.current = [];
     furnitureFilesRef.current.clear();
-    setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]); setPlacedFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); setCleanupRegion(null); setIsPickingCleanup(false); setNotice(null); setIsCorrectingEdges(false); setShowSurfaceGuides(true);
+    setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]); setPlacedFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); setCleanupRegion(null); setIsPickingCleanup(false); setNotice(null); setIsCorrectingEdges(false); setShowSurfaceGuides(true); setManualRoomWidth(null); setRoomWidthDraft(''); setIsEditingRoomMeasure(false);
   }
 
   function startDrawing(kind: SurfaceKind = 'wall', quick = false) {
@@ -1450,6 +1471,7 @@ export function RoomStudio() {
       form.append('productName', `${chosenMaterial.brand ? `${chosenMaterial.brand} ` : ''}${chosenMaterial.name}`);
       form.append('productDescription', `${chosenMaterial.description} · fonte: ${chosenMaterial.sourceUrl}`);
       form.append('targetName', target.name);
+      form.append('roomMeasurements', `width ${roomMeasurement.widthMeters} m; depth ${roomMeasurement.depthMeters} m; height ${roomMeasurement.heightMeters} m; confidence ${Math.round(roomMeasurement.confidence * 100)}%; reference ${roomMeasurement.referenceLabel}`);
       form.append('protectedAreas', surfaces.filter((surface) => surface.frozen).map((surface) => surface.name).join(', '));
       // Only a verified flat texture (or an uploaded sample, stored as
       // textureUrl) may be sent as the visual surface reference.
@@ -1538,6 +1560,35 @@ export function RoomStudio() {
     event.currentTarget.value = '';
   }
 
+  function automaticFurnitureScale(name: string, description: string | undefined, x: number, y: number, measurement = roomMeasurement) {
+    const floor = surfaces.find((surface) => surface.kind === 'floor');
+    const floorContact = floorContactYAtX(floor, x);
+    return perspectiveFurnitureScale(name, description, y, floorContact, floor, measurement);
+  }
+
+  function confirmRoomWidth() {
+    const parsed = Number(roomWidthDraft.replace(',', '.'));
+    if (!Number.isFinite(parsed) || parsed < 1.5 || parsed > 20) {
+      setError('Inserisci una larghezza compresa tra 1,5 e 20 metri.');
+      return;
+    }
+    const calibrated = inferRoomMeasurement(surfaces, roomRatio, parsed);
+    setManualRoomWidth(parsed); setIsEditingRoomMeasure(false); setError(null);
+    setPlacedFurniture((current) => current.map((item) => item.autoScale
+      ? { ...item, scale: automaticFurnitureScale(item.name, item.description, item.x, item.y, calibrated) }
+      : item));
+    setNotice(`Scala confermata: parete principale ${calibrated.widthMeters.toLocaleString('it-IT')} m. I mobili automatici sono stati ricalcolati.`);
+  }
+
+  function restoreAutomaticRoomMeasurement() {
+    const automatic = inferRoomMeasurement(surfaces, roomRatio);
+    setManualRoomWidth(null); setRoomWidthDraft(''); setIsEditingRoomMeasure(false); setError(null);
+    setPlacedFurniture((current) => current.map((item) => item.autoScale
+      ? { ...item, scale: automaticFurnitureScale(item.name, item.description, item.x, item.y, automatic) }
+      : item));
+    setNotice(`Misure automatiche ripristinate usando ${automatic.referenceLabel}.`);
+  }
+
   function placePendingFurniture(event: ReactMouseEvent<HTMLDivElement>) {
     if (!pendingFurniture || activeStep !== 3) return;
     const rect = event.currentTarget.getBoundingClientRect();
@@ -1547,7 +1598,7 @@ export function RoomStudio() {
     const y = Math.min(.94, Math.max(floorContact + .015, requestedY));
     furnitureIdRef.current += 1;
     const id = `furniture-${furnitureIdRef.current}`;
-    const scale = perspectiveFurnitureScale(pendingFurniture.name, pendingFurniture.description, y, floorContact);
+    const scale = automaticFurnitureScale(pendingFurniture.name, pendingFurniture.description, x, y);
     const placed: PlacedFurniture = { id, name: pendingFurniture.name, x, y, scale, autoScale: true, facing: 'front-wall', rotation: 0, frozen: false, previewUrl: pendingFurniture.previewUrl, sidePreviewUrl: pendingFurniture.sidePreviewUrl, cutoutUrl: pendingFurniture.cutoutUrl, description: pendingFurniture.description };
     if (pendingFurniture.file) furnitureFilesRef.current.set(id, pendingFurniture.file);
     setPlacedFurniture((current) => [...current, placed]);
@@ -1576,7 +1627,7 @@ export function RoomStudio() {
     const requestedY = (event.clientY - rect.top) / rect.height - dragFurniture.offsetY;
     const floorContact = floorContactYAtX(surfaces.find((surface) => surface.kind === 'floor'), x);
     const y = Math.min(.96, Math.max(floorContact + .015, requestedY));
-    setPlacedFurniture((current) => current.map((item) => item.id === dragFurniture.id ? { ...item, x, y, scale: item.autoScale ? perspectiveFurnitureScale(item.name, item.description, y, floorContact) : item.scale } : item));
+    setPlacedFurniture((current) => current.map((item) => item.id === dragFurniture.id ? { ...item, x, y, scale: item.autoScale ? automaticFurnitureScale(item.name, item.description, x, y) : item.scale } : item));
   }
 
   function endFurnitureDrag(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -1608,14 +1659,11 @@ export function RoomStudio() {
       if (item.id !== selectedFurniture.id || item.frozen) return item;
       const x = Math.min(.96, Math.max(.04, item.x + deltaX));
       const y = Math.min(.96, Math.max(.08, item.y + deltaY));
-      const floorContact = floorContactYAtX(surfaces.find((surface) => surface.kind === 'floor'), x);
       return {
         ...item,
         x,
         y,
-        scale: item.autoScale
-          ? perspectiveFurnitureScale(item.name, item.description, y, floorContact)
-          : item.scale,
+        scale: item.autoScale ? automaticFurnitureScale(item.name, item.description, x, y) : item.scale,
       };
     }));
   }
@@ -1635,8 +1683,7 @@ export function RoomStudio() {
 
   function restoreAutomaticFurnitureScale() {
     if (!selectedFurniture) return;
-    const floorContact = floorContactYAtX(surfaces.find((surface) => surface.kind === 'floor'), selectedFurniture.x);
-    updateSelectedFurniture({ scale: perspectiveFurnitureScale(selectedFurniture.name, selectedFurniture.description, selectedFurniture.y, floorContact), autoScale: true });
+    updateSelectedFurniture({ scale: automaticFurnitureScale(selectedFurniture.name, selectedFurniture.description, selectedFurniture.x, selectedFurniture.y), autoScale: true });
     setNotice(`${selectedFurniture.name}: misura automatica adattata alla profondità della stanza.`);
   }
 
@@ -1986,6 +2033,7 @@ export function RoomStudio() {
       form.append('furniture', furnitureAssignments.join('\n'));
       form.append('requests', customRequests.join(', '));
       form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
+      form.append('roomMeasurements', `width ${roomMeasurement.widthMeters} m; depth ${roomMeasurement.depthMeters} m; height ${roomMeasurement.heightMeters} m; confidence ${Math.round(roomMeasurement.confidence * 100)}%; reference ${roomMeasurement.referenceLabel}`);
       const referenceUrl = material?.textureUrl;
       if (referenceUrl && materialAssignments.length) form.append('imageUrl', referenceUrl);
       if (materialAssignments.length) form.append('referenceType', material?.referenceKind ?? 'metadata-only');
@@ -2204,6 +2252,12 @@ export function RoomStudio() {
           {room && <div className="asset-card"><span>{room.sourceType === 'floorplan' ? 'PLAN' : 'IMG'}</span><div><strong>{room.file.name}</strong><small>{room.sourceType === 'floorplan' ? 'Planimetria originale' : importedCaption}</small></div><label htmlFor={room.sourceType === 'floorplan' ? 'floorplan-file' : 'room-file'}>Sostituisci</label></div>}
           {selected ? <><div className="property-section"><div className="property-title"><span>Nome superficie</span><span className="editable-badge">Personalizzabile</span></div><div className="rename-control"><input aria-label="Nome superficie" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} /><button type="button" onClick={renameSelected} disabled={!renameDraft.trim() || renameDraft.trim() === selected.name}>Salva</button></div></div><div className="property-section"><div className="property-title"><span>Protezione superficie</span><span className={`editable-badge ${selected.frozen ? 'frozen' : ''}`}>{selected.frozen ? 'Frozen' : 'Modificabile'}</span></div><button className={`freeze-button ${selected.frozen ? 'is-active' : ''}`} type="button" aria-label={selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'} onClick={toggleFreeze}><span>{selected.frozen ? '◆' : '◇'}</span>{selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'}<small>{selected.frozen ? 'Protetta' : 'Attivo subito'}</small></button><button className="freeze-others-button" type="button" onClick={freezeAllExceptSelected}>Blocca tutto tranne {selected.name}</button></div>
             <div className="property-section product-search-section">
+              {activeStep === 3 && <div className="room-measurement-card">
+                <div className="room-measurement-heading"><div><span>{manualRoomWidth ? 'Confermate' : 'Automatiche'}</span><strong>Misure della stanza</strong></div><b>{Math.round(roomMeasurement.confidence * 100)}% affidabile</b></div>
+                <div className="room-measurement-values"><div><span>Larghezza</span><strong>{roomMeasurement.widthMeters.toLocaleString('it-IT')} m</strong></div><div><span>Profondità</span><strong>{roomMeasurement.depthMeters.toLocaleString('it-IT')} m</strong></div><div><span>Altezza</span><strong>{roomMeasurement.heightMeters.toLocaleString('it-IT')} m</strong></div></div>
+                <p>Calcolate da {roomMeasurement.referenceLabel}. I mobili con dimensioni trovate nel prodotto cambiano scala automaticamente mentre li sposti.</p>
+                {isEditingRoomMeasure ? <div className="room-measurement-edit"><label htmlFor="room-width-reference">Quanto misura la parete principale?</label><div><input id="room-width-reference" aria-label="Larghezza reale parete principale" inputMode="decimal" value={roomWidthDraft} onChange={(event) => setRoomWidthDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') confirmRoomWidth(); }} placeholder={roomMeasurement.widthMeters.toLocaleString('it-IT')} /><span>metri</span><button type="button" onClick={confirmRoomWidth}>Conferma</button></div><button type="button" className="cancel-measure-edit" onClick={() => setIsEditingRoomMeasure(false)}>Annulla</button></div> : <div className="room-measurement-actions"><button type="button" onClick={() => { setRoomWidthDraft(String(roomMeasurement.widthMeters).replace('.', ',')); setIsEditingRoomMeasure(true); }}>✎ Correggi una misura</button>{manualRoomWidth && <button type="button" onClick={restoreAutomaticRoomMeasurement}>↻ Torna automatico</button>}</div>}
+              </div>}
               {activeStep === 3 && <div className="surface-target-card">
                 <div className="surface-target-heading"><span>1</span><div><strong>Dove vuoi applicarlo?</strong><small>Scegli pavimento o muro. La linea verde indica la zona attiva.</small></div></div>
                 <div className="surface-target-buttons" role="group" aria-label="Scegli superficie da modificare">

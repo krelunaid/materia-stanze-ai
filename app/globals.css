@@ -220,6 +220,26 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .auto-apply-product-button { width:100%; min-height:46px; margin-top:12px; padding:8px 12px; border:0; border-radius:11px; background:var(--accent); color:#fff; font-size:10px; font-weight:800; cursor:pointer; }
 .auto-apply-product-button:disabled { opacity:.45; cursor:not-allowed; }
 .secondary-apply { margin-top:7px; background:#edf4f1; color:var(--accent); }
+.room-measurement-card { display:grid; gap:10px; margin:-3px 0 12px; padding:13px; border:1px solid #c9d8d3; border-radius:15px; background:#fff; box-shadow:0 7px 18px rgba(26,54,47,.06); }
+.room-measurement-heading { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.room-measurement-heading span,.room-measurement-heading strong { display:block; }
+.room-measurement-heading span { margin-bottom:2px; color:var(--accent); font-size:7px; font-weight:900; letter-spacing:.09em; text-transform:uppercase; }
+.room-measurement-heading strong { font-size:11px; }
+.room-measurement-heading b { padding:5px 7px; border-radius:999px; background:#e7f3ed; color:#337159; font-size:8px; white-space:nowrap; }
+.room-measurement-values { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+.room-measurement-values div { padding:8px; border-radius:10px; background:#f2f6f4; }
+.room-measurement-values span,.room-measurement-values strong { display:block; }
+.room-measurement-values span { color:#70807a; font-size:7px; }
+.room-measurement-values strong { margin-top:3px; font-size:12px; }
+.room-measurement-card>p { margin:0; color:#697670; font-size:8px; line-height:1.45; }
+.room-measurement-actions { display:flex; gap:6px; }
+.room-measurement-actions button,.room-measurement-edit button { min-height:36px; padding:0 10px; border:1px solid #cbd8d4; border-radius:9px; background:#f4f8f6; color:var(--accent); font-size:8px; font-weight:850; cursor:pointer; }
+.room-measurement-edit { display:grid; gap:5px; }
+.room-measurement-edit label { color:#51615b; font-size:8px; font-weight:800; }
+.room-measurement-edit>div { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:6px; }
+.room-measurement-edit input { width:100%; min-width:0; height:40px; padding:0 10px; border:1px solid #acc9c1; border-radius:9px; outline:none; }
+.room-measurement-edit>div>span { color:#65736e; font-size:9px; }
+.room-measurement-edit .cancel-measure-edit { min-height:28px; justify-self:start; border:0; background:transparent; color:#75817d; text-decoration:underline; }
 .surface-target-card { display:grid; gap:10px; margin:-3px 0 18px; padding:13px; border:1px solid #acd0c7; border-radius:15px; background:linear-gradient(145deg,#f3faf7,#eaf5f1); box-shadow:0 8px 20px rgba(34,83,73,.07); }
 .surface-target-heading { display:flex; align-items:center; gap:9px; }
 .surface-target-heading>span { display:grid; place-items:center; width:28px; height:28px; flex:0 0 auto; border-radius:9px; background:var(--accent); color:#fff; font-size:11px; font-weight:900; }
@@ -490,7 +510,7 @@ html,body { height:100%; overflow:hidden; overscroll-behavior:none; }
   .simple-mode.step-3 .canvas { width:100%; max-width:none; }
   .simple-mode.step-3 .properties-panel { position:sticky; top:128px; width:100%; max-height:calc(100dvh - 128px); align-self:start; padding:14px 16px max(24px,env(safe-area-inset-bottom,0px)); overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; }
   .simple-mode.step-3 .property-section { padding-top:10px; }
-  .surface-target-card { position:sticky; z-index:4; top:-14px; margin-top:-3px; box-shadow:0 8px 22px rgba(34,83,73,.13); }
+  .room-measurement-card { margin-top:-3px; }
   .surface-target-buttons button,.surface-guide-actions button,.online-product>.online-product-try,.auto-apply-product-button { min-height:44px; }
   .online-product strong { font-size:10px; }
   .online-product small,.surface-target-heading small,.indicative-product-note span { font-size:9px; }

@@ -29,6 +29,7 @@ export async function POST(request: Request) {
     const furniture = String(incoming.get('furniture') ?? '').slice(0, 2000);
     const requests = String(incoming.get('requests') ?? '').slice(0, 2000);
     const protectedAreas = String(incoming.get('protectedAreas') ?? '').slice(0, 1000);
+    const roomMeasurements = String(incoming.get('roomMeasurements') ?? '').slice(0, 500);
     const imageUrl = String(incoming.get('imageUrl') ?? '').slice(0, 2000);
     const incomingReferenceType = String(incoming.get('referenceType') ?? 'metadata-only');
     const referenceType = ['verified-texture', 'uploaded-sample'].includes(incomingReferenceType)
@@ -50,6 +51,7 @@ export async function POST(request: Request) {
       imageUrl && referenceType === 'verified-texture' ? 'Use the supplied verified flat texture as the exact material reference.' : '',
       imageUrl && referenceType === 'uploaded-sample' ? 'Use the supplied user sample as the material reference.' : '',
       materials && referenceType === 'metadata-only' ? 'No verified texture is supplied. Keep any product visualization restrained and approximate; do not invent distinctive graphics or claim exact visual fidelity.' : '',
+      roomMeasurements ? `Use this room-scale calibration to size products, furniture, joints and repeating patterns: ${roomMeasurements}. It describes the existing room and must never cause its geometry, crop or perspective to change.` : '',
       furniture ? `Insert these furniture elements at the exact user-selected image anchors, approximate sizes and floor-plane orientations below. Treat x/y as percentages of the full source photograph; keep each item's floor contact point at its anchor and preserve the user's composition. Orientation is yaw on the floor plane: never roll or tilt the furniture image.\n${furniture}` : '',
       furniture ? 'MANDATORY: every listed furniture item must be clearly visible in the final photograph, entirely inside its transparent mask window. A clean room with the furniture omitted is an invalid result. Put the furniture floor-contact point exactly at the requested anchor and keep its real product proportions. Use the editable floor band beneath it to create a visible, soft contact shadow and ambient occlusion at every leg or base contact. Match the shadow direction, softness, intensity and color to the existing room light; never leave a bright gap or a uniformly sharp pasted lower edge.' : '',
       furnitureReference instanceof File ? `Use the supplied furniture reference image to preserve the exact appearance of “${furnitureReferenceName || 'the selected furniture'}”. It may already be a transparent cutout: never recreate its former catalog background. Integrate only the physical object with correct floor contact, perspective, scale, room lighting and a natural contact shadow.` : '',

@@ -448,6 +448,23 @@ describe('RoomStudio', () => {
     expect(document.querySelector('.surface-overlay')).not.toHaveClass('hide-product-guides');
   });
 
+  it('shows automatic room measurements and accepts one real reference', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+
+    expect(screen.getByText('Misure della stanza')).toBeInTheDocument();
+    expect(screen.getByText('Automatiche')).toBeInTheDocument();
+    expect(screen.getByText(/Calcolate da/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '✎ Correggi una misura' }));
+    fireEvent.change(screen.getByLabelText('Larghezza reale parete principale'), { target: { value: '5,5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Conferma' }));
+
+    expect(screen.getByText('Confermate')).toBeInTheDocument();
+    expect(screen.getByText('5,5 m')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '↻ Torna automatico' })).toBeInTheDocument();
+  });
+
   it('allows an indicative floor preview when a linked product has no clean texture', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);

@@ -25,6 +25,7 @@ export async function POST(request: Request) {
     const productName = String(incoming.get('productName') ?? '').slice(0, 300);
     const productDescription = String(incoming.get('productDescription') ?? '').slice(0, 1000);
     const targetName = String(incoming.get('targetName') ?? '').slice(0, 150);
+    const roomMeasurements = String(incoming.get('roomMeasurements') ?? '').slice(0, 500);
     const protectedAreas = String(incoming.get('protectedAreas') ?? '').slice(0, 1000);
     const imageUrl = String(incoming.get('imageUrl') ?? '').slice(0, 2000);
     const incomingReferenceType = String(incoming.get('referenceType') ?? 'metadata-only');
@@ -47,6 +48,7 @@ export async function POST(request: Request) {
         ? `Create an indicative visualization inspired by “${productName}”: ${productDescription}.`
         : `Apply the referenced product “${productName}”: ${productDescription}.`,
       referenceInstruction,
+      roomMeasurements ? `Use this room-scale calibration for physical pattern size and perspective: ${roomMeasurements}. Treat lower-confidence values as approximate, never as permission to alter the room geometry.` : '',
       'Respect surface perspective, scale, joints, laying direction, room lighting, shadows and occlusions so the result looks like a real photograph.',
       'Do not move, replace, redesign or regenerate any object or architectural element outside the target. Preserve camera, crop and resolution.',
       protectedAreas ? `These Freeze surfaces must remain unchanged: ${protectedAreas}.` : '',
