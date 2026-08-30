@@ -1007,6 +1007,9 @@ export async function detectRoomSurfaces(
     prompt,
     'This image is an empty room generated from an architectural floor plan. Treat every repeated framed rectangle as a separate physical opening, not as decoration.',
     'Opening-first verification pass: count every visible door and window before tracing the room planes. Inspect the left wall, frontal wall, right wall and both image edges independently.',
+    'Classify each opening from visual evidence before drawing its polygon. An opening showing glass, outdoor foliage, daylight or window panes is a window when any sill or wall remains below it, even on a strongly foreshortened side wall. It is not a door merely because the perspective makes it tall.',
+    'Never use the complete side-wall outline as a door or window. The four opening corners must follow its own frame; compare its lower edge with the local wall-floor junction. If the lower edge is visibly above that junction, return window. Only a real passable threshold touching the floor is a door.',
+    'After counting, verify that every distinct glazed rectangle still has one result. In a room with a large side window plus smaller frontal windows, preserve all of them separately even when their apparent sizes differ greatly.',
     'Return one separate four-corner polygon for every complete or partially cropped architectural frame. Keep several similar windows as several windows; never merge distant openings.',
     'After the opening count, return the complete floor and wall geometry as well so each opening can be attached to its real wall. Return the full surface list and no comments.',
   ].join('\n\n');
