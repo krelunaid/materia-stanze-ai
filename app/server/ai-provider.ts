@@ -833,6 +833,60 @@ function floorBoundaryAtX(floor: DetectedRoomSurface | undefined, x: number) {
   return intersections.length ? Math.min(...intersections) : null;
 }
 
+function wallBoundaryAtX(wall: DetectedRoomSurface, x: number) {
+  const intersections: number[] = [];
+  wall.points.forEach((point, index) => {
+    const next = wall.points[(index + 1) % wall.points.length];
+    const minimum = Math.min(point.x, next.x) - .0001;
+    const maximum = Math.max(point.x, next.x) + .0001;
+    if (x < minimum || x > maximum) return;
+    if (Math.abs(next.x - point.x) < .0001) {
+      intersections.push(Math.max(point.y, next.y));
+      return;
+    }
+    const ratio = (x - point.x) / (next.x - point.x);
+    if (ratio >= 0 && ratio <= 1) intersections.push(point.y + (next.y - point.y) * ratio);
+  });
+  return intersections.length ? Math.max(...intersections) : null;
+}
+
+function wallFloorJunctionQuality(floor: DetectedRoomSurface, walls: DetectedRoomSurface[]) {
+  let best = 0;
+  for (const wall of walls) {
+    const bounds = surfaceBounds(wall);
+    const width = bounds.right - bounds.left;
+    const height = bounds.bottom - bounds.top;
+    if (width < .06 || width * height < .025) continue;
+    const differences: number[] = [];
+    for (let index = 1; index <= 7; index += 1) {
+      const x = bounds.left + width * index / 8;
+      const floorY = floorBoundaryAtX(floor, x);
+      const wallY = wallBoundaryAtX(wall, x);
+      if (floorY !== null && wallY !== null) differences.push(Math.abs(floorY - wallY));
+    }
+    if (differences.length < 4) continue;
+    const average = differences.reduce((total, difference) => total + difference, 0) / differences.length;
+    const alignment = Math.max(0, 1 - average / .11);
+    const spansImageCentre = bounds.left < .48 && bounds.right > .52;
+    best = Math.max(best, alignment * (spansImageCentre ? 1 : .82));
+  }
+  return best;
+}
+
+function narrowEdgeWallPenalty(walls: DetectedRoomSurface[]) {
+  return walls.reduce((penalty, wall) => {
+    const bounds = surfaceBounds(wall);
+    const width = bounds.right - bounds.left;
+    const height = bounds.bottom - bounds.top;
+    const touchesOneSide = (bounds.left <= .015) !== (bounds.right >= .985);
+    const outsideCentre = bounds.right < .48 || bounds.left > .52;
+    if (!touchesOneSide || !outsideCentre || height < .22) return penalty;
+    if (width < .09) return penalty + 1.05;
+    if (width < .14) return penalty + .55;
+    return penalty;
+  }, 0);
+}
+
 function openingOverlap(left: DetectedRoomSurface, right: DetectedRoomSurface) {
   const a = surfaceBounds(left);
   const b = surfaceBounds(right);
@@ -866,6 +920,8 @@ function geometryScore(candidate: DetectedRoomSurface[]) {
     + (hasVisibleBackWall ? 1.1 : 0)
     - Math.max(0, walls.length - 3) * .65
     - tinyWallFragments * .8
+    - narrowEdgeWallPenalty(walls)
+    + (floor ? wallFloorJunctionQuality(floor, walls) * 1.15 : 0)
     + (floor ? 4 - Math.max(0, floor.points.length - 8) * .08 : 0);
 }
 
@@ -885,11 +941,12 @@ function floorAgreement(surface: DetectedRoomSurface, peers: DetectedRoomSurface
   return differences.reduce((total, difference) => total + Math.max(0, 1 - difference / .12), 0);
 }
 
-function floorQuality(surface: DetectedRoomSurface, peers: DetectedRoomSurface[]) {
+function floorQuality(surface: DetectedRoomSurface, peers: DetectedRoomSurface[], walls: DetectedRoomSurface[]) {
   const bounds = surfaceBounds(surface);
   const touchesBottom = bounds.bottom >= .985;
   const touchesSide = bounds.left <= .015 || bounds.right >= .985;
   return surface.confidence + floorAgreement(surface, peers) * 1.35
+    + wallFloorJunctionQuality(surface, walls) * 2.1
     + (touchesBottom ? 1 : 0) + (touchesSide ? .4 : 0)
     - Math.max(0, surface.points.length - 8) * .08;
 }
@@ -977,8 +1034,14 @@ export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[]
   const ranked = [...normalized].sort((left, right) => geometryScore(right) - geometryScore(left));
   const base = [...ranked[0]];
 
-  const floors = normalized.flatMap((candidate) => candidate.filter((surface) => surface.kind === 'floor'));
-  const floor = [...floors].sort((left, right) => floorQuality(right, floors) - floorQuality(left, floors))[0];
+  const floorCandidates = normalized.flatMap((candidate) => candidate
+    .filter((surface) => surface.kind === 'floor')
+    .map((surface) => ({ surface, walls: candidate.filter((item) => item.kind === 'wall') })));
+  const floors = floorCandidates.map((candidate) => candidate.surface);
+  const floor = [...floorCandidates]
+    .sort((left, right) => (
+      floorQuality(right.surface, floors, right.walls) - floorQuality(left.surface, floors, left.walls)
+    ))[0]?.surface;
   if (floor) {
     const index = base.findIndex((surface) => surface.kind === 'floor');
     if (index >= 0) base[index] = floor;
@@ -1049,6 +1112,7 @@ export async function detectRoomSurfaces(
     'For a mostly frontal wall with several doors, return one wall polygon spanning behind all those doors; never return narrow vertical wall strips aligned to door jambs or furniture.',
     'When the room has visible depth, the far/back wall is a mandatory separate wall plane. Trace the complete smaller plane bounded by the left and right receding walls and by its real ceiling and floor junctions, even when it has the same color or material as the side walls.',
     'Never omit the far wall because it is distant, partly covered, dark, low contrast, or contains windows. Infer it continuously behind openings and furniture; do not mistake the entire far wall for a window, doorway or decorative panel.',
+    'A visible side wall is the complete receding architectural plane from the near image edge to the real corner shared with the far wall, and from its true ceiling junction to its true floor junction. Never reduce a side wall to a narrow strip at the image edge, around a window, or beside the far wall.',
     'Do not label the upper part of a wall as ceiling. If the photograph begins on the wall and no ceiling plane is visible, omit the ceiling entirely.',
     'When no ceiling plane is visible, every full-width frontal wall that reaches the top crop must use y=0 for its upper boundary; do not leave an unexplained horizontal gap above it.',
     'Before answering, inspect the entire image explicitly for every architectural opening. Do not omit low-contrast, overexposed or partially cropped windows and doors, including white frames on white walls.',
@@ -1063,8 +1127,10 @@ export async function detectRoomSurfaces(
     'When the frame is white on a white wall, use the frame shadow and sill boundary; include a small amount of outer trim rather than cutting off part of the opening.',
     'If any floor area is visible, a complete floor polygon is mandatory even when the floor is white, glossy or low contrast.',
     'For the floor, trace the wall-floor junction, skirting-board lower edge and every door threshold point by point. Add a vertex at every change of direction instead of replacing the boundary with one approximate straight line. Use up to 24 vertices when needed.',
+    'The floor begins only at the true physical wall-floor or skirting-floor junction. Ignore sunlight patches, reflections, cast shadows, changes of material color, plank seams, tile grout, rugs and glossy highlights: none of these may become the upper floor boundary.',
     'Return polygon vertices as normalized image coordinates where x=0 is the left edge, x=1 the right edge, y=0 the top edge and y=1 the bottom edge.',
     'Follow the real wall-wall, wall-floor and wall-ceiling junctions. Do not use furniture edges, window frames, shadows, tile joints, rugs or decorations as room corners.',
+    'Enforce shared topology: adjacent structural planes must reuse exactly the same normalized coordinates along every shared junction. Every vertex on the floor upper boundary must coincide with the corresponding bottom-wall vertex, and the far-wall corners must exactly match the adjoining side-wall corners; leave no gap and create no overlap.',
     'Infer each architectural plane continuously behind furniture and other movable objects. A floor polygon must cover the entire floor plane all the way to the bottom and lateral image edges wherever the floor leaves the frame, not only a central trapezoid.',
     'Use the image-edge coordinate 0 or 1 when a surface continues outside the crop. Keep points in clockwise boundary order, with no self-intersections. Architectural accuracy is more important than minimizing the number of vertices.',
     'Do not invent a plane that is not visible. Confidence measures the geometric accuracy of each polygon, not object-recognition confidence.',
@@ -1112,6 +1178,9 @@ export async function detectRoomSurfaces(
     'Perform an independent second architectural segmentation of the complete image. Work at pixel accuracy and return the full geometry.',
     'Reject false walls, doors and windows caused by furniture, wall pictures, cabinets, reflections or shadows. Include every real architectural opening.',
     'Check every floor-boundary vertex against the visible skirting-board lower edge, wall-floor junction and door thresholds. Add vertices wherever that boundary changes direction; do not simplify several planes into one diagonal line.',
+    'Reject any proposed floor boundary that follows a sunlit patch, reflection, shadow, timber-board seam, tile-grout line, rug or color transition. Compare it against the bottom boundary of every visible wall and keep only the physical shared junction.',
+    'Verify that each side wall covers its full receding plane between the image edge and the far-wall corner. A thin edge band or a polygon that merely surrounds windows is not a wall.',
+    'Audit topology numerically before returning: adjoining floor and wall polygons must repeat identical coordinates for their shared junction vertices, as must adjoining side and far walls.',
     'For each door or window return exactly four tight outer-frame corners in clockwise order. A door must terminate at its real threshold and must not include adjacent wall, corridor or furniture. A window must terminate at its sill.',
     'Check the left and right image edges and every visible room corner at high zoom. Coordinates must be normalized to the complete source image, not a crop.',
     'Return the entire surface list and no comments.',

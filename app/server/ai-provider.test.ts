@@ -308,6 +308,9 @@ describe('getAiProvider', () => {
     const auditPayload = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
     expect(auditPayload).toMatchObject({ max_output_tokens: 3000, reasoning: { effort: 'low' } });
     expect(auditPayload.input[0].content[1].text).toContain('independent second architectural segmentation');
+    expect(auditPayload.input[0].content[1].text).toContain('sunlit patch, reflection, shadow');
+    expect(auditPayload.input[0].content[1].text).toContain('shared junction vertices');
+    expect(auditPayload.input[0].content[1].text).toContain('full receding plane');
   });
 
   it('merges false wall strips and drops a ceiling sliver from a furnished frontal room', () => {
@@ -368,6 +371,42 @@ describe('getAiProvider', () => {
     expect(result.some((surface) => surface.kind === 'wall'
       && Math.min(...surface.points.map((point) => point.x)) > .15
       && Math.max(...surface.points.map((point) => point.x)) < .85)).toBe(true);
+  });
+
+  it('prefers the floor that shares the real wall junction over mutually agreeing reflection lines', () => {
+    const wall = { name: 'back wall', kind: 'wall' as const, confidence: .94, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .62 }, { x: 0, y: .62 }] };
+    const physicalFloor = { name: 'physical floor', kind: 'floor' as const, confidence: .86, points: [{ x: 0, y: .62 }, { x: 1, y: .62 }, { x: 1, y: 1 }, { x: 0, y: 1 }] };
+    const reflectedFloorA = { name: 'sun patch a', kind: 'floor' as const, confidence: .97, points: [{ x: 0, y: .82 }, { x: 1, y: .82 }, { x: 1, y: 1 }, { x: 0, y: 1 }] };
+    const reflectedFloorB = { ...reflectedFloorA, name: 'sun patch b', confidence: .96 };
+
+    const result = reconcileRoomSurfaceCandidates([
+      [wall, physicalFloor],
+      [wall, reflectedFloorA],
+      [wall, reflectedFloorB],
+    ]);
+
+    expect(result.find((surface) => surface.kind === 'floor')?.points).toEqual(physicalFloor.points);
+  });
+
+  it('prefers complete side-wall planes over narrow image-edge bands', () => {
+    const floor = { name: 'floor', kind: 'floor' as const, confidence: .94, points: [{ x: 0, y: .72 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] };
+    const back = { name: 'back', kind: 'wall' as const, confidence: .9, points: [{ x: .2, y: .2 }, { x: .8, y: .2 }, { x: .8, y: .72 }, { x: .2, y: .72 }] };
+    const fullLeft = { name: 'left', kind: 'wall' as const, confidence: .84, points: [{ x: 0, y: 0 }, { x: .2, y: .2 }, { x: .2, y: .72 }, { x: 0, y: .82 }] };
+    const fullRight = { name: 'right', kind: 'wall' as const, confidence: .84, points: [{ x: .8, y: .2 }, { x: 1, y: 0 }, { x: 1, y: .82 }, { x: .8, y: .72 }] };
+    const narrowLeft = { name: 'left strip', kind: 'wall' as const, confidence: .98, points: [{ x: 0, y: 0 }, { x: .06, y: .08 }, { x: .06, y: .76 }, { x: 0, y: .82 }] };
+    const narrowRight = { name: 'right strip', kind: 'wall' as const, confidence: .98, points: [{ x: .94, y: .08 }, { x: 1, y: 0 }, { x: 1, y: .82 }, { x: .94, y: .76 }] };
+
+    const result = reconcileRoomSurfaceCandidates([
+      [back, fullLeft, fullRight, floor],
+      [{ ...back, confidence: .98 }, narrowLeft, narrowRight, floor],
+    ]);
+
+    expect(result.some((surface) => surface.kind === 'wall'
+      && Math.min(...surface.points.map((point) => point.x)) === 0
+      && Math.max(...surface.points.map((point) => point.x)) >= .2)).toBe(true);
+    expect(result.some((surface) => surface.kind === 'wall'
+      && Math.min(...surface.points.map((point) => point.x)) <= .8
+      && Math.max(...surface.points.map((point) => point.x)) === 1)).toBe(true);
   });
 
   it('extends a single full-width frontal wall to the top when no ceiling is visible', () => {

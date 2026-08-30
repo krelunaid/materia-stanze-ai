@@ -53,6 +53,8 @@ type StudioMaterial = {
 };
 type LinkedVertex = { surfaceId: string; vertexIndex: number };
 type DragVertex = { surfaceId: string; vertexIndex: number; pointerId: number; origin: Point; linked: LinkedVertex[] };
+type DragEdgeEndpoint = { origin: Point; linked: LinkedVertex[] };
+type DragEdge = { surfaceId: string; edgeIndex: number; pointerId: number; start: Point; endpoints: [DragEdgeEndpoint, DragEdgeEndpoint] };
 type FurnitureFacing = 'front-wall' | 'left-wall' | 'right-wall';
 type PlacedFurniture = {
   id: string;
@@ -73,6 +75,7 @@ type PendingFurniture = { name: string; previewUrl?: string; sidePreviewUrl?: st
 type DragFurniture = { id: string; pointerId: number; offsetX: number; offsetY: number };
 type CleanupRegion = { label: string; points: Point[]; confidence: number };
 type AiStatus = 'checking' | 'ready' | 'missing' | 'unreachable';
+type GeometryDetectionStatus = 'ai' | 'fallback' | null;
 type DetectedSurface = {
   id?: string;
   name: string;
@@ -332,13 +335,24 @@ function createDemoSurfaces() {
 
 function strongestEdge(scores: number[], start: number, end: number, fallback: number) {
   let bestIndex = Math.round(scores.length * fallback);
-  let bestScore = -1;
+  let bestScore = 0;
   const from = Math.max(1, Math.round(scores.length * start));
   const to = Math.min(scores.length - 2, Math.round(scores.length * end));
+  const smoothed: Array<{ index: number; raw: number; weighted: number }> = [];
   for (let index = from; index <= to; index += 1) {
-    const score = (scores[index - 1] + scores[index] * 2 + scores[index + 1]) / 4;
-    if (score > bestScore) { bestScore = score; bestIndex = index; }
+    const raw = (scores[index - 1] + scores[index] * 2 + scores[index + 1]) / 4;
+    const distance = Math.abs(index / scores.length - fallback);
+    const perspectivePrior = .72 + .28 * Math.exp(-Math.pow(distance / .18, 2));
+    const weighted = raw * perspectivePrior;
+    smoothed.push({ index, raw, weighted });
+    if (weighted > bestScore) { bestScore = weighted; bestIndex = index; }
   }
+  const rawScores = smoothed.map((candidate) => candidate.raw).sort((a, b) => a - b);
+  const median = rawScores[Math.floor(rawScores.length / 2)] ?? 0;
+  const average = rawScores.reduce((sum, score) => sum + score, 0) / Math.max(1, rawScores.length);
+  const selected = smoothed.find((candidate) => candidate.index === bestIndex);
+  const prominenceBase = Math.max(1, median * 1.3, average * 1.12);
+  if (!selected || selected.raw < prominenceBase) return fallback;
   return bestIndex / scores.length;
 }
 
@@ -627,7 +641,9 @@ export function RoomStudio() {
   const [showProcessedPreview, setShowProcessedPreview] = useState(false);
   const [localCleaningTestAvailable, setLocalCleaningTestAvailable] = useState(false);
   const [dragVertex, setDragVertex] = useState<DragVertex | null>(null);
+  const [dragEdge, setDragEdge] = useState<DragEdge | null>(null);
   const [isCorrectingEdges, setIsCorrectingEdges] = useState(false);
+  const [geometryDetectionStatus, setGeometryDetectionStatus] = useState<GeometryDetectionStatus>(null);
   const [showSurfaceGuides, setShowSurfaceGuides] = useState(true);
   const [manualRoomWidth, setManualRoomWidth] = useState<number | null>(null);
   const [roomWidthDraft, setRoomWidthDraft] = useState('');
@@ -784,9 +800,10 @@ export function RoomStudio() {
   }, [processedPreview, room, showProcessedPreview, surfaces]);
 
   useEffect(() => {
-    if (!dragVertex) return;
+    const activeDrag = dragVertex ?? dragEdge;
+    if (!activeDrag) return;
     const preventTouchScroll = (event: TouchEvent) => event.preventDefault();
-    const moveDraggedVertexAt = (clientX: number, clientY: number) => {
+    const moveGeometryAt = (clientX: number, clientY: number) => {
       if (!surfaceOverlayRef.current) return;
       const rect = surfaceOverlayRef.current.getBoundingClientRect();
       if (!rect.width || !rect.height) return;
@@ -795,36 +812,59 @@ export function RoomStudio() {
         y: Math.min(1, Math.max(0, (clientY - rect.top) / rect.height)),
       };
       setSurfaces((current) => {
+        let edgeDelta: Point | null = null;
+        if (dragEdge) {
+          const allOrigins = dragEdge.endpoints.flatMap((endpoint) => endpoint.linked.map(() => endpoint.origin));
+          const wantedX = point.x - dragEdge.start.x;
+          const wantedY = point.y - dragEdge.start.y;
+          const minX = Math.max(...allOrigins.map((origin) => -origin.x));
+          const maxX = Math.min(...allOrigins.map((origin) => 1 - origin.x));
+          const minY = Math.max(...allOrigins.map((origin) => -origin.y));
+          const maxY = Math.min(...allOrigins.map((origin) => 1 - origin.y));
+          edgeDelta = {
+            x: Math.min(maxX, Math.max(minX, wantedX)),
+            y: Math.min(maxY, Math.max(minY, wantedY)),
+          };
+        }
         const next = current.map((surface) => {
-        if (surface.frozen) return surface;
-        const linkedPoints = surface.points.map((candidate, index) => {
-          const isLinked = dragVertex.linked.some((linked) => linked.surfaceId === surface.id && linked.vertexIndex === index);
-          return isLinked ? point : candidate;
-        });
-        return { ...surface, points: linkedPoints };
+          if (surface.frozen) return surface;
+          const linkedPoints = surface.points.map((candidate, index) => {
+            if (dragVertex) {
+              const isLinked = dragVertex.linked.some((linked) => linked.surfaceId === surface.id && linked.vertexIndex === index);
+              return isLinked ? point : candidate;
+            }
+            if (dragEdge && edgeDelta) {
+              const endpoint = dragEdge.endpoints.find((item) => item.linked.some((linked) => linked.surfaceId === surface.id && linked.vertexIndex === index));
+              return endpoint ? { x: endpoint.origin.x + edgeDelta.x, y: endpoint.origin.y + edgeDelta.y } : candidate;
+            }
+            return candidate;
+          });
+          return { ...surface, points: linkedPoints };
         });
         if (!next.every((surface) => isValidPolygon(surface.points))) return current;
         syncGeometrySnapshots(next);
         return next;
       });
     };
-    const finishVertexDrag = (pointerId: number) => {
-      if (pointerId !== dragVertex.pointerId) return;
-      if (dragStartRef.current) {
-        setPastSurfaces((history) => [...history, dragStartRef.current as Surface[]].slice(-40));
+    const finishGeometryDrag = (pointerId: number) => {
+      if (pointerId !== activeDrag.pointerId) return;
+      const dragStart = dragStartRef.current;
+      if (dragStart) {
+        setPastSurfaces((history) => [...history, dragStart].slice(-40));
         setFutureSurfaces([]);
       }
       dragStartRef.current = null;
       setDragVertex(null);
+      setDragEdge(null);
       shellRef.current?.classList.remove('is-moving-vertex');
     };
     const move = (event: PointerEvent) => {
-      if (event.pointerId !== dragVertex.pointerId) return;
+      if (event.pointerId !== activeDrag.pointerId) return;
       event.preventDefault();
-      moveDraggedVertexAt(event.clientX, event.clientY);
+      moveGeometryAt(event.clientX, event.clientY);
     };
     const finish = (event: PointerEvent) => {
-      if (event.pointerId === dragVertex.pointerId) finishVertexDrag(event.pointerId);
+      if (event.pointerId === activeDrag.pointerId) finishGeometryDrag(event.pointerId);
     };
     document.addEventListener('touchmove', preventTouchScroll, { passive: false });
     window.addEventListener('pointermove', move, { passive: false });
@@ -836,7 +876,7 @@ export function RoomStudio() {
       window.removeEventListener('pointerup', finish);
       window.removeEventListener('pointercancel', finish);
     };
-  }, [dragVertex]);
+  }, [dragEdge, dragVertex]);
 
   const selected = surfaces.find((surface) => surface.id === selectedId) ?? null;
   const roomMeasurement = useMemo(() => inferRoomMeasurement(surfaces, roomRatio, manualRoomWidth), [surfaces, roomRatio, manualRoomWidth]);
@@ -938,6 +978,7 @@ export function RoomStudio() {
       setPlacedFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); furnitureFilesRef.current.clear();
       setCleanupRegion(null); setIsPickingCleanup(false);
       setShowSurfaceGuides(true);
+      setGeometryDetectionStatus(null);
       setManualRoomWidth(null); setRoomWidthDraft(''); setIsEditingRoomMeasure(false);
       autoFitPreviewRef.current = null;
       originalSurfacesRef.current = initialSurfaces;
@@ -988,7 +1029,7 @@ export function RoomStudio() {
     furnitureBlobUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     furnitureBlobUrlsRef.current = [];
     furnitureFilesRef.current.clear();
-    setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]); setPlacedFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); setCleanupRegion(null); setIsPickingCleanup(false); setNotice(null); setIsCorrectingEdges(false); setShowSurfaceGuides(true); setManualRoomWidth(null); setRoomWidthDraft(''); setIsEditingRoomMeasure(false);
+    setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]); setPlacedFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); setCleanupRegion(null); setIsPickingCleanup(false); setNotice(null); setIsCorrectingEdges(false); setGeometryDetectionStatus(null); setShowSurfaceGuides(true); setManualRoomWidth(null); setRoomWidthDraft(''); setIsEditingRoomMeasure(false);
   }
 
   function startDrawing(kind: SurfaceKind = 'wall', quick = false) {
@@ -1011,7 +1052,7 @@ export function RoomStudio() {
   }
 
   function addDraftPoint(event: ReactPointerEvent<SVGSVGElement>) {
-    if (!drawKind || dragVertex) return;
+    if (!drawKind || dragVertex || dragEdge) return;
     const point = eventPoint(event);
     const next = [...draft, point];
     if (lineWallDraw && next.length === 2) completeSurface(wallFromLine(next[0], next[1]), 'wall');
@@ -1072,18 +1113,27 @@ export function RoomStudio() {
 
   function cancelDrawing() { manualOpeningParentRef.current = null; setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setNotice(null); }
 
-  function beginVertexDrag(event: ReactPointerEvent<SVGCircleElement>, surfaceId: string, vertexIndex: number) {
-    const surface = surfaces.find((item) => item.id === surfaceId);
-    if (!surface || surface.frozen || !isCorrectingEdges) return;
-    const origin = surface.points[vertexIndex];
+  function linkedVerticesAt(origin: Point) {
     const overlay = surfaceOverlayRef.current?.getBoundingClientRect();
-    const width = overlay?.width || 1000; const height = overlay?.height || 625;
-    const linked = surfaces.flatMap((candidate) => candidate.points.flatMap((point, index) => (
+    const width = overlay?.width || 1000;
+    const height = overlay?.height || 625;
+    return surfaces.flatMap((candidate) => candidate.points.flatMap((point, index) => (
       Math.hypot((point.x - origin.x) * width, (point.y - origin.y) * height) <= 8
         ? [{ surfaceId: candidate.id, vertexIndex: index }]
         : []
     )));
-    if (linked.some((item) => surfaces.find((candidate) => candidate.id === item.surfaceId)?.frozen)) {
+  }
+
+  function linkedGroupTouchesFrozen(linked: LinkedVertex[]) {
+    return linked.some((item) => surfaces.find((candidate) => candidate.id === item.surfaceId)?.frozen);
+  }
+
+  function beginVertexDrag(event: ReactPointerEvent<SVGCircleElement>, surfaceId: string, vertexIndex: number) {
+    const surface = surfaces.find((item) => item.id === surfaceId);
+    if (!surface || surface.frozen || !isCorrectingEdges) return;
+    const origin = surface.points[vertexIndex];
+    const linked = linkedVerticesAt(origin);
+    if (linkedGroupTouchesFrozen(linked)) {
       setNotice('Questo nodo tocca una superficie Freeze. Sbloccala prima di spostare il bordo condiviso.');
       return;
     }
@@ -1091,18 +1141,58 @@ export function RoomStudio() {
     event.currentTarget.setPointerCapture?.(event.pointerId);
     shellRef.current?.classList.add('is-moving-vertex');
     dragStartRef.current = surfaces;
+    setDragEdge(null);
     setDragVertex({ surfaceId, vertexIndex, pointerId: event.pointerId, origin, linked });
+  }
+
+  function beginEdgeDrag(event: ReactPointerEvent<SVGLineElement>, surfaceId: string, edgeIndex: number) {
+    const surface = surfaces.find((item) => item.id === surfaceId);
+    if (!surface || surface.frozen || !isCorrectingEdges || !surfaceOverlayRef.current) return;
+    const first = surface.points[edgeIndex];
+    const second = surface.points[(edgeIndex + 1) % surface.points.length];
+    const firstLinked = linkedVerticesAt(first);
+    const secondLinked = linkedVerticesAt(second);
+    if (linkedGroupTouchesFrozen([...firstLinked, ...secondLinked])) {
+      setNotice('Questa linea tocca una superficie Freeze. Sbloccala prima di spostare il bordo condiviso.');
+      return;
+    }
+    const rect = surfaceOverlayRef.current.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    event.preventDefault(); event.stopPropagation();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    shellRef.current?.classList.add('is-moving-vertex');
+    dragStartRef.current = surfaces;
+    setDragVertex(null);
+    setDragEdge({
+      surfaceId,
+      edgeIndex,
+      pointerId: event.pointerId,
+      start: { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height },
+      endpoints: [
+        { origin: first, linked: firstLinked },
+        { origin: second, linked: secondLinked },
+      ],
+    });
   }
 
   function toggleEdgeCorrection() {
     if (isCorrectingEdges) {
       setIsCorrectingEdges(false);
+      setDragVertex(null);
+      setDragEdge(null);
       shellRef.current?.classList.remove('is-moving-vertex');
-      setNotice('Bordi salvati. Ora puoi continuare ai prodotti.');
+      setNotice('Contorno salvato. Puoi scegliere il prodotto o un’altra superficie.');
       return;
     }
+    if (!selected || selected.frozen) {
+      setNotice(selected?.frozen ? 'Questa superficie è bloccata. Sbloccala prima di correggere il contorno.' : 'Scegli prima una superficie da correggere.');
+      return;
+    }
+    setPendingFurniture(null);
+    setShowSurfaceGuides(true);
     setIsCorrectingEdges(true);
-    setNotice('Correzione attiva: trascina solo i pallini. La pagina resterà ferma finché tieni premuto.');
+    setNotice('Correzione attiva: trascina una linea per spostarla intera, oppure un pallino per correggere un angolo. Funziona con dito e Apple Pencil.');
+    window.requestAnimationFrame(() => canvasRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }));
   }
 
   function toggleFreeze() {
@@ -1759,6 +1849,12 @@ export function RoomStudio() {
         }
       }
 
+      if (!detected?.length && surfaces.length > 0) {
+        setIsCorrectingEdges(true);
+        setShowSurfaceGuides(true);
+        setNotice(`${grokError ? 'Grok non ha completato il riconoscimento. ' : ''}Ho mantenuto i contorni esistenti: puoi riprovare oppure spostare linee e pallini senza perdere il lavoro.`);
+        return;
+      }
       if (!detected?.length) detected = createGuidedSurfaces(detectRoomBounds(roomImageRef.current));
 
       const frozenSurfaces = surfaces.filter((surface) => surface.frozen);
@@ -1767,14 +1863,18 @@ export function RoomStudio() {
       commitSurfaces(nextSurfaces);
       const first = adjusted[0] ?? frozenSurfaces[0] ?? null;
       setSelectedId(first?.id ?? null); setRenameDraft(first?.name ?? '');
-      setIsCorrectingEdges(false);
+      setGeometryDetectionStatus(usedGrok ? 'ai' : 'fallback');
+      setIsCorrectingEdges(!usedGrok);
+      setShowSurfaceGuides(true);
       setNotice(usedGrok
         ? `${nextSurfaces.length} superfici proposte da controllare sulla foto originale.${nextSurfaces.some((surface) => surface.kind === 'door') ? '' : ' La porta non è sicura: aggiungila con “＋ Porta” e quattro tocchi.'}`
-        : `${grokError ? 'Grok non ha risposto: ' : ''}ho inserito soltanto una base del pavimento e delle pareti, senza inventare porte o finestre.`);
+        : `${grokError ? 'Grok non ha completato il riconoscimento. ' : ''}Questi sono contorni provvisori: trascina direttamente una linea intera o i pallini prima di applicare un prodotto.`);
     } catch {
       if (surfaces.length === 0) seedGuidedSurfaces();
-      setIsCorrectingEdges(false);
-      setNotice('Ho inserito una proposta di base. Controllala; se manca una porta usa “＋ Porta” e quattro tocchi.');
+      setGeometryDetectionStatus('fallback');
+      setIsCorrectingEdges(true);
+      setShowSurfaceGuides(true);
+      setNotice('Riconoscimento automatico non completato: ho inserito una base provvisoria. Sposta linee e pallini oppure premi “Rifai contorni”.');
     } finally {
       setIsAutoFitting(false);
     }
@@ -1991,9 +2091,11 @@ export function RoomStudio() {
       originalSurfacesRef.current = guided;
       setSurfaces(guided); setPastSurfaces([]); setFutureSurfaces([]);
       setSelectedId(guided[0]?.id ?? null); setRenameDraft(guided[0]?.name ?? '');
+      setGeometryDetectionStatus('fallback');
+      setIsCorrectingEdges(true);
     }
     if (showProcessedPreview) showOriginalRoom();
-    setCleanupRegion(null); setIsPickingCleanup(false); setIsCorrectingEdges(false); setDrawKind(null); setDraft([]); setShowSurfaceGuides(true); setError(null);
+    setCleanupRegion(null); setIsPickingCleanup(false); setDrawKind(null); setDraft([]); setShowSurfaceGuides(true); setError(null);
     shellRef.current?.classList.remove('is-moving-vertex');
     setNotice('Foto originale mantenuta. Ora puoi scegliere materiali e mobili senza svuotare la stanza.');
     setActiveStep(3);
@@ -2099,6 +2201,7 @@ export function RoomStudio() {
     setPlacedFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); furnitureFilesRef.current.clear();
     setRoomRatio(16 / 10); setSurfaces(created); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(created[0].id); setRenameDraft(created[0].name); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setError(null);
     setIsCorrectingEdges(false);
+    setGeometryDetectionStatus('ai');
     setNotice('Esempio pronto: finestra, soffitto, pavimento e tre muri sono proposti e modificabili.');
     setActiveStep(2);
   }
@@ -2161,8 +2264,10 @@ export function RoomStudio() {
       setNotice('Prima crea o disegna almeno una superficie.');
       return;
     }
-    if (step !== 2) {
+    if (step !== 2 && step !== 3) {
       setIsCorrectingEdges(false);
+      setDragVertex(null);
+      setDragEdge(null);
       shellRef.current?.classList.remove('is-moving-vertex');
     }
     if (step === 2 || step === 3) setShowSurfaceGuides(true);
@@ -2171,7 +2276,7 @@ export function RoomStudio() {
   }
 
   return (
-    <main ref={shellRef} className={`app-shell simple-mode step-${activeStep} ${activeStep === 2 && (drawKind || selected) ? 'has-mobile-surface-actions' : ''}`}>
+    <main ref={shellRef} className={`app-shell simple-mode step-${activeStep} ${(activeStep === 2 && (drawKind || selected)) || (activeStep === 3 && isCorrectingEdges && selected) ? 'has-mobile-surface-actions' : ''}`}>
       <header className="topbar">
         <a href="/projects" className="brand-lockup" aria-label="Vai ai progetti"><div className="brand-mark" aria-hidden="true"><span /><span /></div><div><p className="eyebrow">Studio materiali</p><p className="brand-name">Materia</p></div></a>
         <div className="project-heading"><span className="status-dot" /><div><p>{projectName}</p><span>{room ? `${room.sourceType === 'floorplan' ? 'Planimetria' : 'Foto'} · originale protetto` : 'Nuovo progetto locale'}</span></div></div>
@@ -2233,8 +2338,9 @@ export function RoomStudio() {
                 {surfaces.map((surface) => {
                   const labelPoint = surfaceLabelPoint(surface);
                   const showLabel = surface.kind === 'window' || surface.kind === 'door';
-                  return <g key={surface.id} data-parent-id={surface.parentId} data-source={surface.source} className={`surface-kind-${surface.kind} ${surface.frozen ? 'is-frozen ' : ''}${surface.id === selectedId ? 'is-selected-surface' : ''}`}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{showLabel && <text className="surface-name" x={labelPoint.x * 1000} y={labelPoint.y * 625}>{surface.name}</text>}{isCorrectingEdges && !surface.frozen && surface.id === selectedId && surface.points.map((point, index) => <g key={`${surface.id}-${index}`}><circle cx={point.x * 1000} cy={point.y * 625} r="34" className="surface-vertex-hit" aria-label={`Sposta punto ${index + 1} di ${surface.name}`} onPointerDown={(event) => beginVertexDrag(event, surface.id, index)} /><circle cx={point.x * 1000} cy={point.y * 625} r="16" className="surface-vertex" aria-hidden="true" /></g>)}</g>;
+                  return <g key={surface.id} data-parent-id={surface.parentId} data-source={surface.source} className={`surface-kind-${surface.kind} ${surface.frozen ? 'is-frozen ' : ''}${surface.id === selectedId ? 'is-selected-surface' : ''}`}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{showLabel && <text className="surface-name" x={labelPoint.x * 1000} y={labelPoint.y * 625}>{surface.name}</text>}</g>;
                 })}
+                {isCorrectingEdges && selected && !selected.frozen && <g className="surface-correction-controls" data-surface-id={selected.id}>{selected.points.map((point, index) => { const next = selected.points[(index + 1) % selected.points.length]; return <g className="surface-edge-control" key={`${selected.id}-edge-${index}`}><line x1={point.x * 1000} y1={point.y * 625} x2={next.x * 1000} y2={next.y * 625} className="surface-edge-hit" vectorEffect="non-scaling-stroke" aria-label={`Sposta linea ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginEdgeDrag(event, selected.id, index)} /><line x1={point.x * 1000} y1={point.y * 625} x2={next.x * 1000} y2={next.y * 625} className="surface-edge" vectorEffect="non-scaling-stroke" aria-hidden="true" /><circle cx={(point.x + next.x) * 500} cy={(point.y + next.y) * 312.5} r="10" className="surface-edge-grip" aria-hidden="true" /></g>; })}{selected.points.map((point, index) => <g key={`${selected.id}-vertex-${index}`}><circle cx={point.x * 1000} cy={point.y * 625} r="34" className="surface-vertex-hit" aria-label={`Sposta punto ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginVertexDrag(event, selected.id, index)} /><circle cx={point.x * 1000} cy={point.y * 625} r="16" className="surface-vertex" aria-hidden="true" /></g>)}</g>}
                 {draft.length > 0 && <><polyline points={pointsToSvg(draft)} fill="none" stroke="#d7f05c" strokeWidth="5" vectorEffect="non-scaling-stroke" />{draft.map((point, index) => <circle key={index} cx={point.x * 1000} cy={point.y * 625} r="9" className="draft-vertex" />)}</>}
                 {cleanupRegion && <polygon className="cleanup-region" points={pointsToSvg(cleanupRegion.points)} aria-label={`Zona da pulire: ${cleanupRegion.label}`} />}
               </svg>
@@ -2253,7 +2359,8 @@ export function RoomStudio() {
           </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
           <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onRoomInput} /><input ref={cameraInputRef} id="camera-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" capture="environment" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onMaterialInput} /><input ref={furnitureInputRef} id="furniture-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onFurnitureInput} />
           {room?.sourceType === 'photo' && activeStep === 2 && <section className="empty-room-choice" aria-label="Svuota la stanza oppure continua"><div><strong>Vuoi svuotare la stanza?</strong><span>È facoltativo: puoi mantenere la foto originale e andare subito ai prodotti.</span></div><div className="empty-room-actions"><button className="skip-empty-room" type="button" onClick={skipEmptyRoom} disabled={isEmptyingRoom || isCleaningRegion}>Salta · usa foto originale →</button><button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom || isCleaningRegion}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button>{!cleanupRegion && <button type="button" className={isPickingCleanup ? 'is-active' : ''} onClick={() => { setIsPickingCleanup((current) => !current); setError(null); setNotice(isPickingCleanup ? 'Selezione annullata.' : processedPreview ? 'Tocca il centro dell’oggetto rimasto nella foto.' : 'Tocca il centro di un mobile nella foto: lo delimito e lo rimuovo.'); }} disabled={isDetectingCleanup || isCleaningRegion}>{isDetectingCleanup ? 'Riconosco…' : isPickingCleanup ? 'Annulla selezione' : processedPreview ? '◎ Pulisci un residuo' : '◎ Indica un mobile'}</button>}{cleanupRegion && <><button type="button" className="cleanup-confirm" onClick={() => void cleanResidualRegion()} disabled={isCleaningRegion}>{isCleaningRegion ? 'Pulisco…' : 'Pulisci selezione'}</button><button type="button" onClick={() => setCleanupRegion(null)} disabled={isCleaningRegion}>Annulla</button></>}</div></section>}
-          <div className={`status-bar ${activeStep === 2 ? 'prepare-status' : ''}`}><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.'}</p>{room && activeStep === 2 && <button className={`edge-edit-button ${isCorrectingEdges ? 'is-active' : ''}`} type="button" onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine correzione' : room.sourceType === 'floorplan' ? 'Correggi il perimetro' : 'Correggi i bordi'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && <><button className={`opening-draw-button ${drawKind === 'door' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'door' ? cancelDrawing() : startDrawing('door', true)}>＋ Porta</button><button className={`opening-draw-button ${drawKind === 'window' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'window' ? cancelDrawing() : startDrawing('window', true)}>＋ Finestra</button></>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && <button className="continue-products-button" type="button" onClick={() => goToStep(3)}>Continua ai prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
+          {geometryDetectionStatus === 'fallback' && room?.sourceType === 'photo' && (activeStep === 2 || activeStep === 3) && <div className="geometry-fallback-warning" role="status"><div><strong>Contorni provvisori</strong><span>Il riconoscimento IA di questa foto non è riuscito. Non li presento come misure automatiche: correggili trascinando linee o pallini, oppure riprova.</span></div><button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview}>{isAutoFitting ? 'Riconosco…' : '✦ Riprova IA'}</button></div>}
+          <div className={`status-bar ${activeStep === 2 ? 'prepare-status' : ''}`}><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.'}</p>{room && (activeStep === 2 || activeStep === 3) && <button className={`edge-edit-button ${isCorrectingEdges ? 'is-active' : ''}`} type="button" onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine correzione' : activeStep === 3 ? '↔ Sposta linee' : room.sourceType === 'floorplan' ? 'Correggi il perimetro' : 'Correggi i bordi'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && <><button className={`opening-draw-button ${drawKind === 'door' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'door' ? cancelDrawing() : startDrawing('door', true)}>＋ Porta</button><button className={`opening-draw-button ${drawKind === 'window' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'window' ? cancelDrawing() : startDrawing('window', true)}>＋ Finestra</button></>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && <button className="continue-products-button" type="button" onClick={() => goToStep(3)}>Continua ai prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
         </section>
 
         <aside className="properties-panel" aria-label="Proprietà">
@@ -2270,9 +2377,9 @@ export function RoomStudio() {
               {activeStep === 3 && <div className="surface-target-card">
                 <div className="surface-target-heading"><span>1</span><div><strong>Dove vuoi applicarlo?</strong><small>Scegli pavimento o muro. La linea verde indica la zona attiva.</small></div></div>
                 <div className="surface-target-buttons" role="group" aria-label="Scegli superficie da modificare">
-                  {productTargetSurfaces.map((surface) => <button type="button" key={surface.id} className={surface.id === selectedId ? 'is-active' : ''} onClick={() => { setSelectedId(surface.id); setRenameDraft(surface.name); setShowSurfaceGuides(true); setError(null); setNotice(`${surface.name} selezionato.`); }} disabled={surface.frozen}><span style={{ background: kindColors[surface.kind] }} />{surface.name}{surface.frozen ? ' · bloccato' : ''}</button>)}
+                  {productTargetSurfaces.map((surface) => <button type="button" key={surface.id} className={surface.id === selectedId ? 'is-active' : ''} onClick={() => { setSelectedId(surface.id); setRenameDraft(surface.name); setShowSurfaceGuides(true); setError(null); setNotice(`${surface.name} selezionato.`); if (isCorrectingEdges) window.requestAnimationFrame(() => canvasRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })); }} disabled={surface.frozen}><span style={{ background: kindColors[surface.kind] }} />{surface.name}{surface.frozen ? ' · bloccato' : ''}</button>)}
                 </div>
-                <div className="surface-guide-actions"><button type="button" onClick={undo} disabled={!pastSurfaces.length}>↶ Annulla ultima modifica</button><button type="button" onClick={() => setShowSurfaceGuides((current) => !current)}>{showSurfaceGuides ? '◎ Nascondi linee' : '◎ Mostra linee'}</button>{room?.sourceType === 'photo' && <button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview}>✦ Rifai contorni</button>}</div>
+                <div className="surface-guide-actions"><button type="button" className={isCorrectingEdges ? 'is-active' : ''} onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine' : '↔ Sposta linee'}</button><button type="button" onClick={undo} disabled={!pastSurfaces.length}>↶ Annulla ultima modifica</button><button type="button" onClick={() => setShowSurfaceGuides((current) => !current)}>{showSurfaceGuides ? '◎ Nascondi linee' : '◎ Mostra linee'}</button>{room?.sourceType === 'photo' && <button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview}>✦ Rifai contorni</button>}</div>
               </div>}
               <div className="property-title"><span>Come vuoi inserire il prodotto?</span></div>
               <div className="product-entry-cards" aria-label="Modalità inserimento prodotto">
@@ -2307,11 +2414,11 @@ export function RoomStudio() {
         <button type="button" onClick={undoDraftPoint} disabled={draft.length === 0} aria-label="Cancella ultimo punto"><span aria-hidden="true">↶</span><small>Ultimo punto</small></button>
         <button className="cancel-surface-action" type="button" onClick={cancelDrawing} aria-label={`Annulla disegno ${surfaceLabels[drawKind]}`}><span aria-hidden="true">×</span><small>Annulla</small></button>
       </div>}
-      {activeStep === 2 && !drawKind && selected && <div className="mobile-surface-actions is-selected" role="toolbar" aria-label={`Azioni per ${selected.name}`}>
+      {(activeStep === 2 || (activeStep === 3 && isCorrectingEdges)) && !drawKind && selected && <div className="mobile-surface-actions is-selected" role="toolbar" aria-label={`Azioni per ${selected.name}`}>
         <div className="mobile-surface-action-state"><strong>{selected.name}</strong><span>{selected.kind === 'door' || selected.kind === 'window' ? 'Modifica o elimina' : 'Correggi i contorni'}</span></div>
         <button type="button" onClick={undo} disabled={!pastSurfaces.length} aria-label={`Annulla ultima modifica a ${selected.name}`}><span aria-hidden="true">↶</span><small>Indietro</small></button>
         {selected.kind === 'door' || selected.kind === 'window' ? <button className="delete-surface-action" type="button" onClick={deleteSelected} disabled={selected.frozen} aria-label={`Elimina ${selected.name}`}><span aria-hidden="true">⌫</span><small>Elimina</small></button> : <button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview} aria-label="Rifai riconoscimento automatico"><span aria-hidden="true">✦</span><small>Rifai</small></button>}
-        <button className="finish-surface-action" type="button" onClick={() => { setIsCorrectingEdges(false); setShowSurfaceGuides(false); setNotice(`${selected.name} salvato. Le linee sono state nascoste.`); }} aria-label={`Termina modifica di ${selected.name}`}><span aria-hidden="true">✓</span><small>Fine</small></button>
+        <button className="finish-surface-action" type="button" onClick={toggleEdgeCorrection} aria-label={`Termina modifica di ${selected.name}`}><span aria-hidden="true">✓</span><small>Fine</small></button>
       </div>}
       {renderSummaryOpen && <div className="render-modal" role="dialog" aria-modal="true" aria-labelledby="render-summary-title"><div className="render-modal-card"><button className="modal-close" type="button" onClick={() => setRenderSummaryOpen(false)} aria-label="Chiudi riepilogo">×</button><p className="eyebrow">Richiesta pronta</p><h2 id="render-summary-title">Crea il render reale</h2><div className="render-checks"><div><span>Superfici con materiale</span><strong>{surfaces.filter((surface) => surface.materialId).length}</strong></div><div><span>Zone protette</span><strong>{surfaces.filter((surface) => surface.frozen).length}</strong></div><div><span>Mobili posizionati</span><strong>{placedFurniture.length}</strong></div></div><div className="render-list"><strong>Il motore riceverà:</strong><p>{surfaces.filter((surface) => surface.materialId).map((surface) => `${surface.name}: ${materialMap.get(surface.materialId!)?.name ?? 'materiale'}`).join(' · ') || 'Nessun materiale ancora applicato'}</p><p>{placedFurniture.length || customRequests.length ? `Da inserire: ${[...placedFurniture.map((item) => `${item.name} nel punto scelto`), ...customRequests].join(', ')}` : 'Nessun arredo aggiunto'}</p></div><div className="engine-warning"><span>AI</span><p><strong>{aiStatus === 'ready' ? `${aiProviderLabel ?? 'IA'} attiva` : 'L’app riproverà il collegamento'}</strong>L’IA riceve una maschera limitata a prodotti e mobili. Il resto della stanza, incluse aperture e Freeze, viene ricopiato pixel per pixel.</p></div><button className="modal-primary" type="button" onClick={() => void createFinalRender()} disabled={isRendering}>{isRendering ? 'Creo il render…' : 'Crea render reale con IA'}</button><button className="modal-secondary" type="button" onClick={() => setRenderSummaryOpen(false)}>Torna alle modifiche</button></div></div>}
     </main>

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mergeDetectedSurfaces, RoomStudio } from './room-studio';
 import { geometryForDerivedImage, surfacesMatch } from '../geometry/model';
@@ -455,6 +455,55 @@ describe('RoomStudio', () => {
     expect(document.querySelector('.surface-overlay')).toHaveClass('hide-product-guides');
     fireEvent.click(screen.getByRole('button', { name: '◎ Mostra linee' }));
     expect(document.querySelector('.surface-overlay')).not.toHaveClass('hide-product-guides');
+  });
+
+  it('moves a complete shared edge with Apple Pencil in Products and restores it with undo', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+
+    const guideActions = document.querySelector('.surface-guide-actions') as HTMLDivElement;
+    fireEvent.click(within(guideActions).getByRole('button', { name: '↔ Sposta linee' }));
+
+    expect(screen.getByLabelText('Sposta linea 3 di Muro 1')).toBeInTheDocument();
+    expect(document.querySelectorAll('.surface-correction-controls .surface-edge-hit')).toHaveLength(4);
+    expect(document.querySelectorAll('.surface-correction-controls .surface-vertex-hit')).toHaveLength(4);
+
+    const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+    const selectedPolygon = document.querySelector('.is-selected-surface polygon') as SVGPolygonElement;
+    const floorPolygon = document.querySelector('.surface-kind-floor polygon') as SVGPolygonElement;
+    const edge = screen.getByLabelText('Sposta linea 3 di Muro 1') as unknown as SVGLineElement;
+    const selectedBefore = selectedPolygon.getAttribute('points') as string;
+    const floorBefore = floorPolygon.getAttribute('points') as string;
+    const parsePoints = (value: string) => value.split(' ').map((point) => point.split(',').map(Number));
+    const edgeMidpoint = {
+      x: (Number(edge.getAttribute('x1')) + Number(edge.getAttribute('x2'))) / 2,
+      y: (Number(edge.getAttribute('y1')) + Number(edge.getAttribute('y2'))) / 2,
+    };
+
+    fireEvent.pointerDown(edge, { pointerId: 41, pointerType: 'pen', clientX: edgeMidpoint.x, clientY: edgeMidpoint.y });
+    fireEvent.pointerMove(window, { pointerId: 41, pointerType: 'pen', clientX: edgeMidpoint.x, clientY: edgeMidpoint.y + 35 });
+    fireEvent.pointerUp(window, { pointerId: 41, pointerType: 'pen' });
+
+    const selectedAfter = parsePoints(selectedPolygon.getAttribute('points') as string);
+    const selectedOriginal = parsePoints(selectedBefore);
+    expect(selectedAfter[2][1]).toBeGreaterThan(selectedOriginal[2][1]);
+    expect(selectedAfter[3][1]).toBeGreaterThan(selectedOriginal[3][1]);
+    expect(selectedAfter[2][1] - selectedOriginal[2][1]).toBe(selectedAfter[3][1] - selectedOriginal[3][1]);
+
+    const movedEndpoints = [selectedAfter[2], selectedAfter[3]];
+    const floorAfter = parsePoints(floorPolygon.getAttribute('points') as string);
+    const adjacentWallPoints = Array.from(document.querySelectorAll('.surface-kind-wall:not(.is-selected-surface) polygon'))
+      .flatMap((polygon) => parsePoints((polygon as SVGPolygonElement).getAttribute('points') as string));
+    for (const endpoint of movedEndpoints) {
+      expect(floorAfter).toContainEqual(endpoint);
+      expect(adjacentWallPoints).toContainEqual(endpoint);
+    }
+
+    fireEvent.click(within(guideActions).getByRole('button', { name: '↶ Annulla ultima modifica' }));
+    expect(selectedPolygon).toHaveAttribute('points', selectedBefore);
+    expect(floorPolygon).toHaveAttribute('points', floorBefore);
   });
 
   it('shows automatic room measurements and accepts one real reference', () => {
