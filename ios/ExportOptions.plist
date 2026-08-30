@@ -8,13 +8,8 @@
 	<false/>
 	<key>method</key>
 	<string>app-store-connect</string>
-	<key>provisioningProfiles</key>
-	<dict>
-		<key>com.andreagadducci.materia</key>
-		<string>Materia App Store</string>
-	</dict>
 	<key>signingStyle</key>
-	<string>manual</string>
+	<string>automatic</string>
 	<key>teamID</key>
 	<string>ZBYP35X5D2</string>
 	<key>uploadSymbols</key>
