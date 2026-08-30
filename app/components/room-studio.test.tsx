@@ -89,6 +89,21 @@ describe('RoomStudio', () => {
     expect(screen.getByRole('button', { name: '⌂ Svuota la stanza' })).toBeInTheDocument();
   });
 
+  it('skips optional cleanup immediately while automatic geometry is still pending', () => {
+    render(<RoomStudio />);
+    fireEvent.change(document.querySelector('#room-file') as HTMLInputElement, {
+      target: { files: [new File(['room'], 'camera.jpg', { type: 'image/jpeg' })] },
+    });
+
+    const skip = screen.getByRole('button', { name: 'Salta · usa foto originale →' });
+    expect(skip).toBeEnabled();
+    fireEvent.click(skip);
+
+    expect(screen.getByRole('button', { name: /Prodotti/ })).toHaveClass('is-active');
+    expect(screen.getByText('Foto originale mantenuta. Ora puoi scegliere materiali e mobili senza svuotare la stanza.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Modalità inserimento prodotto')).toBeInTheDocument();
+  });
+
   it('imports a floorplan, starts automatic room creation and keeps manual correction available', () => {
     render(<RoomStudio />);
     fireEvent.change(document.querySelector('#floorplan-file') as HTMLInputElement, { target: { files: [new File(['plan'], 'casa.png', { type: 'image/png' })] } });

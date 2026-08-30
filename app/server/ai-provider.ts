@@ -938,6 +938,31 @@ function consensusOpening(group: DetectedRoomSurface[], floor: DetectedRoomSurfa
   return normalizeOpeningKind({ ...best, points: orderQuadClockwise(best.points) }, floor);
 }
 
+function hasStrongRepeatedOpeningEvidence(
+  group: Array<{ surface: DetectedRoomSurface; pass: number }>,
+  candidates: DetectedRoomSurface[][],
+  floor: DetectedRoomSurface | undefined,
+) {
+  // A perspective row of windows is often found only by the opening-first
+  // pass. Requiring a second pass for every small/distant window drops the
+  // whole row. Two or more strong, separate openings of the same kind in one
+  // independent pass are useful corroborating architectural evidence while a
+  // lone reflection or picture still remains rejected.
+  return group.some(({ surface, pass }) => {
+    if (surface.confidence < .82 || openingQuality(surface, floor) < 2.25) return false;
+    const siblings = candidates[pass].filter((candidate) => (
+      candidate.kind === surface.kind
+      && candidate.confidence >= .82
+      && openingQuality(candidate, floor) >= 2.25
+    ));
+    const distinct: DetectedRoomSurface[] = [];
+    for (const sibling of siblings) {
+      if (distinct.every((accepted) => openingOverlap(accepted, sibling) < .18)) distinct.push(sibling);
+    }
+    return distinct.length >= 2;
+  });
+}
+
 export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[][]) {
   const normalized = candidates.map(normalizeRoomSurfaces).filter((candidate) => candidate.length > 0);
   if (!normalized.length) return [];
@@ -967,7 +992,10 @@ export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[]
   });
   const minimumSupport = normalized.length > 1 ? 2 : 1;
   const bestOpenings = groups
-    .filter((group) => new Set(group.map((item) => item.pass)).size >= minimumSupport)
+    .filter((group) => (
+      new Set(group.map((item) => item.pass)).size >= minimumSupport
+      || hasStrongRepeatedOpeningEvidence(group, normalized, floor)
+    ))
     .map((group) => consensusOpening(group.map((item) => item.surface), floor));
 
   return normalizeRoomSurfaces([
@@ -1062,6 +1090,7 @@ export async function detectRoomSurfaces(
     'Classify each opening from visual evidence before drawing its polygon. An opening showing glass, outdoor foliage, daylight or window panes is a window when any sill or wall remains below it, even on a strongly foreshortened side wall. It is not a door merely because the perspective makes it tall.',
     'Never use the complete side-wall outline as a door or window. The four opening corners must follow its own frame; compare its lower edge with the local wall-floor junction. If the lower edge is visibly above that junction, return window. Only a real passable threshold touching the floor is a door.',
     'After counting, verify that every distinct glazed rectangle still has one result. In a room with a large side window plus smaller frontal windows, preserve all of them separately even when their apparent sizes differ greatly.',
+    'Repeated windows receding in perspective remain separate physical openings even when only the nearest frame is large. Count the distant frames one by one. For an arched window, trace the tight four-corner outer bounding quadrilateral around the complete architectural frame, including the arch, without merging it with the wall.',
     'Return one separate four-corner polygon for every complete or partially cropped architectural frame. Keep several similar windows as several windows; never merge distant openings.',
     'After the opening count, return the complete floor and wall geometry as well so each opening can be attached to its real wall. Return the full surface list and no comments.',
   ].join('\n\n');

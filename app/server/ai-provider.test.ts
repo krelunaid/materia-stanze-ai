@@ -421,6 +421,23 @@ describe('getAiProvider', () => {
     expect(result.some((surface) => surface.kind === 'window')).toBe(false);
   });
 
+  it('keeps a repeated perspective row of strong windows found by the opening audit', () => {
+    const room = [
+      { name: 'back wall', kind: 'wall' as const, confidence: .96, points: [{ x: .15, y: .18 }, { x: .88, y: .18 }, { x: .88, y: .72 }, { x: .15, y: .72 }] },
+      { name: 'right wall', kind: 'wall' as const, confidence: .94, points: [{ x: .88, y: .18 }, { x: 1, y: 0 }, { x: 1, y: .82 }, { x: .88, y: .72 }] },
+      { name: 'floor', kind: 'floor' as const, confidence: .97, points: [{ x: .15, y: .72 }, { x: .88, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+    ];
+    const repeatedWindows = [
+      { name: 'near arch', kind: 'window' as const, confidence: .94, points: [{ x: .89, y: .18 }, { x: .99, y: .18 }, { x: .99, y: .61 }, { x: .89, y: .61 }] },
+      { name: 'middle arch', kind: 'window' as const, confidence: .91, points: [{ x: .78, y: .29 }, { x: .84, y: .29 }, { x: .84, y: .58 }, { x: .78, y: .58 }] },
+      { name: 'far arch', kind: 'window' as const, confidence: .88, points: [{ x: .70, y: .36 }, { x: .74, y: .36 }, { x: .74, y: .56 }, { x: .70, y: .56 }] },
+    ];
+
+    const result = reconcileRoomSurfaceCandidates([room, room, [...room, ...repeatedWindows]]);
+
+    expect(result.filter((surface) => surface.kind === 'window')).toHaveLength(3);
+  });
+
   it('keeps the strongest overlapping window trace without averaging it toward the centre', () => {
     const room = [
       { name: 'wall', kind: 'wall' as const, confidence: .96, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .56 }, { x: 0, y: .56 }] },
