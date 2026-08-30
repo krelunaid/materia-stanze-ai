@@ -433,6 +433,49 @@ describe('RoomStudio', () => {
     expect(screen.getByRole('button', { name: /Campione materiale/ })).toBeInTheDocument();
   });
 
+  it('makes the product target and geometry recovery controls explicit', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+
+    expect(screen.getByText('Dove vuoi applicarlo?')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Scegli superficie da modificare' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pavimento' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '↶ Annulla ultima modifica' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '◎ Nascondi linee' }));
+    expect(document.querySelector('.surface-overlay')).toHaveClass('hide-product-guides');
+    fireEvent.click(screen.getByRole('button', { name: '◎ Mostra linee' }));
+    expect(document.querySelector('.surface-overlay')).not.toHaveClass('hide-product-guides');
+  });
+
+  it('allows an indicative floor preview when a linked product has no clean texture', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/capabilities')) {
+        return new Response(JSON.stringify({ aiReady: true, providerLabel: 'Grok' }), { status: 200 });
+      }
+      if (url.includes('/api/search-products')) {
+        return new Response(JSON.stringify({ products: [{
+          name: 'Impronta Limestone Beige', brand: 'Impronta', collection: 'Limestone', category: 'Pavimenti', color: 'Beige', effect: 'Pietra', format: '60x60', finish: 'Matt',
+          description: 'Piastrella in gres beige', sourceUrl: 'https://example.com/limestone', productImageUrl: 'https://example.com/room.jpg', textureImageUrl: '', roomImageUrls: [],
+          confidence: .9, official: true, correction: '',
+        }] }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+    fireEvent.change(screen.getByLabelText('Link prodotto'), { target: { value: 'https://example.com/limestone' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Cerca con Grok' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Impronta · Impronta Limestone Beige/ }));
+
+    expect(screen.getByText('Puoi provarlo subito.')).toBeInTheDocument();
+    expect(document.querySelector('.auto-apply-product-button')).toBeEnabled();
+    expect(screen.getAllByRole('button', { name: 'Prova ora su Pavimento' }).length).toBeGreaterThan(0);
+  });
+
   it('does not place an online furniture result when its product image is unavailable', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
