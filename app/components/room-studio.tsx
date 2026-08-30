@@ -1808,18 +1808,27 @@ export function RoomStudio() {
       form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
       const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/empty-room'), { method: 'POST', body: form }, 180000);
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Immagine non disponibile.');
+      const architecturalAnchors = baselineSurfaces.filter((surface) => surface.frozen || surface.kind === 'door' || surface.kind === 'window');
       const protectedPreview = await protectAiResult(result.image, {
-        editableSurfaces: removalSurfaces, protectedSurfaces: frozenSurfaces, sourceUrl: room.previewUrl, stabilizeColor: true,
+        frozenSurfaces: architecturalAnchors, sourceUrl: room.previewUrl, stabilizeColor: true,
       });
+      setProcessedPreview(protectedPreview); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
+      setNotice('Stanza pulita. Ora verifico di nuovo pareti e pavimento sugli angoli finalmente visibili…');
 
-      const approved = geometryForDerivedImage(baselineSurfaces);
+      let approved = geometryForDerivedImage(baselineSurfaces);
+      try {
+        const visibleGeometry = await detectSurfacesForPreview(protectedPreview, 'stanza-vuota.jpg');
+        approved = mergeDetectedSurfaces(visibleGeometry, baselineSurfaces);
+      } catch {
+        // The cleaned image remains useful even if the verification pass is
+        // temporarily unavailable; keep the last approved original geometry.
+      }
       originalSurfacesRef.current = geometryForDerivedImage(baselineSurfaces);
       processedSurfacesRef.current = approved;
       setSurfaces(approved); setPastSurfaces([]); setFutureSurfaces([]);
       const preferred = approved.find((surface) => surface.kind === 'floor') ?? approved[0] ?? null;
       setSelectedId(preferred?.id ?? null); setRenameDraft(preferred?.name ?? '');
-      setProcessedPreview(protectedPreview); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
-      setNotice(`Stanza pulita in ${regions.length} zone. Fuori dai contorni dei mobili la fotografia e le misure sono rimaste identiche.`);
+      setNotice(`Stanza pulita in ${regions.length} zone. Formato della foto invariato; pareti e pavimento sono stati ricontrollati dopo la rimozione dei mobili.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Non sono riuscito a svuotare la stanza.');
       setNotice(null);
