@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { acceptsFurnitureRender, chooseSupportedImageAspectRatio, detectMovableObjectRegions, detectObjectRegion, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, knownRetailerProductImage, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
+import { acceptsFurnitureRender, chooseSupportedImageAspectRatio, classifyProductPhoto, detectMovableObjectRegions, detectObjectRegion, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, knownRetailerProductImage, normalizeProductPhotoClassification, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -75,14 +75,65 @@ describe('getAiProvider', () => {
     await expect(removeFurnitureBackgroundWithBria('bria-test', 'https://shop.example/product.jpg'))
       .resolves.toMatch(/^data:image\/png;base64,/);
 
-    expect(fetchMock.mock.calls[1]?.[0]).toBe('https://engine.prod.bria-api.com/v2/image/edit/remove_background');
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('https://engine.prod.bria-api.com/v2/image/edit/product/cutout');
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
       method: 'POST',
       headers: { api_token: 'bria-test', 'Content-Type': 'application/json' },
     });
     expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
-      image: expect.stringMatching(/^data:image\/jpeg;base64,/), preserve_alpha: true, sync: true,
+      image: expect.stringMatching(/^data:image\/jpeg;base64,/),
+      preserve_alpha: true,
+      force_background_detection: true,
+      output_type: 'png',
+      sync: true,
     });
+  });
+
+  it('classifies a showroom slab as a usable floor material instead of furniture', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({
+        kind: 'surface-material', category: 'Pavimenti', confidence: .94, usableSample: true,
+        sampleBounds: { left: .15, top: .12, right: .58, bottom: .82 },
+        label: 'Lastra effetto marmo', reason: 'La lastra è il prodotto e la persona è contesto.',
+      }) }] }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await expect(classifyProductPhoto(
+      { id: 'grok', label: 'Grok', apiKey: 'xai-test' },
+      new File([new Uint8Array([1, 2, 3])], 'lastra.jpg', { type: 'image/jpeg' }),
+      'floor',
+    )).resolves.toMatchObject({ kind: 'surface-material', category: 'Pavimenti', usableSample: true });
+
+    const payload = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
+    const prompt = payload.input[0].content[1].text as string;
+    expect(prompt).toContain('showroom/display rack');
+    expect(prompt).toContain('A standing rectangular slab is not furniture');
+    expect(prompt).toContain('People, hands, shoes, racks');
+    expect(payload.text.format.schema.properties.kind.enum).toEqual(['furniture', 'surface-material', 'unknown']);
+  });
+
+  it('normalizes furniture so it can never be used as a surface sample', () => {
+    expect(normalizeProductPhotoClassification({
+      kind: 'furniture', category: 'Pavimenti', confidence: .91, usableSample: true,
+      sampleBounds: { left: .1, top: .1, right: .9, bottom: .9 }, label: 'Divano', reason: '',
+    })).toMatchObject({
+      kind: 'furniture', category: 'Arredi', usableSample: false,
+      sampleBounds: { left: 0, top: 0, right: 0, bottom: 0 },
+    });
+  });
+
+  it('rejects an invalid or tiny material crop', () => {
+    expect(normalizeProductPhotoClassification({
+      kind: 'surface-material', category: 'Pavimenti', confidence: .9, usableSample: true,
+      sampleBounds: { left: .6, top: .6, right: .55, bottom: .63 }, label: 'Pietra', reason: '',
+    })).toMatchObject({ usableSample: false, sampleBounds: { left: 0, top: 0, right: 0, bottom: 0 } });
+  });
+
+  it('downgrades uncertain product photos to unknown', () => {
+    expect(normalizeProductPhotoClassification({
+      kind: 'surface-material', category: 'Pavimenti', confidence: .61, usableSample: true,
+      sampleBounds: { left: .1, top: .1, right: .9, bottom: .9 }, label: 'Forse pietra', reason: '',
+    }).kind).toBe('unknown');
   });
 
   it('derives the official Tikamoon packshot URL from an exact product page', () => {

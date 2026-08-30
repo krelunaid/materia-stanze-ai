@@ -86,6 +86,16 @@ type DetectedSurface = {
   parentId?: string;
 };
 type ProductSearchCategory = '' | StudioMaterial['category'];
+type ProductPhotoClassification = {
+  kind: 'furniture' | 'surface-material' | 'unknown';
+  category: 'Pavimenti' | 'Rivestimenti' | 'Arredi';
+  confidence: number;
+  usableSample: boolean;
+  sampleBounds: NormalizedProductBounds;
+  label: string;
+  reason: string;
+  message?: string;
+};
 
 function clientValidatedSurfaces(input: DetectedSurface[], idPrefix: string): Surface[] {
   const candidates = input.filter((surface) => !surface.id?.startsWith('demo-')).map((surface, index) => ({
@@ -487,6 +497,106 @@ function loadImageSource(source: string) {
   });
 }
 
+async function cropMaterialSample(source: string, bounds: NormalizedProductBounds) {
+  const image = await loadImageSource(source);
+  const left = Math.min(1, Math.max(0, bounds.left));
+  const top = Math.min(1, Math.max(0, bounds.top));
+  const right = Math.min(1, Math.max(left, bounds.right));
+  const bottom = Math.min(1, Math.max(top, bounds.bottom));
+  const sourceWidth = Math.max(1, Math.round((right - left) * image.naturalWidth));
+  const sourceHeight = Math.max(1, Math.round((bottom - top) * image.naturalHeight));
+  const scale = Math.min(1, 1024 / Math.max(sourceWidth, sourceHeight));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+  canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Non posso preparare il campione del materiale.');
+  context.drawImage(
+    image,
+    Math.round(left * image.naturalWidth),
+    Math.round(top * image.naturalHeight),
+    sourceWidth,
+    sourceHeight,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  );
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+  if (!blob) throw new Error('Non posso preparare il campione del materiale.');
+  return blob;
+}
+
+async function createCombinedRenderReference(
+  materialSample: Blob,
+  furnitureReference: Blob,
+  materialName: string,
+  furnitureName: string,
+) {
+  const materialUrl = URL.createObjectURL(materialSample);
+  const furnitureUrl = URL.createObjectURL(furnitureReference);
+  try {
+    const [materialImage, furnitureImage] = await Promise.all([
+      loadImageSource(materialUrl),
+      loadImageSource(furnitureUrl),
+    ]);
+    const canvas = document.createElement('canvas');
+    canvas.width = 1200;
+    canvas.height = 700;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Non posso preparare i riferimenti del render.');
+
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = '#d8f3ea';
+    context.fillRect(0, 0, canvas.width / 2, 86);
+    context.fillStyle = '#f5ead2';
+    context.fillRect(canvas.width / 2, 0, canvas.width / 2, 86);
+    context.fillStyle = '#10211e';
+    context.font = '700 28px system-ui, sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(`MATERIALE · ${materialName.slice(0, 28)}`, canvas.width / 4, 43);
+    context.fillText(`MOBILE · ${furnitureName.slice(0, 28)}`, canvas.width * .75, 43);
+
+    const drawContained = (image: HTMLImageElement, left: number, top: number, width: number, height: number, cover = false) => {
+      const scale = cover
+        ? Math.max(width / image.naturalWidth, height / image.naturalHeight)
+        : Math.min(width / image.naturalWidth, height / image.naturalHeight);
+      const drawWidth = image.naturalWidth * scale;
+      const drawHeight = image.naturalHeight * scale;
+      context.save();
+      context.beginPath();
+      context.rect(left, top, width, height);
+      context.clip();
+      context.drawImage(image, left + (width - drawWidth) / 2, top + (height - drawHeight) / 2, drawWidth, drawHeight);
+      context.restore();
+    };
+
+    drawContained(materialImage, 18, 104, 564, 578, true);
+    drawContained(furnitureImage, 618, 104, 564, 578);
+    context.strokeStyle = '#9eb7af';
+    context.lineWidth = 3;
+    context.strokeRect(18, 104, 564, 578);
+    context.strokeRect(618, 104, 564, 578);
+
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('Non posso preparare i riferimenti del render.');
+    return blob;
+  } finally {
+    URL.revokeObjectURL(materialUrl);
+    URL.revokeObjectURL(furnitureUrl);
+  }
+}
+
+export function friendlyRequestError(caught: unknown) {
+  const message = caught instanceof Error ? caught.message : String(caught ?? '');
+  if (/the network connection was lost|failed to fetch|load failed|network request failed|not connected|offline|internet connection appears to be offline/i.test(message)) {
+    return new Error('Connessione interrotta. La stanza resta aperta: controlla la rete e riprova l’operazione.');
+  }
+  return caught instanceof Error ? caught : new Error('Il servizio non è raggiungibile. Controlla la connessione e riprova.');
+}
+
 function colorStabilizedRoomLayer(
   original: HTMLImageElement,
   generated: HTMLImageElement,
@@ -586,7 +696,7 @@ async function requestJson<T>(url: string, init: RequestInit, timeoutMs: number)
     if (caught instanceof DOMException && caught.name === 'AbortError') {
       throw new Error('L’operazione sta impiegando troppo tempo. Controlla la connessione e riprova.');
     }
-    throw caught;
+    throw friendlyRequestError(caught);
   } finally {
     window.clearTimeout(timer);
   }
@@ -632,6 +742,7 @@ export function RoomStudio() {
   const [isCleaningRegion, setIsCleaningRegion] = useState(false);
   const [cleanupRegion, setCleanupRegion] = useState<CleanupRegion | null>(null);
   const [isSearchingProducts, setIsSearchingProducts] = useState(false);
+  const [isClassifyingProduct, setIsClassifyingProduct] = useState(false);
   const [isApplyingProduct, setIsApplyingProduct] = useState(false);
   const [isRendering, setIsRendering] = useState(false);
   const [aiStatus, setAiStatus] = useState<AiStatus>('checking');
@@ -658,6 +769,7 @@ export function RoomStudio() {
   const surfaceOverlayRef = useRef<SVGSVGElement>(null);
   const roomBlobRef = useRef<string | null>(null);
   const materialBlobRef = useRef<string | null>(null);
+  const materialSampleRef = useRef<Blob | null>(null);
   const furnitureBlobUrlsRef = useRef<string[]>([]);
   const furnitureFilesRef = useRef<Map<string, File>>(new Map());
   const furnitureIdRef = useRef(0);
@@ -848,6 +960,9 @@ export function RoomStudio() {
     };
     const finishGeometryDrag = (pointerId: number) => {
       if (pointerId !== activeDrag.pointerId) return;
+      try {
+        if (surfaceOverlayRef.current?.hasPointerCapture?.(pointerId)) surfaceOverlayRef.current.releasePointerCapture(pointerId);
+      } catch { /* Safari may already have released the Pencil pointer. */ }
       const dragStart = dragStartRef.current;
       if (dragStart) {
         setPastSurfaces((history) => [...history, dragStart].slice(-40));
@@ -1024,6 +1139,7 @@ export function RoomStudio() {
     if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
     roomBlobRef.current = null;
     processedBlobRef.current = null;
+    materialSampleRef.current = null;
     originalSurfacesRef.current = [];
     processedSurfacesRef.current = null;
     furnitureBlobUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
@@ -1138,14 +1254,14 @@ export function RoomStudio() {
       return;
     }
     event.preventDefault(); event.stopPropagation();
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    try { surfaceOverlayRef.current?.setPointerCapture?.(event.pointerId); } catch { /* Global listeners keep the drag active. */ }
     shellRef.current?.classList.add('is-moving-vertex');
     dragStartRef.current = surfaces;
     setDragEdge(null);
     setDragVertex({ surfaceId, vertexIndex, pointerId: event.pointerId, origin, linked });
   }
 
-  function beginEdgeDrag(event: ReactPointerEvent<SVGLineElement>, surfaceId: string, edgeIndex: number) {
+  function beginEdgeDrag(event: ReactPointerEvent<SVGElement>, surfaceId: string, edgeIndex: number) {
     const surface = surfaces.find((item) => item.id === surfaceId);
     if (!surface || surface.frozen || !isCorrectingEdges || !surfaceOverlayRef.current) return;
     const first = surface.points[edgeIndex];
@@ -1159,7 +1275,7 @@ export function RoomStudio() {
     const rect = surfaceOverlayRef.current.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
     event.preventDefault(); event.stopPropagation();
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    try { surfaceOverlayRef.current?.setPointerCapture?.(event.pointerId); } catch { /* Global listeners keep the drag active. */ }
     shellRef.current?.classList.add('is-moving-vertex');
     dragStartRef.current = surfaces;
     setDragVertex(null);
@@ -1223,10 +1339,11 @@ export function RoomStudio() {
   function importMaterial(file?: File) {
     if (!file) return;
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { setError('Il campione materiale deve essere JPG, PNG o WEBP.'); return; }
-    if (file.size > 20 * 1024 * 1024) { setError('Il campione materiale supera il limite di 20 MB.'); return; }
+    if (file.size > 12 * 1024 * 1024) { setError('Il campione materiale supera il limite di 12 MB.'); return; }
     if (materialBlobRef.current) URL.revokeObjectURL(materialBlobRef.current);
     const previewUrl = URL.createObjectURL(file);
     materialBlobRef.current = previewUrl;
+    materialSampleRef.current = file;
     const next: StudioMaterial = { id: `material-${Date.now()}`, name: file.name.replace(/\.[^.]+$/, ''), category: 'Rivestimenti', description: 'Campione fotografico personale', previewUrl, textureUrl: previewUrl, referenceKind: 'uploaded-sample' };
     setMaterial(next); setError(null); setNotice(`Campione “${next.name}” pronto. Seleziona una superficie e applicalo.`);
   }
@@ -1320,7 +1437,9 @@ export function RoomStudio() {
   function recommendedSurface(item: StudioMaterial) {
     const description = `${item.name} ${item.category} ${item.description}`.toLocaleLowerCase('it');
     const preferredKind: SurfaceKind = item.category === 'Pavimenti' || /pavimento|parquet|rovere|piastrella|mattonell/.test(description) ? 'floor' : 'wall';
-    return surfaces.find((surface) => !surface.frozen && surface.kind === preferredKind)
+    const exactTarget = surfaces.find((surface) => !surface.frozen && surface.kind === preferredKind) ?? null;
+    if (item.category === 'Pavimenti' || item.category === 'Rivestimenti' || item.category === 'Colori') return exactTarget;
+    return exactTarget
       ?? (selected && !selected.frozen ? selected : null)
       ?? surfaces.find((surface) => !surface.frozen)
       ?? null;
@@ -1522,14 +1641,14 @@ export function RoomStudio() {
     return createFurnitureCutout(result.image, productName, undefined, false, productDescription);
   }
 
-  async function createAiCleanedFurnitureFile(file: File, productName: string) {
+  async function createAiCleanedFurnitureFile(file: File) {
     const form = new FormData();
     form.append('image', file, file.name || 'prodotto.jpg');
     const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/clean-product'), {
       method: 'POST', body: form,
     }, 100000);
     if (!response.ok || !result.image) throw new Error(result.message ?? 'Pulizia BRIA non disponibile.');
-    return createFurnitureCutout(result.image, productName, undefined, false);
+    return result.image;
   }
 
   async function applyMaterialAutomatically(chosenMaterial: StudioMaterial | null = material) {
@@ -1540,7 +1659,11 @@ export function RoomStudio() {
       return;
     }
     const target = recommendedSurface(chosenMaterial);
-    if (!target) { setError('Tutte le superfici sono bloccate. Sbloccane una per applicare il prodotto.'); return; }
+    if (!target) {
+      const targetLabel = chosenMaterial.category === 'Pavimenti' ? 'il Pavimento' : 'un muro';
+      setError(`Non trovo ${targetLabel} disponibile. Correggi i contorni oppure sblocca la superficie giusta prima di applicare il prodotto.`);
+      return;
+    }
     setSelectedId(target.id); setRenameDraft(target.name); setShowSurfaceGuides(true); setError(null);
 
     if (!chosenMaterial.sourceUrl) {
@@ -1566,7 +1689,11 @@ export function RoomStudio() {
       // Only a verified flat texture (or an uploaded sample, stored as
       // textureUrl) may be sent as the visual surface reference.
       const referenceUrl = chosenMaterial.textureUrl;
-      if (referenceUrl) form.append('imageUrl', referenceUrl);
+      if (chosenMaterial.referenceKind === 'uploaded-sample' && materialSampleRef.current) {
+        form.append('materialReference', materialSampleRef.current, 'campione-materiale.png');
+      } else if (referenceUrl) {
+        form.append('imageUrl', referenceUrl);
+      }
       form.append('referenceType', chosenMaterial.referenceKind ?? 'metadata-only');
       const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/apply-product'), { method: 'POST', body: form }, 180000);
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Render non disponibile.');
@@ -1604,16 +1731,18 @@ export function RoomStudio() {
       }
       setError(null);
       setNotice(`Grok ripulisce “${name}” da sfondo, decorazioni e ombre…`);
-      let cutoutUrl: string | undefined;
       try {
-        if (next.previewUrl) cutoutUrl = await createAiCleanedFurnitureCutout(next.previewUrl, name, next.description);
-      } catch {
-        // Keep the deterministic local cleanup as a reliable fallback.
-        try {
-          if (next.previewUrl) cutoutUrl = await createFurnitureCutout(next.previewUrl, name, undefined, true, next.description);
-        } catch { /* The exact product photo remains available to the render engine. */ }
+        const cutoutUrl = next.previewUrl
+          ? await createAiCleanedFurnitureCutout(next.previewUrl, name, next.description)
+          : undefined;
+        if (!cutoutUrl) throw new Error('Non sono riuscito a isolare il mobile dalla foto.');
+        startFurniturePlacement(name, next.previewUrl, next.description, undefined, cutoutUrl);
+      } catch (caught) {
+        setError(caught instanceof Error
+          ? `Non inserisco la foto intera: ${caught.message}`
+          : 'Non sono riuscito a isolare il mobile dalla foto.');
+        setNotice(null);
       }
-      startFurniturePlacement(name, next.previewUrl, next.description, undefined, cutoutUrl);
       return;
     }
     chooseMaterial(next);
@@ -1632,17 +1761,82 @@ export function RoomStudio() {
   async function importFurniture(file?: File) {
     if (!file) return;
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { setError('La foto del mobile deve essere JPG, PNG o WEBP.'); return; }
-    if (file.size > 20 * 1024 * 1024) { setError('La foto del mobile supera il limite di 20 MB.'); return; }
-    const previewUrl = URL.createObjectURL(file);
-    furnitureBlobUrlsRef.current.push(previewUrl);
-    const name = file.name.replace(/\.[^.]+$/, '');
-    setNotice(`BRIA scontorna “${name}” e prepara la sagoma trasparente…`);
-    let cutoutUrl: string | undefined;
-    try { cutoutUrl = await createAiCleanedFurnitureFile(file, name); } catch {
-      try { cutoutUrl = await createFurnitureCutout(previewUrl, name, undefined, false); } catch { /* keep original */ }
+    if (file.size > 12 * 1024 * 1024) { setError('La foto prodotto supera il limite di 12 MB.'); return; }
+    if (isClassifyingProduct) return;
+    setIsClassifyingProduct(true); setError(null);
+    setNotice('Riconosco automaticamente se hai fotografato un materiale oppure un mobile…');
+    try {
+      const form = new FormData();
+      form.append('image', file, file.name || 'prodotto.jpg');
+      form.append('intendedTarget', selected?.kind === 'floor' ? 'floor' : 'wall');
+      const { response, result } = await requestJson<ProductPhotoClassification>(endpoint('/api/classify-product'), {
+        method: 'POST', body: form,
+      }, 70000);
+      if (!response.ok) throw new Error(result.message ?? 'Non sono riuscito a riconoscere la foto prodotto.');
+
+      if (result.kind === 'surface-material') {
+        if (!result.usableSample) {
+          throw new Error(`Ho riconosciuto “${result.label}” come materiale, ma nella foto non c’è una zona pulita da usare. Avvicinati alla lastra o al campione evitando persone, bordi ed espositori.`);
+        }
+        const sourceUrl = URL.createObjectURL(file);
+        let sample: Blob;
+        try {
+          sample = await cropMaterialSample(sourceUrl, result.sampleBounds);
+        } finally {
+          URL.revokeObjectURL(sourceUrl);
+        }
+        if (materialBlobRef.current) URL.revokeObjectURL(materialBlobRef.current);
+        const previewUrl = URL.createObjectURL(sample);
+        materialBlobRef.current = previewUrl;
+        materialSampleRef.current = sample;
+        const next: StudioMaterial = {
+          id: `material-${Date.now()}`,
+          name: result.label || file.name.replace(/\.[^.]+$/, ''),
+          category: result.category,
+          description: 'Campione riconosciuto automaticamente dalla foto',
+          previewUrl,
+          textureUrl: previewUrl,
+          referenceKind: 'uploaded-sample',
+          confidence: result.confidence,
+        };
+        setMaterial(next);
+        const targetKind: SurfaceKind = result.category === 'Pavimenti' ? 'floor' : 'wall';
+        const target = surfaces.find((surface) => !surface.frozen && surface.kind === targetKind);
+        if (!target) {
+          throw new Error(result.category === 'Pavimenti'
+            ? 'Materiale riconosciuto come pavimento, ma il Pavimento non è disponibile o è bloccato. Sbloccalo e applica il campione.'
+            : 'Materiale riconosciuto come rivestimento, ma non c’è un muro disponibile. Sblocca un muro e applica il campione.');
+        }
+        setSelectedId(target.id); setRenameDraft(target.name); setShowSurfaceGuides(true);
+        commitSurfaces(surfaces.map((surface) => surface.id === target.id ? { ...surface, materialId: next.id } : surface));
+        setError(null);
+        setNotice(`${next.name} riconosciuto e applicato automaticamente a ${target.name}.`);
+        return;
+      }
+
+      if (result.kind !== 'furniture') {
+        throw new Error('Non riconosco con sicurezza un mobile o un materiale. Fotografa un solo prodotto più da vicino, oppure usa “Campione materiale”.');
+      }
+
+      const previewUrl = URL.createObjectURL(file);
+      const name = result.label || file.name.replace(/\.[^.]+$/, '');
+      setNotice(`Scontorno “${name}” e preparo soltanto la sagoma del mobile…`);
+      try {
+        const cutoutUrl = await createAiCleanedFurnitureFile(file);
+        furnitureBlobUrlsRef.current.push(previewUrl);
+        startFurniturePlacement(name, previewUrl, undefined, file, cutoutUrl);
+        setError(null);
+      } catch (caught) {
+        URL.revokeObjectURL(previewUrl);
+        throw new Error(caught instanceof Error
+          ? `Non inserisco la foto intera: ${caught.message} Riprova con il mobile isolato su uno sfondo semplice.`
+          : 'Non sono riuscito a scontornare il mobile. Riprova con uno sfondo semplice.');
+      }
+    } catch (caught) {
+      setError(friendlyRequestError(caught).message); setNotice(null);
+    } finally {
+      setIsClassifyingProduct(false);
     }
-    startFurniturePlacement(name, previewUrl, undefined, file, cutoutUrl);
-    setError(null);
   }
 
   function onFurnitureInput(event: ChangeEvent<HTMLInputElement>) {
@@ -1694,6 +1888,7 @@ export function RoomStudio() {
     setPlacedFurniture((current) => [...current, placed]);
     setSelectedFurnitureId(id);
     setPendingFurniture(null);
+    setError(null);
     setNotice(`${placed.name} posizionato con misura automatica ${Math.round(placed.scale)}%. Trascinalo avanti o indietro per adattarlo alla profondità.`);
   }
 
@@ -2103,6 +2298,19 @@ export function RoomStudio() {
 
   async function createFinalRender() {
     if (!room?.previewUrl || room.sourceType !== 'photo' || isRendering) return;
+    if (isClassifyingProduct) {
+      setActiveStep(3); setRenderSummaryOpen(false);
+      setError('Attendi il riconoscimento della foto prodotto prima di creare il render.');
+      setNotice(null);
+      return;
+    }
+    if (pendingFurniture) {
+      setActiveStep(3); setRenderSummaryOpen(false);
+      setError(`Prima posiziona “${pendingFurniture.name}” toccando il pavimento, oppure premi Annulla.`);
+      setNotice(null);
+      window.requestAnimationFrame(() => canvasRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }));
+      return;
+    }
     const frozenSurfaces = surfaces.filter((surface) => surface.frozen);
     const sourceUrl = showProcessedPreview && processedPreview ? processedPreview : room.previewUrl;
     const editableMaterialSurfaces = surfaces.filter((surface) => surface.materialId && !surface.frozen);
@@ -2145,22 +2353,53 @@ export function RoomStudio() {
       form.append('requests', customRequests.join(', '));
       form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
       form.append('roomMeasurements', `width ${roomMeasurement.widthMeters} m; depth ${roomMeasurement.depthMeters} m; height ${roomMeasurement.heightMeters} m; confidence ${Math.round(roomMeasurement.confidence * 100)}%; reference ${roomMeasurement.referenceLabel}`);
-      const referenceUrl = material?.textureUrl;
-      if (referenceUrl && materialAssignments.length) form.append('imageUrl', referenceUrl);
-      if (materialAssignments.length) form.append('referenceType', material?.referenceKind ?? 'metadata-only');
+
       const furnitureWithPhoto = placedFurniture.find((item) => furnitureFilesRef.current.has(item.id));
-      const furnitureReference = furnitureWithPhoto ? furnitureFilesRef.current.get(furnitureWithPhoto.id) : null;
+      const originalFurnitureReference = furnitureWithPhoto ? furnitureFilesRef.current.get(furnitureWithPhoto.id) : null;
       const furnitureWithCutout = placedFurniture.find((item) => item.cutoutUrl);
+      let furnitureReference: Blob | null = null;
+      let furnitureReferenceName = '';
+      let furnitureReferenceFilename = 'furniture-reference.png';
       if (furnitureWithCutout?.cutoutUrl) {
-        const cutoutBlob = await fetch(furnitureWithCutout.cutoutUrl).then((response) => response.blob());
-        form.append('furnitureReference', cutoutBlob, 'furniture-cutout.png');
-        form.append('furnitureReferenceName', furnitureWithCutout.name);
-      } else if (furnitureReference && furnitureWithPhoto) {
-        form.append('furnitureReference', furnitureReference, furnitureReference.name);
-        form.append('furnitureReferenceName', furnitureWithPhoto.name);
+        const cutoutResponse = await fetch(furnitureWithCutout.cutoutUrl);
+        if (!cutoutResponse.ok) throw new Error('Non riesco a rileggere il ritaglio del mobile. Ricarica la foto prodotto e riprova.');
+        furnitureReference = await cutoutResponse.blob();
+        furnitureReferenceName = furnitureWithCutout.name;
+        furnitureReferenceFilename = 'furniture-cutout.png';
+      } else if (originalFurnitureReference && furnitureWithPhoto) {
+        furnitureReference = originalFurnitureReference;
+        furnitureReferenceName = furnitureWithPhoto.name;
+        furnitureReferenceFilename = originalFurnitureReference.name;
+      }
+
+      const referenceUrl = material?.textureUrl;
+      const uploadedMaterialReference = materialAssignments.length
+        && material?.referenceKind === 'uploaded-sample'
+        && materialSampleRef.current
+        ? materialSampleRef.current
+        : null;
+      if (uploadedMaterialReference) {
+        form.append('materialReference', uploadedMaterialReference, 'campione-materiale.png');
+      } else if (referenceUrl && materialAssignments.length) {
+        form.append('imageUrl', referenceUrl);
+      }
+      if (materialAssignments.length) form.append('referenceType', material?.referenceKind ?? 'metadata-only');
+      if (furnitureReference) {
+        form.append('furnitureReference', furnitureReference, furnitureReferenceFilename);
+        form.append('furnitureReferenceName', furnitureReferenceName);
+      }
+      if (uploadedMaterialReference && furnitureReference) {
+        const combinedReference = await createCombinedRenderReference(
+          uploadedMaterialReference,
+          furnitureReference,
+          material?.name ?? 'campione scelto',
+          furnitureReferenceName || 'mobile scelto',
+        );
+        form.append('combinedReference', combinedReference, 'riferimenti-materiale-mobile.png');
+        form.append('combinedReferenceMaterialName', material?.name ?? 'campione scelto');
       }
       const furnitureWithRemotePhoto = placedFurniture.find((item) => item.previewUrl?.startsWith('http'));
-      if (!furnitureWithCutout && !furnitureReference && furnitureWithRemotePhoto?.previewUrl) {
+      if (!furnitureReference && furnitureWithRemotePhoto?.previewUrl) {
         form.append('furnitureReferenceUrl', furnitureWithRemotePhoto.previewUrl);
         form.append('furnitureReferenceName', furnitureWithRemotePhoto.name);
       }
@@ -2183,7 +2422,7 @@ export function RoomStudio() {
         ? 'Render fotografico pronto: il mobile ha superato i controlli di presenza, posizione, appoggio, ombra di contatto e somiglianza.'
         : 'Render controllato pronto: fuori dalle aree autorizzate i pixel sono identici; porte, finestre, soffitto e Freeze sono stati ricopiati dalla foto di partenza.');
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Non sono riuscito a creare il render.');
+      setError(friendlyRequestError(caught).message);
       setNotice(null);
     } finally {
       setIsRendering(false);
@@ -2264,6 +2503,23 @@ export function RoomStudio() {
       setNotice('Prima crea o disegna almeno una superficie.');
       return;
     }
+    if (isClassifyingProduct && step !== 3) {
+      setActiveStep(3); setRenderSummaryOpen(false);
+      setError('Attendi il riconoscimento della foto prodotto prima di cambiare passaggio.');
+      setNotice(null);
+      return;
+    }
+    if (step === 4 && pendingFurniture) {
+      setActiveStep(3); setRenderSummaryOpen(false);
+      setError(`Prima posiziona “${pendingFurniture.name}” toccando il pavimento, oppure premi Annulla.`);
+      setNotice(null);
+      window.requestAnimationFrame(() => canvasRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }));
+      return;
+    }
+    if (step < 3 && pendingFurniture) {
+      setPendingFurniture(null);
+      setNotice('Inserimento del mobile annullato.');
+    }
     if (step !== 2 && step !== 3) {
       setIsCorrectingEdges(false);
       setDragVertex(null);
@@ -2271,6 +2527,7 @@ export function RoomStudio() {
       shellRef.current?.classList.remove('is-moving-vertex');
     }
     if (step === 2 || step === 3) setShowSurfaceGuides(true);
+    setError(null);
     setActiveStep(step);
     if (step === 4) setRenderSummaryOpen(true);
   }
@@ -2340,7 +2597,11 @@ export function RoomStudio() {
                   const showLabel = surface.kind === 'window' || surface.kind === 'door';
                   return <g key={surface.id} data-parent-id={surface.parentId} data-source={surface.source} className={`surface-kind-${surface.kind} ${surface.frozen ? 'is-frozen ' : ''}${surface.id === selectedId ? 'is-selected-surface' : ''}`}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{showLabel && <text className="surface-name" x={labelPoint.x * 1000} y={labelPoint.y * 625}>{surface.name}</text>}</g>;
                 })}
-                {isCorrectingEdges && selected && !selected.frozen && <g className="surface-correction-controls" data-surface-id={selected.id}>{selected.points.map((point, index) => { const next = selected.points[(index + 1) % selected.points.length]; return <g className="surface-edge-control" key={`${selected.id}-edge-${index}`}><line x1={point.x * 1000} y1={point.y * 625} x2={next.x * 1000} y2={next.y * 625} className="surface-edge-hit" vectorEffect="non-scaling-stroke" aria-label={`Sposta linea ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginEdgeDrag(event, selected.id, index)} /><line x1={point.x * 1000} y1={point.y * 625} x2={next.x * 1000} y2={next.y * 625} className="surface-edge" vectorEffect="non-scaling-stroke" aria-hidden="true" /><circle cx={(point.x + next.x) * 500} cy={(point.y + next.y) * 312.5} r="10" className="surface-edge-grip" aria-hidden="true" /></g>; })}{selected.points.map((point, index) => <g key={`${selected.id}-vertex-${index}`}><circle cx={point.x * 1000} cy={point.y * 625} r="34" className="surface-vertex-hit" aria-label={`Sposta punto ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginVertexDrag(event, selected.id, index)} /><circle cx={point.x * 1000} cy={point.y * 625} r="16" className="surface-vertex" aria-hidden="true" /></g>)}</g>}
+                {isCorrectingEdges && selected && !selected.frozen && <g className="surface-correction-controls" data-surface-id={selected.id}>
+                  {selected.points.map((point, index) => { const next = selected.points[(index + 1) % selected.points.length]; return <g className="surface-edge-control" key={`${selected.id}-edge-${index}`}><line x1={point.x * 1000} y1={point.y * 625} x2={next.x * 1000} y2={next.y * 625} className="surface-edge" vectorEffect="non-scaling-stroke" aria-hidden="true" /><line x1={point.x * 1000} y1={point.y * 625} x2={next.x * 1000} y2={next.y * 625} className="surface-edge-hit" vectorEffect="non-scaling-stroke" aria-label={`Sposta linea ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginEdgeDrag(event, selected.id, index)} /></g>; })}
+                  {selected.points.map((point, index) => { const next = selected.points[(index + 1) % selected.points.length]; const midpointX = (point.x + next.x) * 500; const midpointY = (point.y + next.y) * 312.5; return <g key={`${selected.id}-midpoint-${index}`}><circle cx={midpointX} cy={midpointY} r="10" className="surface-edge-grip" aria-hidden="true" /><circle cx={midpointX} cy={midpointY} r="10" className="surface-edge-grip-hit" vectorEffect="non-scaling-stroke" style={{ cursor: 'move', pointerEvents: 'all', touchAction: 'none' }} aria-label={`Sposta punto centrale linea ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginEdgeDrag(event, selected.id, index)} /></g>; })}
+                  {selected.points.map((point, index) => <g key={`${selected.id}-vertex-${index}`}><circle cx={point.x * 1000} cy={point.y * 625} r="34" className="surface-vertex-hit" aria-label={`Sposta punto ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginVertexDrag(event, selected.id, index)} /><circle cx={point.x * 1000} cy={point.y * 625} r="16" className="surface-vertex" aria-hidden="true" /></g>)}
+                </g>}
                 {draft.length > 0 && <><polyline points={pointsToSvg(draft)} fill="none" stroke="#d7f05c" strokeWidth="5" vectorEffect="non-scaling-stroke" />{draft.map((point, index) => <circle key={index} cx={point.x * 1000} cy={point.y * 625} r="9" className="draft-vertex" />)}</>}
                 {cleanupRegion && <polygon className="cleanup-region" points={pointsToSvg(cleanupRegion.points)} aria-label={`Zona da pulire: ${cleanupRegion.label}`} />}
               </svg>
@@ -2349,14 +2610,14 @@ export function RoomStudio() {
                 const imageUrl = usesSideAsset ? item.sidePreviewUrl : item.cutoutUrl ?? item.previewUrl;
                 return <button key={item.id} type="button" className={`placed-furniture facing-${item.facing} ${usesSideAsset ? 'has-side-preview' : ''} ${selectedFurnitureId === item.id ? 'is-selected' : ''} ${item.frozen ? 'is-frozen' : ''}`} style={{ left: `${item.x * 100}%`, top: `${item.y * 100}%`, width: `${item.scale}%`, transform: item.rotation ? `translate(-50%,-100%) rotate(${item.rotation}deg)` : 'translate(-50%,-100%)' }} aria-label={`Sposta ${item.name}`} onClick={(event) => { event.stopPropagation(); setSelectedFurnitureId(item.id); }} onPointerDown={(event) => beginFurnitureDrag(event, item.id)} onPointerMove={moveFurniture} onPointerUp={endFurnitureDrag} onPointerCancel={endFurnitureDrag}>{imageUrl ? <img src={imageUrl} alt="" /> : <span className="placed-furniture-placeholder">▰</span>}<strong>{item.name}</strong><span className="furniture-facing-badge">{furnitureFacingLabels[item.facing]}</span><i aria-hidden="true" /></button>;
               })}</div>}
-              {pendingFurniture && <div className="placement-hint" role="status"><strong>Tocca il punto sul pavimento</strong><span>Posiziona “{pendingFurniture.name}”</span><button type="button" onClick={(event) => { event.stopPropagation(); setPendingFurniture(null); setNotice('Inserimento mobile annullato.'); }}>Annulla</button></div>}
+              {activeStep === 3 && pendingFurniture && <div className="placement-hint" role="status"><strong>Tocca il punto sul pavimento</strong><span>Posiziona “{pendingFurniture.name}”</span><button type="button" onClick={(event) => { event.stopPropagation(); setPendingFurniture(null); setError(null); setNotice('Inserimento mobile annullato.'); }}>Annulla</button></div>}
               <div className="import-status"><span className="status-dot" /><div><strong>{showProcessedPreview ? processedLabel : 'Originale intatto'}</strong><small>{showProcessedPreview ? 'Elaborazione IA · originale sempre disponibile' : importedCaption}</small></div></div>
               <button className="replace-button" type="button" onClick={() => roomInputRef.current?.click()}>↑ Carica la tua foto</button>
               {processedPreview && <div className="before-after-toggle" aria-label="Confronta originale e risultato"><button type="button" className={!showProcessedPreview ? 'is-active' : ''} onClick={showOriginalRoom}>Originale</button><button type="button" className={showProcessedPreview ? 'is-active' : ''} onClick={showProcessedRoom}>{processedLabel}</button></div>}
             </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Inizia da ciò che hai</p><h1>Cosa vuoi caricare?</h1><p>Scegli una foto della stanza oppure una planimetria. L’originale resterà sempre intatto.</p><div className="source-actions"><label className="source-card is-primary" htmlFor="room-file"><span>▣</span><strong>Libreria foto</strong><small>Scegli una foto già presente su iPhone o iPad</small></label><label className="source-card" htmlFor="camera-file"><span>●</span><strong>Scatta foto</strong><small>Usa direttamente la fotocamera posteriore</small></label><label className="source-card" htmlFor="floorplan-file"><span>⌗</span><strong>Planimetria</strong><small>Crea automaticamente la stanza vuota</small></label></div>{localCleaningTestAvailable && <button className="demo-button" type="button" onClick={() => void loadLocalCleaningTest()}>Apri questa prova dentro Materia</button>}<button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>JPG, PNG o HEIC · massimo 20 MB</small></div></>}
             {isDraggingFile && <div className="drop-overlay"><strong>Rilascia per importare</strong><span>La foto resterà nel browser.</span></div>}
             {(isImportingRoom || isCreatingFloorplanRoom) && <div className="processing-overlay" role="status"><span className="processing-spinner" /><strong>{isCreatingFloorplanRoom ? 'Creo la stanza dalla planimetria…' : 'Preparo la foto…'}</strong><small>{isCreatingFloorplanRoom ? 'Riconosco pareti, porte e finestre. Può richiedere circa un minuto.' : 'Le immagini grandi vengono ottimizzate per evitare blocchi.'}</small></div>}
-          </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
+          </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span>{activeStep === 4 && <button className="file-error-retry" type="button" onClick={() => void createFinalRender()} disabled={isRendering}>{isRendering ? 'Riprovo…' : 'Riprova render'}</button>}<button className="file-error-close" type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
           <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onRoomInput} /><input ref={cameraInputRef} id="camera-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" capture="environment" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onMaterialInput} /><input ref={furnitureInputRef} id="furniture-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onFurnitureInput} />
           {room?.sourceType === 'photo' && activeStep === 2 && <section className="empty-room-choice" aria-label="Svuota la stanza oppure continua"><div><strong>Vuoi svuotare la stanza?</strong><span>È facoltativo: puoi mantenere la foto originale e andare subito ai prodotti.</span></div><div className="empty-room-actions"><button className="skip-empty-room" type="button" onClick={skipEmptyRoom} disabled={isEmptyingRoom || isCleaningRegion}>Salta · usa foto originale →</button><button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom || isCleaningRegion}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button>{!cleanupRegion && <button type="button" className={isPickingCleanup ? 'is-active' : ''} onClick={() => { setIsPickingCleanup((current) => !current); setError(null); setNotice(isPickingCleanup ? 'Selezione annullata.' : processedPreview ? 'Tocca il centro dell’oggetto rimasto nella foto.' : 'Tocca il centro di un mobile nella foto: lo delimito e lo rimuovo.'); }} disabled={isDetectingCleanup || isCleaningRegion}>{isDetectingCleanup ? 'Riconosco…' : isPickingCleanup ? 'Annulla selezione' : processedPreview ? '◎ Pulisci un residuo' : '◎ Indica un mobile'}</button>}{cleanupRegion && <><button type="button" className="cleanup-confirm" onClick={() => void cleanResidualRegion()} disabled={isCleaningRegion}>{isCleaningRegion ? 'Pulisco…' : 'Pulisci selezione'}</button><button type="button" onClick={() => setCleanupRegion(null)} disabled={isCleaningRegion}>Annulla</button></>}</div></section>}
           {geometryDetectionStatus === 'fallback' && room?.sourceType === 'photo' && (activeStep === 2 || activeStep === 3) && <div className="geometry-fallback-warning" role="status"><div><strong>Contorni provvisori</strong><span>Il riconoscimento IA di questa foto non è riuscito. Non li presento come misure automatiche: correggili trascinando linee o pallini, oppure riprova.</span></div><button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview}>{isAutoFitting ? 'Riconosco…' : '✦ Riprova IA'}</button></div>}
@@ -2384,7 +2645,7 @@ export function RoomStudio() {
               <div className="property-title"><span>Come vuoi inserire il prodotto?</span></div>
               <div className="product-entry-cards" aria-label="Modalità inserimento prodotto">
                 <button type="button" className="product-entry-card is-primary" onClick={() => document.querySelector<HTMLInputElement>('.guided-search input')?.focus()}><span>⌕</span><strong>Cerca online</strong><small>Marca, modello, colore o link</small></button>
-                <button type="button" className="product-entry-card" onClick={() => furnitureInputRef.current?.click()}><span>▣</span><strong>Foto prodotto</strong><small>BRIA rimuove lo sfondo</small></button>
+                <button type="button" className="product-entry-card" onClick={() => furnitureInputRef.current?.click()} disabled={isClassifyingProduct}><span>▣</span><strong>{isClassifyingProduct ? 'Riconosco…' : 'Foto prodotto'}</strong><small>Capisce materiale o mobile</small></button>
                 <button type="button" className="product-entry-card" onClick={() => materialInputRef.current?.click()}><span>▦</span><strong>Campione materiale</strong><small>Per pavimenti e pareti</small></button>
               </div>
               <div className="product-search-heading"><strong>Ricerca normale</strong><span>oppure incolla il link del prodotto</span></div>
@@ -2403,7 +2664,7 @@ export function RoomStudio() {
               <button className="apply-button secondary-apply" type="button" aria-label={`Applica a ${selected.name}`} onClick={applyMaterial} disabled={!material || selected.frozen || materialNeedsSample}>Oppure applica solo a {selected.name}</button>
               <p className="material-search-note">L’app sceglie pavimento o muro, corregge prospettiva e scala, e lascia identiche tutte le zone Freeze. La resa è fedele al prodotto solo quando compare “Texture ufficiale verificata” o usi un tuo campione.</p>
             </div>
-            <div className="property-section furniture-section"><div className="property-title"><span>Mobili nella stanza</span><span className="editable-badge">{placedFurniture.length + customRequests.length} scelti</span></div><button className="upload-furniture-button" type="button" onClick={() => furnitureInputRef.current?.click()}>＋ Carica la foto di un mobile</button>{placedFurniture.length || customRequests.length ? <div className="selected-assets">{placedFurniture.map((item, index) => <button type="button" className={selectedFurnitureId === item.id ? 'is-selected' : ''} key={item.id} onClick={() => setSelectedFurnitureId(item.id)}>{item.name} {placedFurniture.filter((candidate) => candidate.name === item.name).length > 1 ? index + 1 : ''}<span>{item.frozen ? '◆' : '›'}</span></button>)}{customRequests.map((item) => <button type="button" key={item} onClick={() => setCustomRequests((current) => current.filter((name) => name !== item))}>{item}<span>×</span></button>)}</div> : <p className="no-results">Cerca un mobile, toccalo e poi indica direttamente il punto sul pavimento.</p>}{selectedFurniture && <div className="furniture-controls"><div className="furniture-control-heading"><strong>{selectedFurniture.name}</strong><span>{selectedFurniture.frozen ? 'Posizione bloccata' : 'Tocca i comandi per sistemarlo'}</span></div><div className="furniture-facing-controls" role="group" aria-label="Parete di orientamento"><span>Schienale verso</span>{(Object.keys(furnitureFacingLabels) as FurnitureFacing[]).map((facing) => <button type="button" key={facing} className={selectedFurniture.facing === facing ? 'is-active' : ''} onClick={() => orientSelectedFurniture(facing)} disabled={selectedFurniture.frozen}>{facing === 'front-wall' ? '↑ Frontale' : facing === 'left-wall' ? '↙ Sinistra' : '↘ Destra'}</button>)}</div><div className="furniture-ipad-pad" role="group" aria-label="Comandi rapidi per il mobile"><button type="button" onClick={() => rotateSelectedFurniture(-5)} disabled={selectedFurniture.frozen || selectedFurniture.rotation <= -35} aria-label="Ruota mobile a sinistra">↶</button><button type="button" onClick={() => nudgeSelectedFurniture(0, -.025)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile in alto">↑</button><button type="button" onClick={() => rotateSelectedFurniture(5)} disabled={selectedFurniture.frozen || selectedFurniture.rotation >= 35} aria-label="Ruota mobile a destra">↷</button><button type="button" onClick={() => nudgeSelectedFurniture(-.025, 0)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile a sinistra">←</button><button type="button" className="furniture-angle-reset" onClick={() => updateSelectedFurniture({ rotation: 0 })} disabled={selectedFurniture.frozen || selectedFurniture.rotation === 0} aria-label="Raddrizza mobile">{Math.round(selectedFurniture.rotation)}°</button><button type="button" onClick={() => nudgeSelectedFurniture(.025, 0)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile a destra">→</button><button type="button" onClick={() => resizeSelectedFurniture(-6)} disabled={selectedFurniture.frozen} aria-label="Rimpicciolisci mobile">−</button><button type="button" onClick={() => nudgeSelectedFurniture(0, .025)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile in basso">↓</button><button type="button" onClick={() => resizeSelectedFurniture(6)} disabled={selectedFurniture.frozen} aria-label="Ingrandisci mobile">＋</button></div><div className="furniture-quick-actions"><button className={`auto-size-furniture-button ${selectedFurniture.autoScale ? 'is-active' : ''}`} type="button" onClick={restoreAutomaticFurnitureScale} disabled={selectedFurniture.frozen || selectedFurniture.autoScale} aria-label="Misura automatica">{selectedFurniture.autoScale ? `✓ Auto ${Math.round(selectedFurniture.scale)}%` : '◎ Auto'}</button><button className={`freeze-furniture-button ${selectedFurniture.frozen ? 'is-active' : ''}`} type="button" onClick={() => updateSelectedFurniture({ frozen: !selectedFurniture.frozen })}>{selectedFurniture.frozen ? '◇ Sblocca' : '◆ Blocca'}</button><button className="remove-furniture-button" type="button" onClick={removeSelectedFurniture} disabled={selectedFurniture.frozen} aria-label="Rimuovi mobile">⌫ Elimina</button></div></div>}<p className="material-search-note">Posizione, parete, angolo e dimensione saranno usati nel render finale.</p></div>
+            <div className="property-section furniture-section"><div className="property-title"><span>Mobili nella stanza</span><span className="editable-badge">{placedFurniture.length + customRequests.length} scelti</span></div><button className="upload-furniture-button" type="button" onClick={() => furnitureInputRef.current?.click()} disabled={isClassifyingProduct}>{isClassifyingProduct ? 'Riconosco e preparo la foto…' : '＋ Carica la foto di un prodotto'}</button>{placedFurniture.length || customRequests.length ? <div className="selected-assets">{placedFurniture.map((item, index) => <button type="button" className={selectedFurnitureId === item.id ? 'is-selected' : ''} key={item.id} onClick={() => setSelectedFurnitureId(item.id)}>{item.name} {placedFurniture.filter((candidate) => candidate.name === item.name).length > 1 ? index + 1 : ''}<span>{item.frozen ? '◆' : '›'}</span></button>)}{customRequests.map((item) => <button type="button" key={item} onClick={() => setCustomRequests((current) => current.filter((name) => name !== item))}>{item}<span>×</span></button>)}</div> : <p className="no-results">Carica una foto: l’app riconosce se è un mobile oppure un materiale e sceglie il flusso corretto.</p>}{selectedFurniture && <div className="furniture-controls"><div className="furniture-control-heading"><strong>{selectedFurniture.name}</strong><span>{selectedFurniture.frozen ? 'Posizione bloccata' : 'Tocca i comandi per sistemarlo'}</span></div><div className="furniture-facing-controls" role="group" aria-label="Parete di orientamento"><span>Schienale verso</span>{(Object.keys(furnitureFacingLabels) as FurnitureFacing[]).map((facing) => <button type="button" key={facing} className={selectedFurniture.facing === facing ? 'is-active' : ''} onClick={() => orientSelectedFurniture(facing)} disabled={selectedFurniture.frozen}>{facing === 'front-wall' ? '↑ Frontale' : facing === 'left-wall' ? '↙ Sinistra' : '↘ Destra'}</button>)}</div><div className="furniture-ipad-pad" role="group" aria-label="Comandi rapidi per il mobile"><button type="button" onClick={() => rotateSelectedFurniture(-5)} disabled={selectedFurniture.frozen || selectedFurniture.rotation <= -35} aria-label="Ruota mobile a sinistra">↶</button><button type="button" onClick={() => nudgeSelectedFurniture(0, -.025)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile in alto">↑</button><button type="button" onClick={() => rotateSelectedFurniture(5)} disabled={selectedFurniture.frozen || selectedFurniture.rotation >= 35} aria-label="Ruota mobile a destra">↷</button><button type="button" onClick={() => nudgeSelectedFurniture(-.025, 0)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile a sinistra">←</button><button type="button" className="furniture-angle-reset" onClick={() => updateSelectedFurniture({ rotation: 0 })} disabled={selectedFurniture.frozen || selectedFurniture.rotation === 0} aria-label="Raddrizza mobile">{Math.round(selectedFurniture.rotation)}°</button><button type="button" onClick={() => nudgeSelectedFurniture(.025, 0)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile a destra">→</button><button type="button" onClick={() => resizeSelectedFurniture(-6)} disabled={selectedFurniture.frozen} aria-label="Rimpicciolisci mobile">−</button><button type="button" onClick={() => nudgeSelectedFurniture(0, .025)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile in basso">↓</button><button type="button" onClick={() => resizeSelectedFurniture(6)} disabled={selectedFurniture.frozen} aria-label="Ingrandisci mobile">＋</button></div><div className="furniture-quick-actions"><button className={`auto-size-furniture-button ${selectedFurniture.autoScale ? 'is-active' : ''}`} type="button" onClick={restoreAutomaticFurnitureScale} disabled={selectedFurniture.frozen || selectedFurniture.autoScale} aria-label="Misura automatica">{selectedFurniture.autoScale ? `✓ Auto ${Math.round(selectedFurniture.scale)}%` : '◎ Auto'}</button><button className={`freeze-furniture-button ${selectedFurniture.frozen ? 'is-active' : ''}`} type="button" onClick={() => updateSelectedFurniture({ frozen: !selectedFurniture.frozen })}>{selectedFurniture.frozen ? '◇ Sblocca' : '◆ Blocca'}</button><button className="remove-furniture-button" type="button" onClick={removeSelectedFurniture} disabled={selectedFurniture.frozen} aria-label="Rimuovi mobile">⌫ Elimina</button></div></div>}<p className="material-search-note">Posizione, parete, angolo e dimensione saranno usati nel render finale.</p></div>
             <div className="property-section metrics"><div><span>Vertici</span><strong>{selected.points.length}</strong></div><div><span>Stato</span><strong>{selected.frozen ? 'Lock' : 'Edit'}</strong></div><div><span>Texture</span><strong>{selected.materialId ? 'Sì' : 'No'}</strong></div></div><button className="remove-button" type="button" onClick={deleteSelected} disabled={selected.frozen}>Elimina superficie</button></> : room ? <div className="empty-properties"><strong>Seleziona un contorno</strong><p>Tocca una superficie sulla foto o sceglila dall’elenco. Puoi anche disegnarne una nuova.</p></div> : null}
           {room && <button className="remove-room-button" type="button" onClick={removeRoom}>Chiudi progetto</button>}
           <div className="phase-card"><span className="phase-index">0.3</span><div><p className="eyebrow">Modalità prova</p><strong>IA e Freeze pronti</strong><p>Ricerca prodotti, stanza vuota e render vengono elaborati dal server senza mostrare chiavi nell’app.</p></div></div>

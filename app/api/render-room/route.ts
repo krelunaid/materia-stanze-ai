@@ -22,6 +22,8 @@ export async function POST(request: Request) {
     const incoming = await request.formData();
     const image = incoming.get('image');
     const mask = incoming.get('mask');
+    const materialReference = incoming.get('materialReference');
+    const combinedReference = incoming.get('combinedReference');
     const furnitureReference = incoming.get('furnitureReference');
     const furnitureReferenceName = String(incoming.get('furnitureReferenceName') ?? '').slice(0, 200);
     const furnitureReferenceUrl = String(incoming.get('furnitureReferenceUrl') ?? '').slice(0, 2000);
@@ -43,19 +45,45 @@ export async function POST(request: Request) {
     if (furnitureReference instanceof File && (!furnitureReference.type.startsWith('image/') || furnitureReference.size > 20 * 1024 * 1024)) {
       return json({ message: 'La fotografia del mobile non è valida.' }, headers, 400);
     }
+    if (materialReference instanceof File && (!materialReference.type.startsWith('image/') || materialReference.size > 12 * 1024 * 1024)) {
+      return json({ message: 'Il campione materiale non è valido.' }, headers, 400);
+    }
+    if (combinedReference !== null && (!(combinedReference instanceof File)
+      || !combinedReference.size
+      || !combinedReference.type.startsWith('image/')
+      || combinedReference.size > 12 * 1024 * 1024)) {
+      return json({ message: 'Il foglio di riferimento combinato non è valido.' }, headers, 400);
+    }
+    if (combinedReference instanceof File && (!materials || !furniture || referenceType === 'metadata-only')) {
+      return json({ message: 'Il foglio combinato richiede un materiale visivo e un mobile da inserire.' }, headers, 400);
+    }
+    if (combinedReference instanceof File && !(furnitureReference instanceof File)) {
+      return json({ message: 'Il ritaglio originale del mobile non è arrivato per il controllo qualità.' }, headers, 400);
+    }
+    if (referenceType === 'uploaded-sample' && materials
+      && !(materialReference instanceof File) && !(combinedReference instanceof File)) {
+      return json({ message: 'Il campione materiale non è arrivato al server. Ricaricalo e riprova.' }, headers, 400);
+    }
 
     const prompt = [
       'Create the final photorealistic interior render by editing this exact room photograph.',
       'Preserve the camera position, lens, crop, room geometry, walls, ceiling, floor, windows, doors, structural openings and lighting direction.',
       materials ? `Apply these user-selected products to their named surfaces, respecting real scale, joints, laying direction, perspective and finish:\n${materials}` : 'Keep every existing architectural material unchanged.',
-      imageUrl && referenceType === 'verified-texture' ? 'Use the supplied verified flat texture as the exact material reference.' : '',
-      imageUrl && referenceType === 'uploaded-sample' ? 'Use the supplied user sample as the material reference.' : '',
+      combinedReference instanceof File ? [
+        'The supplied combined reference image is one technical two-panel sheet, not a room scene and not a layout to reproduce.',
+        'LEFT PANEL = the exact material sample. Use only this left panel for the color, grain, pattern and finish applied to the named architectural surfaces.',
+        `RIGHT PANEL = the exact furniture cutout${furnitureReferenceName ? ` for “${furnitureReferenceName}”` : ''}. Use only this right panel for the furniture identity, proportions, parts and finish.`,
+        'Never copy the sheet background, divider, margins, labels or either panel as a rectangle. Extract the material from the left and the physical object from the right, then integrate each only in its requested masked region.',
+      ].join(' ') : '',
+      !(combinedReference instanceof File) && imageUrl && referenceType === 'verified-texture' ? 'Use the supplied verified flat texture as the exact material reference.' : '',
+      !(combinedReference instanceof File) && materialReference instanceof File && !(furnitureReference instanceof File) && referenceType === 'uploaded-sample' ? 'Use the supplied user sample as the material reference.' : '',
+      !(combinedReference instanceof File) && materialReference instanceof File && furnitureReference instanceof File && referenceType === 'uploaded-sample' ? 'Use the named material description conservatively; the available visual-reference slot is reserved for the exact furniture cutout.' : '',
       materials && referenceType === 'metadata-only' ? 'No verified texture is supplied. Keep any product visualization restrained and approximate; do not invent distinctive graphics or claim exact visual fidelity.' : '',
       roomMeasurements ? `Use this room-scale calibration to size products, furniture, joints and repeating patterns: ${roomMeasurements}. It describes the existing room and must never cause its geometry, crop or perspective to change.` : '',
       furniture ? `Insert these furniture elements at the exact user-selected image anchors, approximate sizes and floor-plane orientations below. Treat x/y as percentages of the full source photograph; keep each item's floor contact point at its anchor and preserve the user's composition. Orientation is yaw on the floor plane: never roll or tilt the furniture image.\n${furniture}` : '',
       furniture ? 'MANDATORY: every listed furniture item must be clearly visible in the final photograph, entirely inside its transparent mask window. A clean room with the furniture omitted is an invalid result. Put the furniture floor-contact point exactly at the requested anchor and keep its real product proportions. Use the editable floor band beneath it to create a visible, soft contact shadow and ambient occlusion at every leg or base contact. Match the shadow direction, softness, intensity and color to the existing room light; never leave a bright gap or a uniformly sharp pasted lower edge.' : '',
-      furnitureReference instanceof File ? `Use the supplied furniture reference image to preserve the exact appearance of “${furnitureReferenceName || 'the selected furniture'}”. It may already be a transparent cutout: never recreate its former catalog background. Integrate only the physical object with correct floor contact, perspective, scale, room lighting and a natural contact shadow.` : '',
-      furnitureReferenceUrl && !(furnitureReference instanceof File) ? `Use the supplied online product photograph to preserve the appearance and proportions of “${furnitureReferenceName || 'the selected furniture'}”; remove its original photo background before integrating it.` : '',
+      !(combinedReference instanceof File) && furnitureReference instanceof File ? `Use the supplied furniture reference image to preserve the exact appearance of “${furnitureReferenceName || 'the selected furniture'}”. It may already be a transparent cutout: never recreate its former catalog background. Integrate only the physical object with correct floor contact, perspective, scale, room lighting and a natural contact shadow.` : '',
+      !(combinedReference instanceof File) && furnitureReferenceUrl && !(furnitureReference instanceof File) ? `Use the supplied online product photograph to preserve the appearance and proportions of “${furnitureReferenceName || 'the selected furniture'}”; remove its original photo background before integrating it.` : '',
       requests ? `Also follow these user requests: ${requests}.` : '',
       protectedAreas ? `These Freeze areas must remain unchanged except for the physically correct foreground occlusion caused by furniture explicitly requested by the user: ${protectedAreas}.` : '',
       'The transparent parts of the technical mask show the complete and only editable regions and placement windows. Never modify a solid white pixel.',
@@ -65,10 +93,19 @@ export async function POST(request: Request) {
     const editInput = {
       source: image,
       mask: mask instanceof File ? mask : null,
-      referenceImageUrl: (furnitureReferenceUrl && !(furnitureReference instanceof File)
-        ? furnitureReferenceUrl
-        : referenceType === 'metadata-only' ? null : imageUrl) || null,
-      referenceImageFile: furnitureReference instanceof File ? furnitureReference : null,
+      referenceImageUrl: combinedReference instanceof File
+        ? null
+        : (furnitureReferenceUrl && !(furnitureReference instanceof File)
+            ? furnitureReferenceUrl
+            : referenceType === 'metadata-only' ? null : imageUrl) || null,
+      referenceImageFile: combinedReference instanceof File
+        ? combinedReference
+        : furnitureReference instanceof File
+          ? furnitureReference
+          : materialReference instanceof File ? materialReference : null,
+      referenceImageRole: combinedReference instanceof File
+        ? 'combined' as const
+        : furnitureReference instanceof File ? 'furniture' as const : 'material' as const,
       prompt,
       maskExplanation: 'transparent pixels are the complete and only editable product/furniture regions, including a controlled floor band reserved for natural contact shadows; every solid white pixel is protected and must remain unchanged.',
     };

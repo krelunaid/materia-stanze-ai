@@ -22,6 +22,7 @@ export async function POST(request: Request) {
     const incoming = await request.formData();
     const image = incoming.get('image');
     const mask = incoming.get('mask');
+    const materialReference = incoming.get('materialReference');
     const productName = String(incoming.get('productName') ?? '').slice(0, 300);
     const productDescription = String(incoming.get('productDescription') ?? '').slice(0, 1000);
     const targetName = String(incoming.get('targetName') ?? '').slice(0, 150);
@@ -34,6 +35,15 @@ export async function POST(request: Request) {
       : 'metadata-only';
     if (!(image instanceof File) || !(mask instanceof File) || mask.type !== 'image/png') {
       return json({ message: 'Foto o maschera della superficie non valida.' }, headers, 400);
+    }
+    if (materialReference instanceof File && (!materialReference.type.startsWith('image/') || materialReference.size > 12 * 1024 * 1024)) {
+      return json({ message: 'Il campione materiale non è valido.' }, headers, 400);
+    }
+    if (referenceType === 'uploaded-sample' && !(materialReference instanceof File)) {
+      return json({ message: 'Il campione materiale non è arrivato al server. Ricaricalo e riprova.' }, headers, 400);
+    }
+    if (referenceType === 'verified-texture' && !imageUrl) {
+      return json({ message: 'La texture verificata non è disponibile.' }, headers, 400);
     }
 
     const referenceInstruction = referenceType === 'verified-texture'
@@ -58,6 +68,8 @@ export async function POST(request: Request) {
       source: image,
       mask,
       referenceImageUrl: referenceType === 'metadata-only' ? null : imageUrl || null,
+      referenceImageFile: materialReference instanceof File ? materialReference : null,
+      referenceImageRole: 'material',
       prompt,
       maskExplanation: 'the transparent polygon is the only editable target; every solid white pixel is protected and must not be changed.',
     });

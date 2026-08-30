@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { mergeDetectedSurfaces, RoomStudio } from './room-studio';
+import { friendlyRequestError, mergeDetectedSurfaces, RoomStudio } from './room-studio';
 import { geometryForDerivedImage, surfacesMatch } from '../geometry/model';
 
 beforeAll(() => {
@@ -10,7 +10,20 @@ beforeAll(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
+
+function mockMaterialPhotoCrop() {
+  vi.stubGlobal('Image', class {
+    naturalWidth = 1200;
+    naturalHeight = 800;
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    set src(_value: string) { queueMicrotask(() => this.onload?.()); }
+  });
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback) => callback(new Blob(['sample'], { type: 'image/png' })));
+}
 
 describe('RoomStudio', () => {
   it('replaces editable geometry after emptying while preserving Freeze areas', () => {
@@ -61,6 +74,11 @@ describe('RoomStudio', () => {
     render(<RoomStudio />);
     expect(screen.getByRole('heading', { name: 'Cosa vuoi caricare?' })).toBeInTheDocument();
     expect(screen.getByLabelText('Superfici della stanza')).toBeInTheDocument();
+  });
+
+  it('translates the iOS network error without losing the project', () => {
+    expect(friendlyRequestError(new Error('The network connection was lost.')).message)
+      .toBe('Connessione interrotta. La stanza resta aperta: controlla la rete e riprova l’operazione.');
   });
 
   it('rejects an unsupported file with an accessible error', () => {
@@ -318,6 +336,26 @@ describe('RoomStudio', () => {
     expect(screen.getByRole('button', { name: 'Crea render reale con IA' })).toBeInTheDocument();
   });
 
+  it('does not enter Render while a furniture photo still needs a floor position', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+    fireEvent.change(screen.getByLabelText('Cerca materiali, colori o mobili'), { target: { value: 'divano' } });
+    fireEvent.click(screen.getByRole('button', { name: /Divano chiaro/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Render/ }));
+
+    expect(screen.getByRole('button', { name: /Prodotti/ })).toHaveClass('is-active');
+    expect(screen.getByRole('button', { name: /Render/ })).not.toHaveClass('is-active');
+    expect(screen.getByRole('alert')).toHaveTextContent('Prima posiziona “Divano chiaro”');
+    expect(screen.getByText('Tocca il punto sul pavimento')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Annulla' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Render/ }));
+    expect(screen.getByRole('button', { name: /Render/ })).toHaveClass('is-active');
+    expect(screen.getByRole('dialog', { name: 'Crea il render reale' })).toBeInTheDocument();
+  });
+
   it('uses one search for furniture and accepts a free-form render request', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
@@ -442,6 +480,129 @@ describe('RoomStudio', () => {
     expect(screen.getByRole('button', { name: /Campione materiale/ })).toBeInTheDocument();
   });
 
+  it('never places the full rectangular product photo when furniture cutout fails', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/capabilities')) {
+        return new Response(JSON.stringify({ aiReady: true, providerLabel: 'Grok' }), { status: 200 });
+      }
+      if (url.includes('/api/classify-product')) {
+        return new Response(JSON.stringify({
+          kind: 'furniture', category: 'Arredi', confidence: .96, usableSample: false,
+          sampleBounds: { left: 0, top: 0, right: 0, bottom: 0 }, label: 'Divano chiaro', reason: 'Mobile riconoscibile.',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.includes('/api/clean-product')) {
+        return new Response(JSON.stringify({ message: 'Scontorno non disponibile.' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+    fireEvent.change(document.querySelector('#furniture-file') as HTMLInputElement, {
+      target: { files: [new File(['photo'], 'divano.jpg', { type: 'image/jpeg' })] },
+    });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Non inserisco la foto intera');
+    expect(screen.queryByText('Tocca il punto sul pavimento')).not.toBeInTheDocument();
+    expect(document.querySelector('.placed-furniture')).not.toBeInTheDocument();
+  });
+
+  it('keeps Products active while a product photo is still being recognized', async () => {
+    let completeClassification: ((response: Response) => void) | undefined;
+    const classification = new Promise<Response>((resolve) => { completeClassification = resolve; });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/capabilities')) {
+        return new Response(JSON.stringify({ aiReady: true, providerLabel: 'Grok' }), { status: 200 });
+      }
+      if (url.includes('/api/classify-product')) return classification;
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+    fireEvent.change(document.querySelector('#furniture-file') as HTMLInputElement, {
+      target: { files: [new File(['photo'], 'prodotto.jpg', { type: 'image/jpeg' })] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Render/ }));
+
+    expect(screen.getByRole('button', { name: /Prodotti/ })).toHaveClass('is-active');
+    expect(screen.getByRole('alert')).toHaveTextContent('Attendi il riconoscimento');
+
+    completeClassification?.(new Response(JSON.stringify({
+      kind: 'unknown', category: 'Arredi', confidence: .4, usableSample: false,
+      sampleBounds: { left: 0, top: 0, right: 0, bottom: 0 }, label: 'Prodotto', reason: 'Incerto',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Non riconosco con sicurezza');
+  });
+
+  it('clears the wait error when classification finishes with an applied floor material', async () => {
+    mockMaterialPhotoCrop();
+    let completeClassification: ((response: Response) => void) | undefined;
+    const classification = new Promise<Response>((resolve) => { completeClassification = resolve; });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/capabilities')) {
+        return new Response(JSON.stringify({ aiReady: true, providerLabel: 'Grok' }), { status: 200 });
+      }
+      if (url.includes('/api/classify-product')) return classification;
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+    fireEvent.change(document.querySelector('#furniture-file') as HTMLInputElement, {
+      target: { files: [new File(['photo'], 'travertino.jpg', { type: 'image/jpeg' })] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Render/ }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Attendi il riconoscimento');
+
+    completeClassification?.(new Response(JSON.stringify({
+      kind: 'surface-material', category: 'Pavimenti', confidence: .96, usableSample: true,
+      sampleBounds: { left: .1, top: .1, right: .8, bottom: .8 }, label: 'Travertino chiaro', reason: 'Campione pulito',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    expect(await screen.findByText('Travertino chiaro riconosciuto e applicato automaticamente a Pavimento.')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  });
+
+  it('never falls back to a wall when a floor material has no available floor', async () => {
+    mockMaterialPhotoCrop();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/capabilities')) {
+        return new Response(JSON.stringify({ aiReady: true, providerLabel: 'Grok' }), { status: 200 });
+      }
+      if (url.includes('/api/classify-product')) {
+        return new Response(JSON.stringify({
+          kind: 'surface-material', category: 'Pavimenti', confidence: .97, usableSample: true,
+          sampleBounds: { left: .1, top: .1, right: .85, bottom: .85 }, label: 'Pietra per pavimento', reason: 'Campione pulito',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.pointerDown(document.querySelector('.surface-kind-floor polygon') as SVGPolygonElement);
+    fireEvent.click(screen.getByRole('button', { name: 'Mantieni identico Pavimento' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+    fireEvent.change(document.querySelector('#furniture-file') as HTMLInputElement, {
+      target: { files: [new File(['photo'], 'pietra.jpg', { type: 'image/jpeg' })] },
+    });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Pavimento non è disponibile o è bloccato');
+    for (const wall of document.querySelectorAll('.surface-kind-wall polygon')) {
+      expect(wall.getAttribute('fill')).not.toContain('uploaded-material');
+    }
+    expect(screen.queryByText(/applicato automaticamente a Muro/)).not.toBeInTheDocument();
+  });
+
   it('makes the product target and geometry recovery controls explicit', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
@@ -504,6 +665,47 @@ describe('RoomStudio', () => {
     fireEvent.click(within(guideActions).getByRole('button', { name: '↶ Annulla ultima modifica' }));
     expect(selectedPolygon).toHaveAttribute('points', selectedBefore);
     expect(floorPolygon).toHaveAttribute('points', floorBefore);
+  });
+
+  it('drags the floor side from its small midpoint handle with Apple Pencil', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pavimento' }));
+
+    const guideActions = document.querySelector('.surface-guide-actions') as HTMLDivElement;
+    fireEvent.click(within(guideActions).getByRole('button', { name: '↔ Sposta linee' }));
+    const midpoint = screen.getByLabelText('Sposta punto centrale linea 1 di Pavimento') as unknown as SVGCircleElement;
+    expect(midpoint).toHaveClass('surface-edge-grip-hit');
+    expect(midpoint).toHaveStyle({ pointerEvents: 'all', touchAction: 'none' });
+
+    const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+    const floorPolygon = document.querySelector('.is-selected-surface polygon') as SVGPolygonElement;
+    const floorBefore = floorPolygon.getAttribute('points') as string;
+    const wallPolygons = Array.from(document.querySelectorAll('.surface-kind-wall polygon')) as SVGPolygonElement[];
+    const wallsBefore = wallPolygons.map((polygon) => polygon.getAttribute('points'));
+    const parsePoints = (value: string) => value.split(' ').map((point) => point.split(',').map(Number));
+    const midpointX = Number(midpoint.getAttribute('cx'));
+    const midpointY = Number(midpoint.getAttribute('cy'));
+
+    fireEvent.pointerDown(midpoint, { pointerId: 52, pointerType: 'pen', clientX: midpointX, clientY: midpointY });
+    fireEvent.pointerMove(window, { pointerId: 52, pointerType: 'pen', clientX: midpointX, clientY: midpointY + 30 });
+    fireEvent.pointerUp(window, { pointerId: 52, pointerType: 'pen' });
+
+    const floorAfter = parsePoints(floorPolygon.getAttribute('points') as string);
+    const floorOriginal = parsePoints(floorBefore);
+    expect(floorAfter[0][1]).toBeGreaterThan(floorOriginal[0][1]);
+    expect(floorAfter[1][1]).toBeGreaterThan(floorOriginal[1][1]);
+    expect(floorAfter[0][1] - floorOriginal[0][1]).toBe(floorAfter[1][1] - floorOriginal[1][1]);
+
+    const sharedWallPoints = wallPolygons.flatMap((polygon) => parsePoints(polygon.getAttribute('points') as string));
+    expect(sharedWallPoints).toContainEqual(floorAfter[0]);
+    expect(sharedWallPoints).toContainEqual(floorAfter[1]);
+
+    fireEvent.click(within(guideActions).getByRole('button', { name: '↶ Annulla ultima modifica' }));
+    expect(floorPolygon).toHaveAttribute('points', floorBefore);
+    wallPolygons.forEach((polygon, index) => expect(polygon).toHaveAttribute('points', wallsBefore[index] as string));
   });
 
   it('shows automatic room measurements and accepts one real reference', () => {
