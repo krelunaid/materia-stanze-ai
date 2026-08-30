@@ -1263,7 +1263,6 @@ export async function editImage(provider: AiProvider, input: {
   maskExplanation?: string;
 }) {
   if (provider.id === 'grok') {
-    const aspectRatio = await sourceImageAspectRatio(input.source);
     const images: Array<{ type: 'image_url'; url: string }> = [
       { type: 'image_url', url: await fileToDataUri(input.source) },
     ];
@@ -1283,7 +1282,6 @@ export async function editImage(provider: AiProvider, input: {
       body: JSON.stringify({
         model: 'grok-imagine-image-2.0',
         prompt,
-        aspect_ratio: aspectRatio,
         ...(images.length === 1 ? { image: images[0] } : { images }),
       }),
     });

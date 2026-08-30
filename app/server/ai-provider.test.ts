@@ -513,7 +513,7 @@ describe('getAiProvider', () => {
     expect(thirdPayload.input[0].content[1].text).toContain('Opening-first verification pass');
   });
 
-  it('preserves the source aspect ratio for every Grok image edit', async () => {
+  it('lets Grok image edits preserve the exact source ratio without forcing a preset', async () => {
     const png = new Uint8Array(24);
     png.set([0x89, 0x50, 0x4e, 0x47], 0);
     new DataView(png.buffer).setUint32(16, 600);
@@ -528,7 +528,8 @@ describe('getAiProvider', () => {
     );
 
     const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
-    expect(payload).toMatchObject({ model: 'grok-imagine-image-2.0', aspect_ratio: '3:2' });
+    expect(payload).toMatchObject({ model: 'grok-imagine-image-2.0' });
+    expect(payload).not.toHaveProperty('aspect_ratio');
     expect(chooseSupportedImageAspectRatio(1080, 1920)).toBe('9:16');
   });
 });
