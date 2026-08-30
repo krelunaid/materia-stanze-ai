@@ -926,7 +926,11 @@ export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[]
   ]);
 }
 
-export async function detectRoomSurfaces(provider: AiProvider, image: File) {
+export async function detectRoomSurfaces(
+  provider: AiProvider,
+  image: File,
+  options: { openingAudit?: boolean; source?: 'photo' | 'floorplan-render' } = {},
+) {
   const prompt = [
     'Act as a precise architectural image-plane segmentation engine for an interior-design application.',
     'Trace every visible structural planar surface: the complete floor, each genuinely distinct wall plane, the ceiling only when its plane is actually visible, and visible doors or windows as separate surfaces.',
@@ -999,10 +1003,21 @@ export async function detectRoomSurfaces(provider: AiProvider, image: File) {
     'Check the left and right image edges and every visible room corner at high zoom. Coordinates must be normalized to the complete source image, not a crop.',
     'Return the entire surface list and no comments.',
   ].join('\n');
-  const attempts = await Promise.allSettled([
+  const openingAuditPrompt = [
+    prompt,
+    'This image is an empty room generated from an architectural floor plan. Treat every repeated framed rectangle as a separate physical opening, not as decoration.',
+    'Opening-first verification pass: count every visible door and window before tracing the room planes. Inspect the left wall, frontal wall, right wall and both image edges independently.',
+    'Return one separate four-corner polygon for every complete or partially cropped architectural frame. Keep several similar windows as several windows; never merge distant openings.',
+    'After the opening count, return the complete floor and wall geometry as well so each opening can be attached to its real wall. Return the full surface list and no comments.',
+  ].join('\n\n');
+  const requests = [
     requestGeometry(prompt, 'low', 3000, 50000),
     requestGeometry(`${prompt}\n\n${auditPrompt}`, 'low', 3000, 50000),
-  ]);
+  ];
+  if (options.openingAudit || options.source === 'floorplan-render') {
+    requests.push(requestGeometry(openingAuditPrompt, 'medium', 3400, 60000));
+  }
+  const attempts = await Promise.allSettled(requests);
   const candidates = attempts
     .filter((attempt): attempt is PromiseFulfilledResult<DetectedRoomSurface[]> => attempt.status === 'fulfilled' && attempt.value.length > 0)
     .map((attempt) => attempt.value);

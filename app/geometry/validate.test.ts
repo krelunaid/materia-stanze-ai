@@ -89,6 +89,37 @@ describe('validateRoomGeometry', () => {
     expect(result.surfaces.some((surface) => surface.kind === 'door' || surface.kind === 'window')).toBe(false);
   });
 
+  it('keeps valid openings when a different candidate is rejected', () => {
+    const validWindow: GeometryCandidate = {
+      name: 'Finestra reale', kind: 'window', confidence: .92,
+      points: [{ x: .06, y: .1 }, { x: .3, y: .1 }, { x: .3, y: .46 }, { x: .06, y: .46 }],
+    };
+    const invalidDoor: GeometryCandidate = {
+      name: 'Porta falsa', kind: 'door', confidence: .9,
+      points: [{ x: .72, y: .78 }, { x: .9, y: .78 }, { x: .9, y: .94 }, { x: .72, y: .94 }],
+    };
+    const result = validateRoomGeometry([...base, validWindow, invalidDoor]);
+    expect(result.surfaces.some((surface) => surface.kind === 'window')).toBe(true);
+    expect(result.surfaces.some((surface) => surface.kind === 'door')).toBe(false);
+    expect(result.droppedOpenings).toBe(false);
+  });
+
+  it('keeps repeated windows on the same wall as separate surfaces', () => {
+    const first: GeometryCandidate = {
+      name: 'Finestra sinistra', kind: 'window', confidence: .94,
+      points: [{ x: .04, y: .12 }, { x: .15, y: .12 }, { x: .15, y: .44 }, { x: .04, y: .44 }],
+    };
+    const second: GeometryCandidate = {
+      name: 'Finestra destra', kind: 'window', confidence: .93,
+      points: [{ x: .22, y: .14 }, { x: .35, y: .14 }, { x: .35, y: .46 }, { x: .22, y: .46 }],
+    };
+    const result = validateRoomGeometry([...base, first, second]);
+    const windows = result.surfaces.filter((surface) => surface.kind === 'window');
+    expect(windows).toHaveLength(2);
+    expect(new Set(windows.map((surface) => surface.id)).size).toBe(2);
+    expect(windows.map((surface) => surface.id)).toEqual(['window:left', 'window:left:2']);
+  });
+
   it('rejects a self-intersecting bowtie', () => {
     const bowtie: GeometryCandidate = {
       name: 'Muro impossibile', kind: 'wall', confidence: .9,

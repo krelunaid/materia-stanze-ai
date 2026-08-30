@@ -463,6 +463,29 @@ describe('getAiProvider', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it('runs an opening-first third pass for rooms generated from floorplans', async () => {
+    const geometry = { surfaces: [
+      { name: 'wall', kind: 'wall', confidence: .96, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .7 }, { x: 0, y: .7 }] },
+      { name: 'floor', kind: 'floor', confidence: .96, points: [{ x: 0, y: .7 }, { x: 1, y: .7 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+      { name: 'window', kind: 'window', confidence: .92, points: [{ x: .12, y: .15 }, { x: .3, y: .15 }, { x: .3, y: .5 }, { x: .12, y: .5 }] },
+    ] };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify(geometry) }] }],
+    }), { status: 200 }));
+
+    const result = await detectRoomSurfaces(
+      { id: 'grok', label: 'Grok', apiKey: 'xai-test' },
+      new File(['room'], 'room.jpg', { type: 'image/jpeg' }),
+      { openingAudit: true, source: 'floorplan-render' },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(result.some((surface) => surface.kind === 'window')).toBe(true);
+    const thirdPayload = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body));
+    expect(thirdPayload.reasoning).toEqual({ effort: 'medium' });
+    expect(thirdPayload.input[0].content[1].text).toContain('Opening-first verification pass');
+  });
+
   it('preserves the source aspect ratio for every Grok image edit', async () => {
     const png = new Uint8Array(24);
     png.set([0x89, 0x50, 0x4e, 0x47], 0);

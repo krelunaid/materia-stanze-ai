@@ -1791,13 +1791,15 @@ export function RoomStudio() {
     try {
       const form = new FormData();
       form.append('image', room.file, room.file.name || 'planimetria.png');
-      const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/floorplan-room'), { method: 'POST', body: form }, 180000);
+      const { response, result } = await requestJson<{ image?: string; surfaces?: DetectedSurface[]; message?: string }>(endpoint('/api/floorplan-room'), { method: 'POST', body: form }, 180000);
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Stanza non disponibile.');
 
-      originalSurfacesRef.current = [];
+      const created = clientValidatedSurfaces(result.surfaces ?? [], `floorplan-room-${Date.now()}`);
+      originalSurfacesRef.current = created;
       processedSurfacesRef.current = null;
-      autoFitPreviewRef.current = null;
-      setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setRenameDraft('');
+      autoFitPreviewRef.current = created.length ? result.image : null;
+      const preferred = created.find((surface) => surface.kind === 'floor') ?? created[0] ?? null;
+      setSurfaces(created); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(preferred?.id ?? null); setRenameDraft(preferred?.name ?? '');
       setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota');
       setRoom((current) => current ? {
         ...current,
@@ -1806,7 +1808,10 @@ export function RoomStudio() {
         displaySize: 'creata automaticamente dalla planimetria',
         projectName: `${current.projectName} · stanza`,
       } : current);
-      setNotice('Stanza creata dalla planimetria. Pavimento e pareti vengono riconosciuti automaticamente; correggili solo se serve.');
+      const openingCount = created.filter((surface) => surface.kind === 'door' || surface.kind === 'window').length;
+      setNotice(created.length
+        ? `Stanza creata dalla planimetria: ${created.length} superfici e ${openingCount} aperture riconosciute. Controlla i contorni prima di continuare.`
+        : 'Stanza creata dalla planimetria. Completo ora il riconoscimento di pavimento, pareti, porte e finestre.');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Non sono riuscito a creare la stanza dalla planimetria.');
       setNotice('La planimetria resta modificabile: puoi correggere il perimetro e aggiungere pareti a mano.');

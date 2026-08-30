@@ -1,8 +1,16 @@
-import { editImage, getRenderProvider } from '../../server/ai-provider';
+import { detectRoomSurfaces, editImage, getAiProvider, getRenderProvider, type DetectedRoomSurface } from '../../server/ai-provider';
 import { guardAiRequest, handleAiOptions } from '../../server/ai-api-guard';
 
 function json(body: unknown, headers: Headers, status = 200) {
   return Response.json(body, { status, headers });
+}
+
+function imageDataUriToFile(value: string) {
+  const match = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(value);
+  if (!match) return null;
+  const bytes = Uint8Array.from(atob(match[2]), (character) => character.charCodeAt(0));
+  const extension = match[1] === 'image/png' ? 'png' : match[1] === 'image/webp' ? 'webp' : 'jpg';
+  return new File([bytes], `stanza-generata.${extension}`, { type: match[1] });
 }
 
 export function OPTIONS(request: Request) {
@@ -42,7 +50,17 @@ export async function POST(request: Request) {
       prompt,
       maskExplanation: 'The source image is an architectural floor plan that constrains the generated room geometry.',
     });
-    return json({ image: result, provider: provider.id }, headers);
+    let surfaces: DetectedRoomSurface[] = [];
+    const generatedRoom = imageDataUriToFile(result);
+    const geometryProvider = getAiProvider() ?? provider;
+    if (generatedRoom) {
+      try {
+        surfaces = await detectRoomSurfaces(geometryProvider, generatedRoom, { openingAudit: true, source: 'floorplan-render' });
+      } catch {
+        // The generated image is still useful; the client can retry geometry detection.
+      }
+    }
+    return json({ image: result, surfaces, provider: provider.id }, headers);
   } catch (caught) {
     return json({
       message: caught instanceof Error ? caught.message : 'Non sono riuscito a creare la stanza dalla planimetria.',

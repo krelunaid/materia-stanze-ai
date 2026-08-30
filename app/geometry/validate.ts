@@ -186,6 +186,7 @@ export function validateRoomGeometry<T extends GeometryCandidate>(candidates: T[
   const resemblesDemoLayout = hasDemoRoomLayout(valid);
   let wallIndex = 0;
   let droppedOpenings = false;
+  const usedOpeningIds = new Set<string>();
   for (const candidate of valid) {
     if (candidate.kind === 'floor' && candidate !== floor) continue;
     if (candidate.kind !== 'door' && candidate.kind !== 'window') {
@@ -200,24 +201,29 @@ export function validateRoomGeometry<T extends GeometryCandidate>(candidates: T[
     const slot = inferredSlot(candidate.points);
     const expectedSlot = options.expectedSlots?.[candidate.id ?? ''] ?? options.expectedSlots?.[candidate.kind];
     if (expectedSlot && expectedSlot !== 'extra' && expectedSlot !== slot) {
-      rejected.push({ kind: candidate.kind, reason: 'slot-mismatch' }); droppedOpenings = true; continue;
+      rejected.push({ kind: candidate.kind, reason: 'slot-mismatch' }); continue;
     }
     const openingCenter = center(candidate.points);
     const parents = walls.map((wall) => ({
       wall,
       overlap: openingCoverageInWall(candidate.points, wall.points),
     })).sort((left, right) => right.overlap - left.overlap || right.wall.confidence - left.wall.confidence);
-    const parent = parents[0]?.overlap >= .9 && pointInPolygon(openingCenter, parents[0].wall.points) ? parents[0].wall : undefined;
-    if (!parent) { rejected.push({ kind: candidate.kind, reason: 'opening-without-wall' }); droppedOpenings = true; continue; }
+    const parent = parents[0]?.overlap >= .82 && pointInPolygon(openingCenter, parents[0].wall.points) ? parents[0].wall : undefined;
+    if (!parent) { rejected.push({ kind: candidate.kind, reason: 'opening-without-wall' }); continue; }
     const floorY = floorBoundaryAtX(floor, openingCenter.x);
     const box = bounds(candidate.points);
     if ((candidate.kind === 'window' && floorY !== null && box.bottom > floorY - .025)
       || (candidate.kind === 'door' && floorY !== null && Math.abs(box.bottom - floorY) > .12)) {
-      rejected.push({ kind: candidate.kind, reason: 'opening-floor-mismatch' }); droppedOpenings = true; continue;
+      rejected.push({ kind: candidate.kind, reason: 'opening-floor-mismatch' }); continue;
     }
     const parentSlot = inferredSlot(parent.points);
     const parentId = parent.id && !parent.id.startsWith('demo-') ? parent.id : `wall:${parentSlot}:${walls.indexOf(parent)}`;
-    accepted.push({ ...candidate, id: `${candidate.kind}:${slot}`, slot, parentId } as T);
+    const baseId = candidate.id && !candidate.id.startsWith('demo-') ? candidate.id : `${candidate.kind}:${slot}`;
+    let id = baseId;
+    let duplicate = 2;
+    while (usedOpeningIds.has(id)) id = `${baseId}:${duplicate++}`;
+    usedOpeningIds.add(id);
+    accepted.push({ ...candidate, id, slot, parentId } as T);
   }
   if (droppedOpenings) {
     accepted.filter((candidate) => candidate.kind === 'door' || candidate.kind === 'window')
