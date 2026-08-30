@@ -1213,47 +1213,75 @@ function regionIou(left: DetectedObjectRegion, right: DetectedObjectRegion) {
 
 export async function detectMovableObjectRegions(provider: AiProvider, image: File) {
   const imageUrl = await fileToDataUri(image);
-  const response = await fetch(provider.id === 'grok' ? 'https://api.x.ai/v1/responses' : 'https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: provider.id === 'grok' ? 'grok-4.6' : 'gpt-5.4-mini',
-      input: [{ role: 'user', content: [
-        { type: 'input_image', image_url: imageUrl, detail: 'high' },
-        { type: 'input_text', text: [
-          'Find every visible movable or decorative object that must be removed to make this exact room empty.',
-          'Include beds, sofas, chairs, tables, movable cabinets, lamps, rugs, curtains, pictures, loose objects and partially cropped furniture. Group touching parts of one physical item into one region.',
-          'Never include walls, floor, ceiling, doors, windows, openings, skirting boards, radiators, fixed sanitary fixtures or built-in architectural elements.',
-          'Return a tight clockwise polygon with 4 to 16 normalized points around the complete visible silhouette of each removable object. Add only a small 1-2% inpainting margin.',
-          'Do not return one large room-wide polygon. Keep separate furniture groups separate, even when they overlap visually. Return an empty list only when the room is already empty.',
-          'Return only the structured result.',
-        ].join('\n') },
-      ] }],
-      max_output_tokens: 1800,
-      reasoning: { effort: 'low' },
-      text: { format: { type: 'json_schema', name: 'movable_object_regions', schema: movableObjectRegionsSchema, strict: true } },
-      store: false,
-    }),
-    signal: AbortSignal.timeout(50000),
-  });
-  const payload = await response.json() as ResponsesPayload;
-  if (!response.ok) throw new Error(payload.error?.message ?? 'Riconoscimento automatico dei mobili non disponibile.');
-  const parsed = JSON.parse(responseText(payload).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) as { regions?: DetectedObjectRegion[] };
-  const valid = (parsed.regions ?? []).map((region) => ({
-    label: String(region.label || 'Oggetto').trim().slice(0, 80),
-    confidence: Math.min(1, Math.max(0, Number(region.confidence) || 0)),
-    points: (region.points ?? []).slice(0, 16).map((point) => ({
-      x: Math.min(1, Math.max(0, Number(point.x))), y: Math.min(1, Math.max(0, Number(point.y))),
-    })),
-  })).filter((region) => {
-    const fixedArchitecture = /window|finestr|blind|venezian|persian|shutter|radiator|termosif|sconce|applique|wall lamp|lampada (?:a |da )?parete|door|porta|opening|apertura|skirting|battiscopa|sanitary|sanitari|built[- ]?in|incass/i;
-    if (fixedArchitecture.test(region.label)) return false;
-    if (region.confidence < .55 || !isSimpleRoomPolygon(region.points)) return false;
-    const bounds = regionBounds(region);
-    const area = (bounds.right - bounds.left) * (bounds.bottom - bounds.top);
-    return area >= .002 && area <= .65;
-  }).sort((left, right) => right.confidence - left.confidence);
-  return valid.filter((region, index) => !valid.slice(0, index).some((kept) => regionIou(region, kept) >= .72));
+  const fixedArchitecture = /window|finestr|blind|venezian|persian|shutter|radiator|termosif|sconce|applique|wall lamp|lampada (?:a |da )?parete|door|porta|opening|apertura|skirting|battiscopa|sanitary|sanitari|built[- ]?in|incass/i;
+  const normalize = (regions: DetectedObjectRegion[], minimumConfidence: number) => {
+    const valid = regions.map((region) => ({
+      label: String(region.label || 'Oggetto').trim().slice(0, 80),
+      confidence: Math.min(1, Math.max(0, Number(region.confidence) || 0)),
+      points: (region.points ?? []).slice(0, 16).map((point) => ({
+        x: Math.min(1, Math.max(0, Number(point.x))), y: Math.min(1, Math.max(0, Number(point.y))),
+      })),
+    })).filter((region) => {
+      if (fixedArchitecture.test(region.label)) return false;
+      if (region.confidence < minimumConfidence || !isSimpleRoomPolygon(region.points)) return false;
+      const bounds = regionBounds(region);
+      const area = (bounds.right - bounds.left) * (bounds.bottom - bounds.top);
+      return area >= .002 && area <= .65;
+    }).sort((left, right) => right.confidence - left.confidence);
+    return valid.filter((region, index) => !valid.slice(0, index).some((kept) => regionIou(region, kept) >= .72));
+  };
+  const requestRegions = async (instruction: string, effort: 'low' | 'medium', timeoutMs: number) => {
+    const response = await fetch(provider.id === 'grok' ? 'https://api.x.ai/v1/responses' : 'https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: provider.id === 'grok' ? 'grok-4.6' : 'gpt-5.4-mini',
+        input: [{ role: 'user', content: [
+          { type: 'input_image', image_url: imageUrl, detail: 'high' },
+          { type: 'input_text', text: instruction },
+        ] }],
+        max_output_tokens: 2200,
+        reasoning: { effort },
+        text: { format: { type: 'json_schema', name: 'movable_object_regions', schema: movableObjectRegionsSchema, strict: true } },
+        store: false,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const payload = await response.json() as ResponsesPayload;
+    if (!response.ok) throw new Error(payload.error?.message ?? 'Riconoscimento automatico dei mobili non disponibile.');
+    return JSON.parse(responseText(payload).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) as { regions?: DetectedObjectRegion[] };
+  };
+  const primaryPrompt = [
+    'Find every visible movable or decorative object that must be removed to make this exact room empty.',
+    'Include beds, sofas, chairs, tables, movable cabinets, lamps, rugs, curtains, pictures, loose objects and partially cropped furniture. Group touching parts of one physical item into one region.',
+    'Never include walls, floor, ceiling, doors, windows, openings, skirting boards, radiators, fixed sanitary fixtures or built-in architectural elements.',
+    'Return a tight clockwise polygon with 4 to 16 normalized points around the complete visible silhouette of each removable object. Add only a small 1-2% inpainting margin.',
+    'Do not return one large room-wide polygon. Keep separate furniture groups separate, even when they overlap visually. Return an empty list only when the room is already empty.',
+    'Return only the structured result.',
+  ].join('\n');
+  const recoveryPrompt = [
+    'Recheck the complete interior photograph because a first automatic pass found no removable furniture.',
+    'Inspect the image systematically from left to right and foreground to background. First inventory every bed, mattress, blanket, sofa, chair, table, bedside table, movable wardrobe or cabinet, lamp, rug, curtain, picture and loose object; then trace each visible group.',
+    'Furniture partly hidden, touching another object, cropped by an image edge or covering most of the foreground is still removable and must not be omitted. A bed with bedding is one removable group.',
+    'Exclude fixed architecture: walls, wall coverings, floor, ceiling, doors, windows, openings, skirting, radiators, built-in units and fixed sanitary fixtures.',
+    'For each likely movable group return a tight clockwise 4-to-16-point normalized polygon and an honest confidence. Never return a room-wide polygon. Return an empty list only when careful inspection confirms that the room is already empty.',
+    'Return only the structured result.',
+  ].join('\n');
+
+  let primaryFailure: Error | null = null;
+  try {
+    const primary = await requestRegions(primaryPrompt, 'low', 50000);
+    const regions = normalize(primary.regions ?? [], .5);
+    if (regions.length) return regions;
+  } catch (caught) {
+    primaryFailure = caught instanceof Error ? caught : new Error('Riconoscimento automatico dei mobili non disponibile.');
+  }
+  try {
+    const recovered = await requestRegions(recoveryPrompt, 'medium', 65000);
+    return normalize(recovered.regions ?? [], .4);
+  } catch (caught) {
+    throw primaryFailure ?? (caught instanceof Error ? caught : new Error('Riconoscimento automatico dei mobili non disponibile.'));
+  }
 }
 
 async function remoteImageToDataUri(value: string) {

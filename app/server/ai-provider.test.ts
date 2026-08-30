@@ -431,6 +431,26 @@ describe('getAiProvider', () => {
     expect(result.map((region) => region.label)).toEqual(['Letto', 'Comodino']);
   });
 
+  it('rechecks the full room when the first furniture pass returns empty', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ output: [{ content: [{
+        type: 'output_text', text: JSON.stringify({ regions: [] }),
+      }] }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ output: [{ content: [{
+        type: 'output_text', text: JSON.stringify({ regions: [
+          { label: 'Divano', confidence: .48, points: [{ x: .1, y: .45 }, { x: .82, y: .45 }, { x: .86, y: .9 }, { x: .08, y: .9 }] },
+        ] }),
+      }] }] }), { status: 200 }));
+
+    const result = await detectMovableObjectRegions(
+      { id: 'grok', label: 'Grok', apiKey: 'xai-test' },
+      new File(['room'], 'room.jpg', { type: 'image/jpeg' }),
+    );
+
+    expect(result).toMatchObject([{ label: 'Divano', confidence: .48 }]);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects an opening hallucinated by only one geometry pass', () => {
     const room = [
       { name: 'wall', kind: 'wall' as const, confidence: .96, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .7 }, { x: 0, y: .7 }] },
