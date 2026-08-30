@@ -17,8 +17,9 @@ import { drawImageCover } from '../lib/canvas-draw';
 import { AcceptedRoomFile, formatBytes, validateRoomFile } from '../lib/file-validation';
 import { furnitureEditRect, hasCompatibleImageGeometry, rectPoints } from '../lib/render-geometry';
 import { NormalizedProductBounds, removeConnectedProductBackground } from '../lib/product-cutout';
-import { geometryForDerivedImage } from '../geometry/model';
+import { geometryForDerivedImage, geometrySnapshotsAfterEdit } from '../geometry/model';
 import { buildStoredProject, loadProject, saveProject } from '../geometry/project-store';
+import { openingCoverageInWall, validateRoomGeometry } from '../geometry/validate';
 import {
   isValidPolygon,
   nextSurfaceName,
@@ -71,8 +72,29 @@ type PendingFurniture = { name: string; previewUrl?: string; sidePreviewUrl?: st
 type DragFurniture = { id: string; pointerId: number; offsetX: number; offsetY: number };
 type CleanupRegion = { label: string; points: Point[]; confidence: number };
 type AiStatus = 'checking' | 'ready' | 'missing' | 'unreachable';
-type DetectedSurface = { name: string; kind: SurfaceKind; points: Point[]; confidence: number };
+type DetectedSurface = {
+  id?: string;
+  name: string;
+  kind: SurfaceKind;
+  points: Point[];
+  confidence: number;
+  slot?: Surface['slot'];
+  parentId?: string;
+};
 type ProductSearchCategory = '' | StudioMaterial['category'];
+
+function clientValidatedSurfaces(input: DetectedSurface[], idPrefix: string): Surface[] {
+  const candidates = input.filter((surface) => !surface.id?.startsWith('demo-')).map((surface, index) => ({
+    ...surface,
+    id: surface.id ?? `${idPrefix}-${index}`,
+    confidence: Number.isFinite(surface.confidence) ? surface.confidence : 0,
+  }));
+  return validateRoomGeometry(candidates, { source: 'user' }).surfaces.map((surface) => ({
+    ...surface,
+    frozen: false,
+    source: 'ai' as const,
+  }));
+}
 
 const HOSTED_SITE = 'https://materia-stanze-ai.andreagadducci.chatgpt.site';
 const EMPTY_ROOM_FRAMING_MIN = .64;
@@ -194,6 +216,25 @@ function surfaceCenter(surface: Surface) {
   return surfaceLabelPoint(surface);
 }
 
+function openingSlot(points: Point[]): Surface['slot'] {
+  const x = points.reduce((sum, point) => sum + point.x, 0) / points.length;
+  return x < 1 / 3 ? 'left' : x > 2 / 3 ? 'right' : 'center';
+}
+
+function snapOpeningExtrema(points: Point[]) {
+  const result = points.map((point) => ({ ...point }));
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  return result.map((point) => ({
+    x: minX <= .04 && Math.abs(point.x - minX) < .012 ? 0
+      : maxX >= .96 && Math.abs(point.x - maxX) < .012 ? 1 : point.x,
+    y: minY <= .04 && Math.abs(point.y - minY) < .012 ? 0
+      : maxY >= .96 && Math.abs(point.y - maxY) < .012 ? 1 : point.y,
+  }));
+}
+
 function floorContactYAtX(surface: Surface | undefined, x: number) {
   if (!surface || surface.points.length < 3) return .58;
   const intersections: number[] = [];
@@ -235,14 +276,27 @@ function inheritSurfaceState(detected: Surface[], previous: Surface[]) {
 export function mergeDetectedSurfaces(detected: Surface[], previous: Surface[]) {
   const frozenSurfaces = previous.filter((surface) => surface.frozen);
   const editableSurfaces = previous.filter((surface) => !surface.frozen);
-  const editableDetected = detected.filter((surface) => !frozenSurfaces.some((frozen) => {
+  const frozenMatch = (surface: Surface) => frozenSurfaces.find((frozen) => {
     if (surface.kind !== frozen.kind) return false;
     if (surface.name.toLocaleLowerCase('it') === frozen.name.toLocaleLowerCase('it')) return true;
     const center = surfaceCenter(surface);
     const frozenCenter = surfaceCenter(frozen);
     return Math.hypot(center.x - frozenCenter.x, center.y - frozenCenter.y) < .22;
-  }));
-  return [...inheritSurfaceState(editableDetected, editableSurfaces), ...frozenSurfaces];
+  });
+  const editableDetected = detected.filter((surface) => !frozenMatch(surface));
+  const inherited = inheritSurfaceState(editableDetected, editableSurfaces);
+  const inheritedIds = new Map<string, string>();
+  editableDetected.forEach((surface, index) => {
+    if (surface.id) inheritedIds.set(surface.id, inherited[index]?.id ?? surface.id);
+  });
+  detected.filter((surface) => frozenMatch(surface)).forEach((surface) => {
+    const frozen = frozenMatch(surface);
+    if (surface.id && frozen) inheritedIds.set(surface.id, frozen.id);
+  });
+  const remapped = inherited.map((surface) => surface.parentId && inheritedIds.has(surface.parentId)
+    ? { ...surface, parentId: inheritedIds.get(surface.parentId) }
+    : surface);
+  return [...remapped, ...frozenSurfaces];
 }
 
 const guidedPresets: Array<Omit<Surface, 'id'>> = [
@@ -467,9 +521,72 @@ async function framingSimilarity(originalSource: string, generatedSource: string
   return colorSimilarity * .42 + edgeSimilarity * .58;
 }
 
+function colorStabilizedRoomLayer(
+  original: HTMLImageElement,
+  generated: HTMLImageElement,
+  width: number,
+  height: number,
+) {
+  const originalCanvas = document.createElement('canvas');
+  const generatedCanvas = document.createElement('canvas');
+  originalCanvas.width = generatedCanvas.width = width;
+  originalCanvas.height = generatedCanvas.height = height;
+  const originalContext = originalCanvas.getContext('2d', { willReadFrequently: true });
+  const generatedContext = generatedCanvas.getContext('2d', { willReadFrequently: true });
+  if (!originalContext || !generatedContext) return generatedCanvas;
+  drawImageCover(originalContext, original, width, height);
+  drawImageCover(generatedContext, generated, width, height);
+  const originalImage = originalContext.getImageData(0, 0, width, height);
+  const generatedImage = generatedContext.getImageData(0, 0, width, height);
+  const sourceSum = [0, 0, 0]; const sourceSquare = [0, 0, 0];
+  const generatedSum = [0, 0, 0]; const generatedSquare = [0, 0, 0];
+  let samples = 0;
+
+  // Furniture normally occupies the lower centre. Calibrate against the top
+  // and outer architectural bands, which should retain the camera's original
+  // exposure and white balance after an empty-room edit.
+  const stride = Math.max(1, Math.round(Math.max(width, height) / 420));
+  for (let y = 0; y < height; y += stride) {
+    for (let x = 0; x < width; x += stride) {
+      if (y >= height * .42 && x >= width * .1 && x <= width * .9) continue;
+      const offset = (y * width + x) * 4;
+      const sourceLuma = originalImage.data[offset] * .2126 + originalImage.data[offset + 1] * .7152 + originalImage.data[offset + 2] * .0722;
+      const generatedLuma = generatedImage.data[offset] * .2126 + generatedImage.data[offset + 1] * .7152 + generatedImage.data[offset + 2] * .0722;
+      if (Math.abs(sourceLuma - generatedLuma) > 72) continue;
+      for (let channel = 0; channel < 3; channel += 1) {
+        const source = originalImage.data[offset + channel];
+        const result = generatedImage.data[offset + channel];
+        sourceSum[channel] += source; sourceSquare[channel] += source * source;
+        generatedSum[channel] += result; generatedSquare[channel] += result * result;
+      }
+      samples += 1;
+    }
+  }
+  if (samples < 128) return generatedCanvas;
+  const correction = [0, 1, 2].map((channel) => {
+    const sourceMean = sourceSum[channel] / samples;
+    const resultMean = generatedSum[channel] / samples;
+    const sourceDeviation = Math.sqrt(Math.max(1, sourceSquare[channel] / samples - sourceMean * sourceMean));
+    const resultDeviation = Math.sqrt(Math.max(1, generatedSquare[channel] / samples - resultMean * resultMean));
+    const gain = Math.min(1.12, Math.max(.88, sourceDeviation / resultDeviation));
+    return { gain, offset: sourceMean - resultMean * gain };
+  });
+  for (let offset = 0; offset < generatedImage.data.length; offset += 4) {
+    for (let channel = 0; channel < 3; channel += 1) {
+      generatedImage.data[offset + channel] = Math.min(255, Math.max(0, Math.round(
+        generatedImage.data[offset + channel] * correction[channel].gain + correction[channel].offset,
+      )));
+    }
+  }
+  generatedContext.putImageData(generatedImage, 0, 0);
+  return generatedCanvas;
+}
+
 async function createGeometryInput(source: string) {
   const image = await loadImageSource(source);
-  const maximumSide = 1024;
+  // Thin jambs and open doors disappear too easily at 1024 px. Keep one
+  // EXIF-corrected working image large enough for architectural edges.
+  const maximumSide = 1536;
   const scale = Math.min(1, maximumSide / Math.max(image.naturalWidth, image.naturalHeight));
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
@@ -477,7 +594,7 @@ async function createGeometryInput(source: string) {
   const context = canvas.getContext('2d');
   if (!context) throw new Error('Non posso preparare la foto per il riconoscimento.');
   context.drawImage(image, 0, 0, canvas.width, canvas.height);
-  const result = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', .82));
+  const result = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', .9));
   if (!result) throw new Error('Non posso preparare la foto per il riconoscimento.');
   return result;
 }
@@ -556,6 +673,7 @@ export function RoomStudio() {
   const [processedPreview, setProcessedPreview] = useState<string | null>(null);
   const [processedLabel, setProcessedLabel] = useState('Stanza vuota');
   const [showProcessedPreview, setShowProcessedPreview] = useState(false);
+  const [localCleaningTestAvailable, setLocalCleaningTestAvailable] = useState(false);
   const [dragVertex, setDragVertex] = useState<DragVertex | null>(null);
   const [isCorrectingEdges, setIsCorrectingEdges] = useState(false);
   const roomInputRef = useRef<HTMLInputElement>(null);
@@ -579,9 +697,11 @@ export function RoomStudio() {
   const processedSurfacesRef = useRef<Surface[] | null>(null);
   const projectIdRef = useRef('draft');
   const skipAutosaveRef = useRef(false);
+  const manualOpeningParentRef = useRef<string | null>(null);
 
   useEffect(() => {
     shellRef.current?.setAttribute('data-hydrated', 'true');
+    setLocalCleaningTestAvailable(isLocalPreview() && new URLSearchParams(window.location.search).has('roomTest'));
     return () => {
       if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
       if (materialBlobRef.current) URL.revokeObjectURL(materialBlobRef.current);
@@ -727,7 +847,9 @@ export function RoomStudio() {
         });
         return { ...surface, points: linkedPoints };
         });
-        return next.every((surface) => isValidPolygon(surface.points)) ? next : current;
+        if (!next.every((surface) => isValidPolygon(surface.points))) return current;
+        syncGeometrySnapshots(next);
+        return next;
       });
     };
     const finishVertexDrag = (pointerId: number) => {
@@ -783,9 +905,20 @@ export function RoomStudio() {
   }, [materialQuery, searchBrand, searchModel, searchColor, searchCategory]);
   const materialMap = useMemo(() => new Map(catalogMaterials.concat(onlineMaterials, material ? [material] : []).map((item) => [item.id, item])), [material, onlineMaterials]);
 
+  function syncGeometrySnapshots(next: Surface[]) {
+    if (!room || room.sourceType !== 'photo') return;
+    const snapshots = geometrySnapshotsAfterEdit(
+      next,
+      Boolean(processedPreview || processedSurfacesRef.current),
+    );
+    originalSurfacesRef.current = snapshots.original;
+    if (snapshots.processed) processedSurfacesRef.current = snapshots.processed;
+  }
+
   function commitSurfaces(next: Surface[]) {
     setPastSurfaces((history) => [...history, surfaces].slice(-40));
     setFutureSurfaces([]);
+    syncGeometrySnapshots(next);
     setSurfaces(next);
   }
 
@@ -794,6 +927,7 @@ export function RoomStudio() {
     if (!previous) return;
     setPastSurfaces((history) => history.slice(0, -1));
     setFutureSurfaces((future) => [surfaces, ...future].slice(0, 40));
+    syncGeometrySnapshots(previous);
     setSurfaces(previous);
     const previousSelected = previous.find((surface) => surface.id === selectedId);
     if (selectedId && !previousSelected) setSelectedId(null);
@@ -806,6 +940,7 @@ export function RoomStudio() {
     if (!next) return;
     setFutureSurfaces((future) => future.slice(1));
     setPastSurfaces((history) => [...history, surfaces].slice(-40));
+    syncGeometrySnapshots(next);
     setSurfaces(next);
     setRenameDraft(next.find((surface) => surface.id === selectedId)?.name ?? '');
     setNotice('Modifica ripristinata.');
@@ -880,8 +1015,13 @@ export function RoomStudio() {
 
   function startDrawing(kind: SurfaceKind = 'wall', quick = false) {
     if (!room) return;
+    const selectedSurface = surfaces.find((surface) => surface.id === selectedId);
+    manualOpeningParentRef.current = (kind === 'door' || kind === 'window') && selectedSurface?.kind === 'wall'
+      ? selectedSurface.id
+      : null;
     setDrawKind(kind); setQuickDraw(quick); setLineWallDraw(false); setDraft([]); setSelectedId(null); setRenameDraft('');
-    setNotice(quick ? 'Muro facile: tocca i quattro angoli. Si chiuderà automaticamente.' : `Disegno avanzato: tocca tutti i vertici e poi “Chiudi superficie”.`);
+    const subject = kind === 'door' ? 'Porta' : kind === 'window' ? 'Finestra' : 'Muro';
+    setNotice(quick ? `${subject}: tocca i quattro angoli con il dito o Apple Pencil. Si chiuderà automaticamente.` : `Disegno avanzato: tocca tutti i vertici e poi “Chiudi superficie”.`);
   }
 
   function startFloorplanWall() {
@@ -900,16 +1040,49 @@ export function RoomStudio() {
   }
 
   function completeSurface(points: Point[], kind: SurfaceKind) {
-    if (!isValidPolygon(points)) {
+    const isOpening = kind === 'door' || kind === 'window';
+    const finalPoints = isOpening ? snapOpeningExtrema(points) : points;
+    if (!isValidPolygon(finalPoints)) {
       setError('Servono almeno tre punti non allineati per chiudere la superficie.'); return;
     }
     const id = `surface-${Date.now()}-${surfaces.length}`;
-    const surface: Surface = { id, name: nextSurfaceName(kind, surfaces), kind, points, frozen: false };
+    const openingCenter = finalPoints.reduce((sum, point) => ({ x: sum.x + point.x / finalPoints.length, y: sum.y + point.y / finalPoints.length }), { x: 0, y: 0 });
+    const touchesImageEdge = isOpening && finalPoints.some((point) => point.x === 0 || point.x === 1 || point.y === 0 || point.y === 1);
+    const parentThreshold = touchesImageEdge ? .7 : .9;
+    const wallsByFit = surfaces.filter((surface) => surface.kind === 'wall').map((wall) => ({
+      wall,
+      coverage: isOpening ? openingCoverageInWall(finalPoints, wall.points) : 0,
+      distance: Math.hypot(openingCenter.x - surfaceCenter(wall).x, openingCenter.y - surfaceCenter(wall).y),
+    })).sort((left, right) => right.coverage - left.coverage || left.distance - right.distance);
+    const selectedParent = surfaces.find((surface) => surface.id === manualOpeningParentRef.current && surface.kind === 'wall');
+    const selectedCoverage = selectedParent && isOpening ? openingCoverageInWall(finalPoints, selectedParent.points) : 0;
+    const closestWall = surfaces.filter((surface) => surface.kind === 'wall').sort((left, right) => {
+      const leftCenter = surfaceCenter(left); const rightCenter = surfaceCenter(right);
+      return Math.hypot(openingCenter.x - leftCenter.x, openingCenter.y - leftCenter.y)
+        - Math.hypot(openingCenter.x - rightCenter.x, openingCenter.y - rightCenter.y);
+    })[0];
+    const parentId = isOpening
+      ? selectedParent && selectedCoverage >= parentThreshold
+        ? selectedParent.id
+        : (wallsByFit.find((candidate) => candidate.coverage >= parentThreshold)?.wall ?? closestWall)?.id
+      : undefined;
+    const surface: Surface = {
+      id,
+      name: nextSurfaceName(kind, surfaces),
+      kind,
+      points: finalPoints,
+      frozen: false,
+      confidence: isOpening ? 1 : undefined,
+      slot: isOpening ? openingSlot(finalPoints) : undefined,
+      parentId,
+      source: isOpening ? 'manual' : undefined,
+    };
     commitSurfaces([...surfaces, surface]); setSelectedId(id); setRenameDraft(surface.name); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setError(null);
-    setNotice(`${surface.name} creata. Trascina i punti per correggerla.`);
+    manualOpeningParentRef.current = null;
+    setNotice(`${surface.name} creata${parentId ? ` e collegata a ${surfaces.find((item) => item.id === parentId)?.name ?? 'un muro'}` : ''}. Trascina i punti per correggerla.`);
   }
 
-  function cancelDrawing() { setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setNotice(null); }
+  function cancelDrawing() { manualOpeningParentRef.current = null; setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setNotice(null); }
 
   function beginVertexDrag(event: ReactPointerEvent<SVGCircleElement>, surfaceId: string, vertexIndex: number) {
     const surface = surfaces.find((item) => item.id === surfaceId);
@@ -1146,6 +1319,7 @@ export function RoomStudio() {
     protectedSurfaces?: Surface[];
     frozenSurfaces?: Surface[];
     sourceUrl?: string;
+    stabilizeColor?: boolean;
   }) {
     const sourceUrl = options.sourceUrl ?? room?.previewUrl;
     if (!sourceUrl) throw new Error('La fotografia originale non è disponibile.');
@@ -1164,6 +1338,9 @@ export function RoomStudio() {
     canvas.width = width; canvas.height = height;
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Non posso proteggere le zone Freeze.');
+    const generatedLayer = options.stabilizeColor
+      ? colorStabilizedRoomLayer(original, generated, width, height)
+      : generated;
 
     const clipPoints = (points: Point[]) => {
       context.beginPath();
@@ -1181,7 +1358,7 @@ export function RoomStudio() {
     if (editableSurfaces.length || editableFurniture.length) {
       context.drawImage(original, 0, 0, width, height);
       for (const surface of editableSurfaces) {
-        context.save(); clipTo(surface); drawImageCover(context, generated, width, height); context.restore();
+        context.save(); clipTo(surface); drawImageCover(context, generatedLayer, width, height); context.restore();
       }
       for (const surface of options.protectedSurfaces ?? []) {
         context.save(); clipTo(surface); context.drawImage(original, 0, 0, width, height); context.restore();
@@ -1189,10 +1366,10 @@ export function RoomStudio() {
       // Furniture is the foreground layer and may cover a Freeze surface
       // without allowing the model to redesign that surface elsewhere.
       for (const item of editableFurniture) {
-        context.save(); clipPoints(rectPoints(furnitureEditRect(item))); drawImageCover(context, generated, width, height); context.restore();
+        context.save(); clipPoints(rectPoints(furnitureEditRect(item))); drawImageCover(context, generatedLayer, width, height); context.restore();
       }
     } else {
-      drawImageCover(context, generated, width, height);
+      drawImageCover(context, generatedLayer, width, height);
       for (const surface of options.frozenSurfaces ?? []) {
         context.save();
         clipTo(surface);
@@ -1536,17 +1713,15 @@ export function RoomStudio() {
       150000,
     );
     if (!response.ok || !result.surfaces?.length) throw new Error(result.message ?? 'Grok non ha trovato superfici affidabili.');
-    return result.surfaces.filter((surface) => isValidPolygon(surface.points)).map((surface, index) => ({
-      id: `grok-${Date.now()}-${index}`,
-      name: surface.name,
-      kind: surface.kind,
-      points: surface.points,
-      frozen: false,
-    }));
+    return clientValidatedSurfaces(result.surfaces, `grok-${Date.now()}`);
   }
 
   async function autoFitSurfaces() {
     if (!room?.previewUrl || room.sourceType !== 'photo' || !roomImageRef.current) return;
+    if (showProcessedPreview) {
+      setNotice('La geometria resta legata alla foto originale. Tocca “Originale” prima di rifare il riconoscimento.');
+      return;
+    }
     setIsAutoFitting(true); setError(null);
     setNotice(aiStatus === 'ready' || aiStatus === 'checking'
       ? 'Grok sta leggendo gli angoli reali, il pavimento, le pareti e il soffitto…'
@@ -1575,19 +1750,21 @@ export function RoomStudio() {
       setSelectedId(first?.id ?? null); setRenameDraft(first?.name ?? '');
       setIsCorrectingEdges(false);
       setNotice(usedGrok
-        ? `Analisi ad alta precisione completata: ${nextSurfaces.length} superfici confrontate e bordi agganciati alla foto.`
-        : `${grokError ? 'Grok non ha risposto: ' : ''}ho inserito una base locale. Puoi riprovare l’analisi IA o correggere i bordi.`);
+        ? `${nextSurfaces.length} superfici proposte da controllare sulla foto originale.${nextSurfaces.some((surface) => surface.kind === 'door') ? '' : ' La porta non è sicura: aggiungila con “＋ Porta” e quattro tocchi.'}`
+        : `${grokError ? 'Grok non ha risposto: ' : ''}ho inserito soltanto una base del pavimento e delle pareti, senza inventare porte o finestre.`);
     } catch {
       if (surfaces.length === 0) seedGuidedSurfaces();
       setIsCorrectingEdges(false);
-      setNotice('Ho inserito una base automatica. Puoi continuare oppure correggere i bordi solo se serve.');
+      setNotice('Ho inserito una proposta di base. Controllala; se manca una porta usa “＋ Porta” e quattro tocchi.');
     } finally {
       setIsAutoFitting(false);
     }
   }
 
   function onRoomImageLoad(image: HTMLImageElement) {
-    setRoomRatio(image.naturalWidth / image.naturalHeight);
+    // The overlay belongs to the original pixels. A generated empty-room image
+    // may differ slightly in size, but must never stretch the approved geometry.
+    if (!showProcessedPreview) setRoomRatio(image.naturalWidth / image.naturalHeight);
     if (room?.sourceType === 'floorplan' && room.previewUrl && autoFitPreviewRef.current !== room.previewUrl) {
       autoFitPreviewRef.current = room.previewUrl;
       window.setTimeout(() => void createRoomFromFloorplan(), 0);
@@ -1652,7 +1829,7 @@ export function RoomStudio() {
         if (attempt > 0) form.append('strictRetry', 'true');
         const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/empty-room'), { method: 'POST', body: form }, 180000);
         if (!response.ok || !result.image) throw new Error(result.message ?? 'Immagine non disponibile.');
-        const protectedPreview = await protectAiResult(result.image, { frozenSurfaces });
+        const protectedPreview = await protectAiResult(result.image, { frozenSurfaces, stabilizeColor: true });
         const similarity = await framingSimilarity(room.previewUrl, protectedPreview);
         if (similarity < EMPTY_ROOM_FRAMING_MIN) {
           if (attempt < 2) continue;
@@ -1750,6 +1927,17 @@ export function RoomStudio() {
     }
     setShowProcessedPreview(true);
     setNotice(`${processedLabel}: stessi contorni approvati sulla stanza svuotata.`);
+  }
+
+  function skipEmptyRoom() {
+    if (!room || surfaces.length === 0) {
+      setNotice('Attendi un momento: sto ancora riconoscendo pavimento e muri.');
+      return;
+    }
+    if (showProcessedPreview) showOriginalRoom();
+    setCleanupRegion(null); setIsPickingCleanup(false); setError(null);
+    setNotice('Foto originale mantenuta. Ora puoi scegliere materiali e mobili senza svuotare la stanza.');
+    setActiveStep(3);
   }
 
   async function createFinalRender() {
@@ -1858,8 +2046,60 @@ export function RoomStudio() {
     setPlacedFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); furnitureFilesRef.current.clear();
     setRoomRatio(16 / 10); setSurfaces(created); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(created[0].id); setRenameDraft(created[0].name); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setError(null);
     setIsCorrectingEdges(false);
-    setNotice('Esempio pronto: finestra, soffitto, pavimento e tre muri sono già riconosciuti fino ai bordi reali.');
+    setNotice('Esempio pronto: finestra, soffitto, pavimento e tre muri sono proposti e modificabili.');
     setActiveStep(2);
+  }
+
+  async function loadLocalCleaningTest() {
+    setError(null); setNotice('Apro nell’app la prova reale eseguita da Grok…');
+    try {
+      const [originalResponse, generatedResponse, geometryResponse] = await Promise.all([
+        fetch('/local-room-test-original.jpeg', { cache: 'no-store' }),
+        fetch('/local-room-test-empty.jpg', { cache: 'no-store' }),
+        fetch('/local-room-test-geometry.json', { cache: 'no-store' }),
+      ]);
+      if (!originalResponse.ok || !generatedResponse.ok || !geometryResponse.ok) throw new Error('Anteprima locale non disponibile.');
+      const [originalBlob, generatedBlob] = await Promise.all([originalResponse.blob(), generatedResponse.blob()]);
+      const geometry = await geometryResponse.json() as { surfaces?: DetectedSurface[] };
+      const originalUrl = URL.createObjectURL(originalBlob);
+      const generatedUrl = URL.createObjectURL(generatedBlob);
+      const [originalImage, generatedImage] = await Promise.all([
+        loadImageSource(originalUrl),
+        loadImageSource(generatedUrl),
+      ]);
+      const stabilizedCanvas = colorStabilizedRoomLayer(
+        originalImage,
+        generatedImage,
+        originalImage.naturalWidth,
+        originalImage.naturalHeight,
+      );
+      const stabilizedBlob = await new Promise<Blob | null>((resolve) => stabilizedCanvas.toBlob(resolve, 'image/jpeg', .92));
+      URL.revokeObjectURL(generatedUrl);
+      if (!stabilizedBlob) throw new Error('Non posso correggere i colori dell’anteprima.');
+      const stabilizedUrl = URL.createObjectURL(stabilizedBlob);
+      if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
+      if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
+      roomBlobRef.current = originalUrl;
+      processedBlobRef.current = stabilizedUrl;
+      const file = new File([originalBlob], 'stanza-camera.jpeg', { type: 'image/jpeg' });
+      const created = clientValidatedSurfaces(geometry.surfaces ?? [], 'verified');
+      if (!created.length) throw new Error('La geometria verificata non è disponibile.');
+      projectIdRef.current = crypto.randomUUID();
+      originalSurfacesRef.current = created;
+      processedSurfacesRef.current = created;
+      setRoom({ file, kind: 'image', canPreview: true, displaySize: formatBytes(originalBlob.size), projectName: 'Prova stanza ripulita', previewUrl: originalUrl, sourceType: 'photo' });
+      setRoomRatio(originalImage.naturalWidth / originalImage.naturalHeight);
+      setSurfaces(created); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(created[0].id); setRenameDraft(created[0].name);
+      setPlacedFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); furnitureFilesRef.current.clear();
+      setProcessedPreview(stabilizedUrl); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
+      setCleanupRegion(null); setIsPickingCleanup(false); setIsCorrectingEdges(false);
+      autoFitPreviewRef.current = originalUrl;
+      setNotice('Risultato Grok aperto dentro Materia. I colori sono riallineati automaticamente alla foto originale.');
+      setActiveStep(2);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Non riesco ad aprire la prova locale.');
+      setNotice(null);
+    }
   }
 
   function goToStep(step: number) {
@@ -1891,7 +2131,7 @@ export function RoomStudio() {
       <div className="workspace">
         <aside className="surface-panel" aria-label="Superfici della stanza">
           <div className="panel-heading"><div><p className="eyebrow">Aree riconosciute</p><h2>Tocca cosa vuoi mantenere</h2></div><span className="count-badge">{surfaces.length}</span></div>
-          <button className="detect-button" type="button" onClick={() => void autoFitSurfaces()} disabled={!room || room.sourceType !== 'photo' || isAutoFitting}><span className="spark">✦</span>{isAutoFitting ? 'Sto adattando…' : 'Adatta automaticamente'}<span className="soon">Foto</span></button>
+          <button className="detect-button" type="button" onClick={() => void autoFitSurfaces()} disabled={!room || room.sourceType !== 'photo' || isAutoFitting || showProcessedPreview}><span className="spark">✦</span>{isAutoFitting ? 'Sto adattando…' : 'Adatta automaticamente'}<span className="soon">Foto</span></button>
           {surfaces.length ? <div className="surface-list">{surfaces.map((surface) => <button className={`surface-item ${surface.id === selectedId ? 'is-active' : ''}`} key={surface.id} type="button" onClick={() => { setSelectedId(surface.id); setRenameDraft(surface.name); setDrawKind(null); setQuickDraw(false); setDraft([]); }}><span className="surface-swatch" style={{ background: kindColors[surface.kind] }} /><span className="surface-copy"><strong>{surface.name}</strong><small>{surface.frozen ? 'Freeze attivo' : surface.materialId ? 'Prodotto applicato' : 'Tocca per selezionare'}</small></span><span className="lock-state" aria-label={surface.frozen ? 'Bloccata' : 'Modificabile'}>{surface.frozen ? '🔒' : '◇'}</span></button>)}</div> : <div className="surface-empty"><span>✦</span><strong>Riconoscimento automatico</strong><p>L’app divide la foto in pavimento, muri e soffitto.</p></div>}
           {selected && activeStep === 2 && <div className="simple-freeze-actions"><button type="button" className={selected.frozen ? 'is-frozen' : ''} onClick={toggleFreeze}>{selected.frozen ? `Consenti modifiche a ${selected.name}` : `Mantieni identico ${selected.name}`}</button><button type="button" onClick={freezeAllExceptSelected}>Mantieni tutto tranne questa</button><p>Freeze significa: questa zona non viene rigenerata dall’IA.</p></div>}
           <div className="panel-note"><span>i</span><p>Automatico per iniziare, manuale per rifinire: trascina i pallini direttamente sui bordi della foto.</p></div>
@@ -1899,7 +2139,7 @@ export function RoomStudio() {
 
         <section className="stage" aria-labelledby="editor-title">
           <div className="editor-toolbar">
-            <div className="tool-group"><button className={`tool-button ${!drawKind ? 'is-selected' : ''}`} type="button" onClick={cancelDrawing} aria-label="Seleziona">↖</button><button className="tool-button history-button" type="button" onClick={undo} disabled={!pastSurfaces.length} aria-label="Annulla ultima modifica">↶</button><button className="tool-button history-button" type="button" onClick={redo} disabled={!futureSurfaces.length} aria-label="Ripristina modifica">↷</button>{room?.sourceType === 'photo' && <button className="draw-button auto-fit-button" type="button" onClick={() => void autoFitSurfaces()} disabled={!room || isAutoFitting}>✦ {isAutoFitting ? 'Adatto…' : 'Adatta alla foto'}</button>}{room?.sourceType === 'floorplan' ? <button className={`draw-button easy-draw-button ${lineWallDraw ? 'is-selected' : ''}`} type="button" onClick={startFloorplanWall}>＋ Parete con 2 tocchi</button> : <button className={`draw-button easy-draw-button ${quickDraw ? 'is-selected' : ''}`} type="button" onClick={() => startDrawing('wall', true)} disabled={!room}>＋ Aggiungi muro</button>}</div>
+            <div className="tool-group"><button className={`tool-button ${!drawKind ? 'is-selected' : ''}`} type="button" onClick={cancelDrawing} aria-label="Seleziona">↖</button><button className="tool-button history-button" type="button" onClick={undo} disabled={!pastSurfaces.length} aria-label="Annulla ultima modifica">↶</button><button className="tool-button history-button" type="button" onClick={redo} disabled={!futureSurfaces.length} aria-label="Ripristina modifica">↷</button>{room?.sourceType === 'photo' && <button className="draw-button auto-fit-button" type="button" onClick={() => void autoFitSurfaces()} disabled={!room || isAutoFitting || showProcessedPreview}>✦ {isAutoFitting ? 'Adatto…' : 'Adatta alla foto'}</button>}{room?.sourceType === 'floorplan' ? <button className={`draw-button easy-draw-button ${lineWallDraw ? 'is-selected' : ''}`} type="button" onClick={startFloorplanWall}>＋ Parete con 2 tocchi</button> : <button className={`draw-button easy-draw-button ${quickDraw ? 'is-selected' : ''}`} type="button" onClick={() => startDrawing('wall', true)} disabled={!room}>＋ Aggiungi muro</button>}</div>
             {drawKind ? <div className="drawing-actions"><span>{lineWallDraw ? `${draft.length}/2 punti` : `${draft.length}/4 angoli`}</span><button type="button" onClick={cancelDrawing}>Annulla</button></div> : <span className="mode-label">{selected ? `Trascina i pallini di ${selected.name}` : room?.sourceType === 'floorplan' ? 'Aggiungi le pareti interne con due tocchi' : room ? 'Adatta automaticamente o trascina i pallini a mano' : 'Carica una foto o una planimetria per iniziare'}</span>}
           </div>
 
@@ -1939,7 +2179,7 @@ export function RoomStudio() {
                 {surfaces.map((surface) => {
                   const labelPoint = surfaceLabelPoint(surface);
                   const showLabel = surface.kind === 'window' || surface.kind === 'door';
-                  return <g key={surface.id} className={`surface-kind-${surface.kind} ${surface.frozen ? 'is-frozen ' : ''}${surface.id === selectedId ? 'is-selected-surface' : ''}`}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{showLabel && <text className="surface-name" x={labelPoint.x * 1000} y={labelPoint.y * 625}>{surface.name}</text>}{isCorrectingEdges && !surface.frozen && surface.id === selectedId && surface.points.map((point, index) => <g key={`${surface.id}-${index}`}><circle cx={point.x * 1000} cy={point.y * 625} r="34" className="surface-vertex-hit" aria-label={`Sposta punto ${index + 1} di ${surface.name}`} onPointerDown={(event) => beginVertexDrag(event, surface.id, index)} /><circle cx={point.x * 1000} cy={point.y * 625} r="16" className="surface-vertex" aria-hidden="true" /></g>)}</g>;
+                  return <g key={surface.id} data-parent-id={surface.parentId} data-source={surface.source} className={`surface-kind-${surface.kind} ${surface.frozen ? 'is-frozen ' : ''}${surface.id === selectedId ? 'is-selected-surface' : ''}`}><polygon points={pointsToSvg(surface.points)} fill={materialFill(surface)} stroke={surface.id === selectedId ? '#d7f05c' : kindColors[surface.kind]} strokeWidth={surface.id === selectedId ? 6 : 3} vectorEffect="non-scaling-stroke" onPointerDown={(event) => { if (!drawKind) { event.stopPropagation(); setSelectedId(surface.id); setRenameDraft(surface.name); setQuickDraw(false); } }} />{showLabel && <text className="surface-name" x={labelPoint.x * 1000} y={labelPoint.y * 625}>{surface.name}</text>}{isCorrectingEdges && !surface.frozen && surface.id === selectedId && surface.points.map((point, index) => <g key={`${surface.id}-${index}`}><circle cx={point.x * 1000} cy={point.y * 625} r="34" className="surface-vertex-hit" aria-label={`Sposta punto ${index + 1} di ${surface.name}`} onPointerDown={(event) => beginVertexDrag(event, surface.id, index)} /><circle cx={point.x * 1000} cy={point.y * 625} r="16" className="surface-vertex" aria-hidden="true" /></g>)}</g>;
                 })}
                 {draft.length > 0 && <><polyline points={pointsToSvg(draft)} fill="none" stroke="#d7f05c" strokeWidth="5" vectorEffect="non-scaling-stroke" />{draft.map((point, index) => <circle key={index} cx={point.x * 1000} cy={point.y * 625} r="9" className="draft-vertex" />)}</>}
                 {cleanupRegion && <polygon className="cleanup-region" points={pointsToSvg(cleanupRegion.points)} aria-label={`Zona da pulire: ${cleanupRegion.label}`} />}
@@ -1953,13 +2193,13 @@ export function RoomStudio() {
               <div className="import-status"><span className="status-dot" /><div><strong>{showProcessedPreview ? processedLabel : 'Originale intatto'}</strong><small>{showProcessedPreview ? 'Elaborazione IA · originale sempre disponibile' : importedCaption}</small></div></div>
               <button className="replace-button" type="button" onClick={() => roomInputRef.current?.click()}>↑ Carica la tua foto</button>
               {processedPreview && <div className="before-after-toggle" aria-label="Confronta originale e risultato"><button type="button" className={!showProcessedPreview ? 'is-active' : ''} onClick={showOriginalRoom}>Originale</button><button type="button" className={showProcessedPreview ? 'is-active' : ''} onClick={showProcessedRoom}>{processedLabel}</button></div>}
-            </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Inizia da ciò che hai</p><h1>Cosa vuoi caricare?</h1><p>Scegli una foto della stanza oppure una planimetria. L’originale resterà sempre intatto.</p><div className="source-actions"><label className="source-card is-primary" htmlFor="room-file"><span>▣</span><strong>Libreria foto</strong><small>Scegli una foto già presente su iPhone o iPad</small></label><label className="source-card" htmlFor="camera-file"><span>●</span><strong>Scatta foto</strong><small>Usa direttamente la fotocamera posteriore</small></label><label className="source-card" htmlFor="floorplan-file"><span>⌗</span><strong>Planimetria</strong><small>Crea automaticamente la stanza vuota</small></label></div><button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>JPG, PNG o HEIC · massimo 20 MB</small></div></>}
+            </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Inizia da ciò che hai</p><h1>Cosa vuoi caricare?</h1><p>Scegli una foto della stanza oppure una planimetria. L’originale resterà sempre intatto.</p><div className="source-actions"><label className="source-card is-primary" htmlFor="room-file"><span>▣</span><strong>Libreria foto</strong><small>Scegli una foto già presente su iPhone o iPad</small></label><label className="source-card" htmlFor="camera-file"><span>●</span><strong>Scatta foto</strong><small>Usa direttamente la fotocamera posteriore</small></label><label className="source-card" htmlFor="floorplan-file"><span>⌗</span><strong>Planimetria</strong><small>Crea automaticamente la stanza vuota</small></label></div>{localCleaningTestAvailable && <button className="demo-button" type="button" onClick={() => void loadLocalCleaningTest()}>Apri questa prova dentro Materia</button>}<button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>JPG, PNG o HEIC · massimo 20 MB</small></div></>}
             {isDraggingFile && <div className="drop-overlay"><strong>Rilascia per importare</strong><span>La foto resterà nel browser.</span></div>}
             {(isImportingRoom || isCreatingFloorplanRoom) && <div className="processing-overlay" role="status"><span className="processing-spinner" /><strong>{isCreatingFloorplanRoom ? 'Creo la stanza dalla planimetria…' : 'Preparo la foto…'}</strong><small>{isCreatingFloorplanRoom ? 'Riconosco pareti, porte e finestre. Può richiedere circa un minuto.' : 'Le immagini grandi vengono ottimizzate per evitare blocchi.'}</small></div>}
           </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
           <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onRoomInput} /><input ref={cameraInputRef} id="camera-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" capture="environment" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onMaterialInput} /><input ref={furnitureInputRef} id="furniture-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onFurnitureInput} />
-          {room?.sourceType === 'photo' && activeStep === 2 && <section className="empty-room-choice" aria-label="Svuota la stanza"><div><strong>Vuoi svuotare la stanza?</strong><span>Rimuovi tutto oppure indica un oggetto rimasto: fuori dalla selezione i pixel restano identici.</span></div><div className="empty-room-actions"><button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom || isCleaningRegion}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button>{processedPreview && !cleanupRegion && <button type="button" className={isPickingCleanup ? 'is-active' : ''} onClick={() => { setIsPickingCleanup((current) => !current); setError(null); setNotice(isPickingCleanup ? 'Selezione annullata.' : 'Tocca il centro dell’oggetto rimasto nella foto.'); }} disabled={isDetectingCleanup || isCleaningRegion}>{isDetectingCleanup ? 'Riconosco…' : isPickingCleanup ? 'Annulla selezione' : '◎ Pulisci un residuo'}</button>}{cleanupRegion && <><button type="button" className="cleanup-confirm" onClick={() => void cleanResidualRegion()} disabled={isCleaningRegion}>{isCleaningRegion ? 'Pulisco…' : 'Pulisci selezione'}</button><button type="button" onClick={() => setCleanupRegion(null)} disabled={isCleaningRegion}>Annulla</button></>}</div></section>}
-          <div className={`status-bar ${activeStep === 2 ? 'prepare-status' : ''}`}><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.'}</p>{room && activeStep === 2 && <button className={`edge-edit-button ${isCorrectingEdges ? 'is-active' : ''}`} type="button" onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine correzione' : room.sourceType === 'floorplan' ? 'Correggi il perimetro' : 'Correggi i bordi'}</button>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && <button className="continue-products-button" type="button" onClick={() => goToStep(3)}>Continua ai prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
+          {room?.sourceType === 'photo' && activeStep === 2 && <section className="empty-room-choice" aria-label="Svuota la stanza oppure continua"><div><strong>Vuoi svuotare la stanza?</strong><span>È facoltativo: puoi mantenere la foto originale e andare subito ai prodotti.</span></div><div className="empty-room-actions"><button className="skip-empty-room" type="button" onClick={skipEmptyRoom} disabled={isEmptyingRoom || isCleaningRegion || isAutoFitting || surfaces.length === 0}>Salta · usa foto originale →</button><button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom || isCleaningRegion}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button>{processedPreview && !cleanupRegion && <button type="button" className={isPickingCleanup ? 'is-active' : ''} onClick={() => { setIsPickingCleanup((current) => !current); setError(null); setNotice(isPickingCleanup ? 'Selezione annullata.' : 'Tocca il centro dell’oggetto rimasto nella foto.'); }} disabled={isDetectingCleanup || isCleaningRegion}>{isDetectingCleanup ? 'Riconosco…' : isPickingCleanup ? 'Annulla selezione' : '◎ Pulisci un residuo'}</button>}{cleanupRegion && <><button type="button" className="cleanup-confirm" onClick={() => void cleanResidualRegion()} disabled={isCleaningRegion}>{isCleaningRegion ? 'Pulisco…' : 'Pulisci selezione'}</button><button type="button" onClick={() => setCleanupRegion(null)} disabled={isCleaningRegion}>Annulla</button></>}</div></section>}
+          <div className={`status-bar ${activeStep === 2 ? 'prepare-status' : ''}`}><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.'}</p>{room && activeStep === 2 && <button className={`edge-edit-button ${isCorrectingEdges ? 'is-active' : ''}`} type="button" onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine correzione' : room.sourceType === 'floorplan' ? 'Correggi il perimetro' : 'Correggi i bordi'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && <><button className={`opening-draw-button ${drawKind === 'door' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'door' ? cancelDrawing() : startDrawing('door', true)}>＋ Porta</button><button className={`opening-draw-button ${drawKind === 'window' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'window' ? cancelDrawing() : startDrawing('window', true)}>＋ Finestra</button></>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && <button className="continue-products-button" type="button" onClick={() => goToStep(3)}>Continua ai prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
         </section>
 
         <aside className="properties-panel" aria-label="Proprietà">

@@ -72,14 +72,13 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .drawing-actions button { min-height:32px; padding:0 10px; background:#e7ebe8; }
 .drawing-actions .finish-button { background:var(--accent); color:white; }
 .drawing-actions .finish-button:disabled { opacity:.4; cursor:not-allowed; }
-.canvas { min-height:0; max-height:calc(100vh - 240px); touch-action:pan-y; }
+.canvas { min-height:0; touch-action:pan-y; }
 .editor-media,.editor-media>img,.surface-overlay { position:absolute; inset:0; width:100%; height:100%; }
 .editor-media { overflow:hidden; background:#26302e; }
 .editor-media>img { display:block; object-fit:fill; }
-.editor-media>img { object-fit:contain; }
 .surface-overlay { z-index:2; overflow:visible; touch-action:none; }
 .surface-overlay polygon { cursor:pointer; transition:fill .16s ease,stroke .16s ease; }
-.surface-overlay.is-drawing { cursor:crosshair; }
+.surface-overlay.is-drawing { cursor:crosshair; pointer-events:auto; }
 .surface-overlay.is-cleanup-picking,.surface-overlay.is-cleanup-picking polygon { pointer-events:none!important; }
 .canvas.is-picking-cleanup { cursor:crosshair; outline:3px solid #d7f05c; outline-offset:-3px; }
 .surface-overlay .cleanup-region { fill:rgba(215,240,92,.22)!important; stroke:#d7f05c!important; stroke-width:6; stroke-dasharray:12 7; vector-effect:non-scaling-stroke; pointer-events:none; filter:drop-shadow(0 2px 4px rgba(25,42,36,.35)); }
@@ -103,6 +102,7 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .empty-room-choice button:disabled { cursor:wait; opacity:.65; }
 .empty-room-actions { display:flex!important; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:6px!important; }
 .empty-room-actions button { background:#fff; color:var(--ink); border:1px solid #c9d9d4; }
+.empty-room-actions .skip-empty-room { background:#173d36; color:#fff; border-color:#173d36; }
 .empty-room-actions button.is-active { background:#fff8d8; border-color:#b6c65a; }
 .empty-room-actions .cleanup-confirm { background:#d7f05c; border-color:#a6bb47; }
 .edge-edit-button { border:1px solid #b9cec8!important; background:#edf5f2!important; color:var(--accent)!important; }
@@ -127,6 +127,8 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .simple-freeze-actions button:first-child { background:var(--accent); color:#fff; }
 .simple-freeze-actions button:first-child.is-frozen { background:#60486d; }
 .simple-freeze-actions p { grid-column:1/-1; margin:0; color:#6d7873; font-size:8px; line-height:1.4; }
+.opening-draw-button { min-width:84px; background:#fff; color:var(--accent); border:1px solid #9bc7bd!important; }
+.opening-draw-button.is-active { background:var(--accent); color:#fff; }
 .ai-status { display:inline-flex; align-items:center; gap:6px; padding:6px 8px; border-radius:999px; background:#fff2dc; color:#765a2d; font-size:9px; font-weight:800; white-space:nowrap; }
 .ai-status i { width:7px; height:7px; border-radius:50%; background:#d99b43; }
 .ai-status.ready { background:#e5f4ed; color:#2e6c56; }
@@ -143,6 +145,7 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .simple-mode.step-2 .surface-overlay:not(.is-correcting) g:not(.is-selected-surface) polygon { opacity:0; pointer-events:none; }
 .simple-mode.step-2 .surface-overlay:not(.is-correcting) g.surface-kind-window polygon,
 .simple-mode.step-2 .surface-overlay:not(.is-correcting) g.surface-kind-door polygon { opacity:.82; pointer-events:auto; stroke-dasharray:8 5; }
+.simple-mode.step-2 .surface-overlay:not(.is-correcting) g:not(.surface-kind-window):not(.surface-kind-door) polygon { opacity:0!important; pointer-events:all; stroke:transparent!important; }
 .simple-mode.step-2 .surface-overlay.is-correcting polygon { opacity:.78; }
 .simple-mode.step-2 .surface-overlay.is-correcting g:not(.is-selected-surface) polygon { opacity:.1; pointer-events:none; }
 .simple-mode.step-2 .canvas:has(.surface-overlay.is-correcting) { outline:3px solid #9bc7bd; outline-offset:-3px; }

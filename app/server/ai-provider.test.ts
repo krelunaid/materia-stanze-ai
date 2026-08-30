@@ -291,9 +291,9 @@ describe('getAiProvider', () => {
       new File(['room'], 'room.jpg', { type: 'image/jpeg' }),
     );
 
-    expect(result.map((surface) => surface.name)).toEqual(['Muro 1', 'Muro 2', 'Pavimento', 'Finestra']);
+    expect(result.map((surface) => surface.name)).toEqual(['Muro 1', 'Muro 2', 'Pavimento']);
     expect(result.find((surface) => surface.kind === 'floor')?.points).toEqual(expect.arrayContaining([{ x: 1, y: 1 }, { x: 0, y: 1 }]));
-    expect(result.find((surface) => surface.kind === 'window')?.confidence).toBe(.35);
+    expect(result.find((surface) => surface.kind === 'window')).toBeUndefined();
     const request = fetchMock.mock.calls[0]?.[1];
     const payload = JSON.parse(String(request?.body));
     expect(payload).toMatchObject({
@@ -362,7 +362,7 @@ describe('getAiProvider', () => {
     ]);
   });
 
-  it('keeps a window found by either analysis and stops it at the sill', () => {
+  it('keeps a real centred window when the surrounding layout is not the demo template', () => {
     const wallAndFloor = [
       { name: 'wall', kind: 'wall' as const, confidence: .96, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: 0, y: .72 }] },
       { name: 'floor', kind: 'floor' as const, confidence: .97, points: [{ x: 0, y: .72 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
@@ -394,7 +394,7 @@ describe('getAiProvider', () => {
     expect(result?.points).toHaveLength(4);
   });
 
-  it('merges two partially overlapping traces of the same window', () => {
+  it('keeps the strongest overlapping window trace without averaging it toward the centre', () => {
     const room = [
       { name: 'wall', kind: 'wall' as const, confidence: .96, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .56 }, { x: 0, y: .56 }] },
       { name: 'floor', kind: 'floor' as const, confidence: .97, points: [{ x: 0, y: .56 }, { x: 1, y: .56 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
@@ -406,8 +406,8 @@ describe('getAiProvider', () => {
 
     const windows = result.filter((surface) => surface.kind === 'window');
     expect(windows).toHaveLength(1);
-    expect(windows[0].points[0].x).toBeCloseTo(.647, 2);
-    expect(windows[0].points[1].x).toBeCloseTo(.87, 2);
+    expect(windows[0].points[0].x).toBeCloseTo(.6, 2);
+    expect(windows[0].points[1].x).toBeCloseTo(.885, 2);
   });
 
   it('aligns window vertices before averaging even when the traces start at different corners', () => {
@@ -415,7 +415,7 @@ describe('getAiProvider', () => {
       { name: 'wall', kind: 'wall' as const, confidence: .96, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: 0, y: .72 }] },
       { name: 'floor', kind: 'floor' as const, confidence: .97, points: [{ x: 0, y: .72 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
     ];
-    const clockwise = [{ x: .32, y: .2 }, { x: .68, y: .2 }, { x: .68, y: .58 }, { x: .32, y: .58 }];
+    const clockwise = [{ x: .12, y: .18 }, { x: .42, y: .18 }, { x: .42, y: .54 }, { x: .12, y: .54 }];
     const reversed = [...clockwise].reverse();
     const rotated = [clockwise[2], clockwise[3], clockwise[0], clockwise[1]];
 
@@ -428,10 +428,10 @@ describe('getAiProvider', () => {
     ]);
     const window = result.find((surface) => surface.kind === 'window');
     expect(window?.points).toHaveLength(4);
-    expect(window?.points[0].x).toBeCloseTo(.32, 2);
-    expect(window?.points[0].y).toBeCloseTo(.2, 2);
-    expect(window?.points[2].x).toBeCloseTo(.68, 2);
-    expect(window?.points[2].y).toBeCloseTo(.58, 2);
+    expect(window?.points[0].x).toBeCloseTo(.12, 2);
+    expect(window?.points[0].y).toBeCloseTo(.18, 2);
+    expect(window?.points[2].x).toBeCloseTo(.42, 2);
+    expect(window?.points[2].y).toBeCloseTo(.54, 2);
     expect(result.filter((surface) => surface.kind === 'window')).toHaveLength(1);
   });
 
@@ -439,7 +439,7 @@ describe('getAiProvider', () => {
     const result = reconcileRoomSurfaceCandidates([[
       { name: 'wall', kind: 'wall', confidence: .95, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: 0, y: .72 }] },
       { name: 'floor', kind: 'floor', confidence: .96, points: [{ x: 0, y: .72 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
-      { name: 'opening', kind: 'door', confidence: .91, points: [{ x: .35, y: .2 }, { x: .65, y: .2 }, { x: .65, y: .58 }, { x: .35, y: .58 }] },
+      { name: 'opening', kind: 'door', confidence: .91, points: [{ x: .08, y: .2 }, { x: .3, y: .2 }, { x: .3, y: .58 }, { x: .08, y: .58 }] },
     ]]);
 
     expect(result.find((surface) => surface.kind === 'window')).toBeTruthy();

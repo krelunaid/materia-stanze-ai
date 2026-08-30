@@ -43,6 +43,21 @@ export function geometryForDerivedImage(approved: Surface[]): Surface[] {
   return cloneSurfaces(approved);
 }
 
+/**
+ * Geometry edits belong to the room, not to one side of the before/after toggle.
+ * Keep both snapshots current once an empty-room preview exists so a Pencil edit
+ * made on either image cannot be replaced by an older snapshot.
+ */
+export function geometrySnapshotsAfterEdit(
+  edited: Surface[],
+  hasProcessedPreview: boolean,
+): { original: Surface[]; processed: Surface[] | null } {
+  return {
+    original: cloneSurfaces(edited),
+    processed: hasProcessedPreview ? cloneSurfaces(edited) : null,
+  };
+}
+
 export function surfacesMatch(left: Surface[], right: Surface[]): boolean {
   if (left.length !== right.length) return false;
   return left.every((surface, index) => {

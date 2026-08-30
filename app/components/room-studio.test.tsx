@@ -44,6 +44,19 @@ describe('RoomStudio', () => {
     expect(surfacesMatch(kept, mergeDetectedSurfaces(detected, previous))).toBe(false);
   });
 
+  it('remaps an opening parent when a detected wall inherits the approved id', () => {
+    const previous = [{
+      id: 'approved-wall', name: 'Muro sinistro', kind: 'wall' as const, frozen: false,
+      points: [{ x: 0, y: 0 }, { x: .4, y: 0 }, { x: .4, y: .7 }, { x: 0, y: .7 }],
+    }];
+    const detected = [
+      { id: 'wall:left:0', name: 'Muro sinistro', kind: 'wall' as const, frozen: false, points: previous[0].points },
+      { id: 'window:left', name: 'Finestra', kind: 'window' as const, frozen: false, parentId: 'wall:left:0', points: [{ x: .05, y: .1 }, { x: .3, y: .1 }, { x: .3, y: .45 }, { x: .05, y: .45 }] },
+    ];
+    const merged = mergeDetectedSurfaces(detected, previous);
+    expect(merged.find((surface) => surface.kind === 'window')?.parentId).toBe('approved-wall');
+  });
+
   it('shows the product-specific import flow', () => {
     render(<RoomStudio />);
     expect(screen.getByRole('heading', { name: 'Cosa vuoi caricare?' })).toBeInTheDocument();
@@ -178,6 +191,35 @@ describe('RoomStudio', () => {
     fireEvent.pointerDown(overlay, { clientX: 300, clientY: 500 });
     expect(screen.getAllByText('Muro 4').length).toBeGreaterThan(0);
     expect(screen.queryByRole('button', { name: 'Chiudi superficie' })).not.toBeInTheDocument();
+  });
+
+  it('creates a door with four Apple Pencil taps', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: '＋ Porta' }));
+    const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
+    expect(overlay).toHaveClass('is-drawing');
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+    fireEvent.pointerDown(overlay, { clientX: 20, clientY: 220 });
+    fireEvent.pointerDown(overlay, { clientX: 220, clientY: 220 });
+    fireEvent.pointerDown(overlay, { clientX: 220, clientY: 560 });
+    fireEvent.pointerDown(overlay, { clientX: 20, clientY: 560 });
+    expect(screen.getAllByText('Porta 1').length).toBeGreaterThan(0);
+    expect(overlay).not.toHaveClass('is-drawing');
+    const door = document.querySelector('.surface-kind-door') as SVGGElement;
+    expect(door.getAttribute('data-parent-id')).toMatch(/^demo-.*-1$/);
+    expect(door).toHaveAttribute('data-source', 'manual');
+    expect(door.querySelector('polygon')).toHaveAttribute('points', expect.stringContaining('0,220'));
+    expect(door.querySelector('polygon')).toHaveAttribute('points', expect.stringContaining('220,220'));
+    expect(document.querySelectorAll('.surface-kind-window')).toHaveLength(1);
+  });
+
+  it('keeps invisible wall hit areas selectable outside correction mode', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    const secondWall = document.querySelectorAll('.surface-kind-wall polygon')[1] as SVGPolygonElement;
+    fireEvent.pointerDown(secondWall);
+    expect(screen.getByRole('button', { name: 'Mantieni identico Muro 2' })).toBeInTheDocument();
   });
 
   it('renames an internal wall and supports undo and redo', () => {

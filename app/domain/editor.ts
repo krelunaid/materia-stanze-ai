@@ -9,6 +9,10 @@ export type Surface = {
   points: Point[];
   frozen: boolean;
   materialId?: string;
+  confidence?: number;
+  slot?: 'left' | 'center' | 'right' | 'extra';
+  parentId?: string;
+  source?: 'ai' | 'manual' | 'demo';
 };
 
 export const surfaceLabels: Record<SurfaceKind, string> = {

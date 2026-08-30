@@ -1,3 +1,5 @@
+import { validateRoomGeometry, GeometrySlot } from '../geometry/validate';
+
 export type AiProviderId = 'grok' | 'openai';
 
 export type AiProvider = {
@@ -32,10 +34,13 @@ export type MaterialProduct = {
 };
 
 export type DetectedRoomSurface = {
+  id?: string;
   name: string;
   kind: 'wall' | 'floor' | 'ceiling' | 'door' | 'window' | 'other';
   points: Array<{ x: number; y: number }>;
   confidence: number;
+  slot?: GeometrySlot;
+  parentId?: string;
 };
 
 export type DetectedObjectRegion = {
@@ -749,10 +754,15 @@ export function normalizeRoomSurfaces(surfaces: DetectedRoomSurface[]) {
     return Math.max(...ys) - Math.min(...ys) >= .08;
   });
   const merged = extendSingleFrontalWallToImageTop(mergeFrontalWallStrips(withoutFalseCeiling));
+  const detectedFloor = merged.find((surface) => surface.kind === 'floor');
+  const typed = merged.map((surface) => surface.kind === 'door' || surface.kind === 'window'
+    ? normalizeOpeningKind(surface, detectedFloor)
+    : surface);
+  const validated = validateRoomGeometry(typed).surfaces;
   const kindOrder: Record<DetectedRoomSurface['kind'], number> = { wall: 0, floor: 1, ceiling: 2, door: 3, window: 4, other: 5 };
-  merged.sort((a, b) => kindOrder[a.kind] - kindOrder[b.kind]);
+  validated.sort((a, b) => kindOrder[a.kind] - kindOrder[b.kind]);
   const counters: Partial<Record<DetectedRoomSurface['kind'], number>> = {};
-  return merged.map((surface) => {
+  return validated.map((surface) => {
     counters[surface.kind] = (counters[surface.kind] ?? 0) + 1;
     const count = counters[surface.kind] as number;
     const base = surface.kind === 'wall' ? 'Muro'
@@ -761,7 +771,7 @@ export function normalizeRoomSurfaces(surfaces: DetectedRoomSurface[]) {
           : surface.kind === 'door' ? 'Porta'
             : surface.kind === 'window' ? 'Finestra'
               : 'Superficie';
-    const repeatedKind = merged.filter((candidate) => candidate.kind === surface.kind).length > 1;
+    const repeatedKind = validated.filter((candidate) => candidate.kind === surface.kind).length > 1;
     return { ...surface, name: repeatedKind || surface.kind === 'wall' ? `${base} ${count}` : base };
   });
 }
@@ -876,24 +886,11 @@ export function orderQuadClockwise(points: Array<{ x: number; y: number }>) {
 
 function consensusOpening(group: DetectedRoomSurface[], floor: DetectedRoomSurface | undefined) {
   const ranked = [...group].sort((left, right) => openingQuality(right, floor) - openingQuality(left, floor));
+  // Never average opening vertices: two slightly displaced quads can move a
+  // real side window toward the centre. Keep the strongest edge-aligned
+  // candidate and let the geometry validator reject impossible placement.
   const best = ranked[0];
-  if (ranked.length === 1 || ranked.some((surface) => surface.points.length !== 4)) {
-    return normalizeOpeningKind(best, floor);
-  }
-  const aligned = ranked.map((surface) => ({ ...surface, points: orderQuadClockwise(surface.points) }));
-  const weightTotal = aligned.reduce((total, surface) => total + Math.max(.2, surface.confidence), 0);
-  const points = Array.from({ length: 4 }, (_, index) => aligned.reduce((point, surface) => {
-    const weight = Math.max(.2, surface.confidence);
-    return {
-      x: point.x + surface.points[index].x * weight / weightTotal,
-      y: point.y + surface.points[index].y * weight / weightTotal,
-    };
-  }, { x: 0, y: 0 }));
-  return normalizeOpeningKind({
-    ...aligned[0],
-    confidence: aligned.reduce((total, surface) => total + surface.confidence, 0) / aligned.length,
-    points,
-  }, floor);
+  return normalizeOpeningKind({ ...best, points: orderQuadClockwise(best.points) }, floor);
 }
 
 export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[][]) {
@@ -940,7 +937,7 @@ export async function detectRoomSurfaces(provider: AiProvider, image: File) {
     'Before answering, inspect the entire image explicitly for every architectural opening. Do not omit low-contrast, overexposed or partially cropped windows and doors, including white frames on white walls.',
     'A black or dark metal frame on a white wall is an unmistakable opening candidate: inspect all four external frame edges before tracing other details.',
     'For every visible window or door, trace only the outside edge of the complete architectural frame as its own polygon, separate from the wall behind it. Use exactly four perspective-correct outer corners: top-left, top-right, bottom-right and bottom-left.',
-    'Return one door surface per physical framed opening. Do not return a door leaf, corridor seen through a doorway, cabinet, wall recess or furniture as another door. Never extend a door polygon beyond its outer jambs to a nearby wall edge or object.',
+    'Return one door surface per physical framed opening, including an open door seen from the side or at the image edge. Trace the fixed architectural opening between the outer jambs, lintel and threshold. Do not trace the moving door leaf or the corridor seen through it as separate surfaces. Never extend the opening beyond its jambs to a nearby wall edge, cabinet or furniture.',
     'A framed opening that reaches the floor and can be used for passage is a door, including glazed or frosted doors. Call an opening a window only when its complete sill is visibly above the floor.',
     'Never extend the vertical sides of a window down the wall to the floor. The visible horizontal lower frame or sill is the mandatory bottom edge, even when the wall below it is plain and the side jambs visually align with other edges.',
     'Never classify wall-hung pictures, grouped photo frames, mirrors, television screens, shelving units or tall cabinets as doors or windows.',
