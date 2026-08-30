@@ -1182,6 +1182,8 @@ export async function detectMovableObjectRegions(provider: AiProvider, image: Fi
       x: Math.min(1, Math.max(0, Number(point.x))), y: Math.min(1, Math.max(0, Number(point.y))),
     })),
   })).filter((region) => {
+    const fixedArchitecture = /window|finestr|blind|venezian|persian|shutter|radiator|termosif|sconce|applique|wall lamp|lampada (?:a |da )?parete|door|porta|opening|apertura|skirting|battiscopa|sanitary|sanitari|built[- ]?in|incass/i;
+    if (fixedArchitecture.test(region.label)) return false;
     if (region.confidence < .55 || !isSimpleRoomPolygon(region.points)) return false;
     const bounds = regionBounds(region);
     const area = (bounds.right - bounds.left) * (bounds.bottom - bounds.top);

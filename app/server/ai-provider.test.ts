@@ -399,6 +399,7 @@ describe('getAiProvider', () => {
       type: 'output_text', text: JSON.stringify({ regions: [
         { label: 'Letto', confidence: .94, points: [{ x: .2, y: .45 }, { x: .7, y: .45 }, { x: .75, y: .9 }, { x: .15, y: .9 }] },
         { label: 'Comodino', confidence: .88, points: [{ x: .72, y: .5 }, { x: .86, y: .5 }, { x: .86, y: .72 }, { x: .72, y: .72 }] },
+        { label: 'Applique a parete', confidence: .91, points: [{ x: .8, y: .2 }, { x: .9, y: .2 }, { x: .9, y: .3 }, { x: .8, y: .3 }] },
       ] }),
     }] }] }), { status: 200 }));
 
