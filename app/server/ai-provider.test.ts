@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { acceptsFurnitureRender, chooseSupportedImageAspectRatio, detectObjectRegion, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, knownRetailerProductImage, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
+import { acceptsFurnitureRender, chooseSupportedImageAspectRatio, detectMovableObjectRegions, detectObjectRegion, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, knownRetailerProductImage, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -372,7 +372,7 @@ describe('getAiProvider', () => {
       { name: 'black frame', kind: 'window' as const, confidence: .94, points: [{ x: .32, y: .2 }, { x: .68, y: .2 }, { x: .68, y: .6 }, { x: .32, y: .6 }] },
     ];
 
-    const result = reconcileRoomSurfaceCandidates([wallAndFloor, independentOpening]);
+    const result = reconcileRoomSurfaceCandidates([independentOpening, independentOpening]);
 
     expect(result.find((surface) => surface.kind === 'window')?.points).toEqual([
       { x: .32, y: .2 }, { x: .68, y: .2 }, { x: .68, y: .6 }, { x: .32, y: .6 },
@@ -392,6 +392,32 @@ describe('getAiProvider', () => {
     );
     expect(result).toMatchObject({ label: 'Sedia', confidence: .91 });
     expect(result?.points).toHaveLength(4);
+  });
+
+  it('detects all movable objects for safe automatic room cleaning', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ output: [{ content: [{
+      type: 'output_text', text: JSON.stringify({ regions: [
+        { label: 'Letto', confidence: .94, points: [{ x: .2, y: .45 }, { x: .7, y: .45 }, { x: .75, y: .9 }, { x: .15, y: .9 }] },
+        { label: 'Comodino', confidence: .88, points: [{ x: .72, y: .5 }, { x: .86, y: .5 }, { x: .86, y: .72 }, { x: .72, y: .72 }] },
+      ] }),
+    }] }] }), { status: 200 }));
+
+    const result = await detectMovableObjectRegions(
+      { id: 'grok', label: 'Grok', apiKey: 'xai-test' },
+      new File(['room'], 'room.jpg', { type: 'image/jpeg' }),
+    );
+
+    expect(result.map((region) => region.label)).toEqual(['Letto', 'Comodino']);
+  });
+
+  it('rejects an opening hallucinated by only one geometry pass', () => {
+    const room = [
+      { name: 'wall', kind: 'wall' as const, confidence: .96, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .7 }, { x: 0, y: .7 }] },
+      { name: 'floor', kind: 'floor' as const, confidence: .97, points: [{ x: 0, y: .7 }, { x: 1, y: .7 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+    ];
+    const hallucinated = { name: 'reflection', kind: 'window' as const, confidence: .91, points: [{ x: .6, y: .2 }, { x: .85, y: .2 }, { x: .85, y: .55 }, { x: .6, y: .55 }] };
+    const result = reconcileRoomSurfaceCandidates([[...room, hallucinated], room, room]);
+    expect(result.some((surface) => surface.kind === 'window')).toBe(false);
   });
 
   it('keeps the strongest overlapping window trace without averaging it toward the centre', () => {

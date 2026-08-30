@@ -143,6 +143,34 @@ const objectRegionSchema = {
   required: ['found', 'label', 'points', 'confidence'],
 } as const;
 
+const movableObjectRegionsSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    regions: {
+      type: 'array', minItems: 0, maxItems: 12,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          label: { type: 'string' },
+          points: {
+            type: 'array', minItems: 4, maxItems: 16,
+            items: {
+              type: 'object', additionalProperties: false,
+              properties: { x: { type: 'number', minimum: 0, maximum: 1 }, y: { type: 'number', minimum: 0, maximum: 1 } },
+              required: ['x', 'y'],
+            },
+          },
+          confidence: { type: 'number', minimum: 0, maximum: 1 },
+        },
+        required: ['label', 'points', 'confidence'],
+      },
+    },
+  },
+  required: ['regions'],
+} as const;
+
 const productSchema = {
   type: 'object',
   additionalProperties: false,
@@ -818,27 +846,44 @@ function openingOverlap(left: DetectedRoomSurface, right: DetectedRoomSurface) {
 
 function geometryScore(candidate: DetectedRoomSurface[]) {
   const floor = candidate.find((surface) => surface.kind === 'floor');
-  const openings = candidate.filter((surface) => surface.kind === 'door' || surface.kind === 'window');
   const walls = candidate.filter((surface) => surface.kind === 'wall');
   const tinyWallFragments = walls.filter((wall) => {
     const bounds = surfaceBounds(wall);
     return (bounds.right - bounds.left) * (bounds.bottom - bounds.top) < .055;
   }).length;
-  const nonWallConfidence = candidate.filter((surface) => surface.kind !== 'wall').reduce((total, surface) => total + surface.confidence, 0);
+  const structuralConfidence = candidate.filter((surface) => surface.kind !== 'wall' && surface.kind !== 'door' && surface.kind !== 'window')
+    .reduce((total, surface) => total + surface.confidence, 0);
   const wallConfidence = walls.length ? walls.reduce((total, wall) => total + wall.confidence, 0) / walls.length : 0;
-  return nonWallConfidence + wallConfidence
+  return structuralConfidence + wallConfidence
     + (walls.length ? 1.2 : 0)
     - Math.max(0, walls.length - 3) * .65
     - tinyWallFragments * .8
-    + (floor ? 4 + Math.min(floor.points.length, 12) * .12 : 0)
-    + openings.reduce((total, opening) => total + (opening.points.length === 4 ? 2 : 0), 0);
+    + (floor ? 4 - Math.max(0, floor.points.length - 8) * .08 : 0);
 }
 
-function floorQuality(surface: DetectedRoomSurface) {
+function floorAgreement(surface: DetectedRoomSurface, peers: DetectedRoomSurface[]) {
+  const differences: number[] = [];
+  for (const peer of peers) {
+    if (peer === surface) continue;
+    const samples: number[] = [];
+    for (let index = 1; index < 10; index += 1) {
+      const x = index / 10;
+      const left = floorBoundaryAtX(surface, x); const right = floorBoundaryAtX(peer, x);
+      if (left !== null && right !== null) samples.push(Math.abs(left - right));
+    }
+    if (samples.length >= 5) differences.push(samples.reduce((total, value) => total + value, 0) / samples.length);
+  }
+  if (!differences.length) return 0;
+  return differences.reduce((total, difference) => total + Math.max(0, 1 - difference / .12), 0);
+}
+
+function floorQuality(surface: DetectedRoomSurface, peers: DetectedRoomSurface[]) {
   const bounds = surfaceBounds(surface);
   const touchesBottom = bounds.bottom >= .985;
   const touchesSide = bounds.left <= .015 || bounds.right >= .985;
-  return surface.confidence + Math.min(surface.points.length, 12) * .08 + (touchesBottom ? 1 : 0) + (touchesSide ? .4 : 0);
+  return surface.confidence + floorAgreement(surface, peers) * 1.35
+    + (touchesBottom ? 1 : 0) + (touchesSide ? .4 : 0)
+    - Math.max(0, surface.points.length - 8) * .08;
 }
 
 function normalizeOpeningKind(surface: DetectedRoomSurface, floor: DetectedRoomSurface | undefined) {
@@ -899,26 +944,31 @@ export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[]
   const ranked = [...normalized].sort((left, right) => geometryScore(right) - geometryScore(left));
   const base = [...ranked[0]];
 
-  const floor = normalized.flatMap((candidate) => candidate.filter((surface) => surface.kind === 'floor'))
-    .sort((left, right) => floorQuality(right) - floorQuality(left))[0];
+  const floors = normalized.flatMap((candidate) => candidate.filter((surface) => surface.kind === 'floor'));
+  const floor = [...floors].sort((left, right) => floorQuality(right, floors) - floorQuality(left, floors))[0];
   if (floor) {
     const index = base.findIndex((surface) => surface.kind === 'floor');
     if (index >= 0) base[index] = floor;
     else base.push(floor);
   }
 
-  const openings = normalized.flatMap((candidate) => candidate.filter((surface) => surface.kind === 'door' || surface.kind === 'window'));
-  const groups: DetectedRoomSurface[][] = [];
+  const openings = normalized.flatMap((candidate, pass) => candidate
+    .filter((surface) => surface.kind === 'door' || surface.kind === 'window')
+    .map((surface) => ({ surface, pass })));
+  const groups: Array<Array<{ surface: DetectedRoomSurface; pass: number }>> = [];
   openings.forEach((opening) => {
     // The two independent vision passes often return a tighter glass polygon
     // and a wider outer-frame polygon for the same physical opening. Their IoU
     // can be close to .25 even though they clearly overlap; merge those instead
     // of presenting "Finestra 1" and "Finestra 2" for one real window.
-    const group = groups.find((items) => items.some((item) => openingOverlap(item, opening) >= .24));
+    const group = groups.find((items) => items.some((item) => openingOverlap(item.surface, opening.surface) >= .24));
     if (group) group.push(opening);
     else groups.push([opening]);
   });
-  const bestOpenings = groups.map((group) => consensusOpening(group, floor));
+  const minimumSupport = normalized.length > 1 ? 2 : 1;
+  const bestOpenings = groups
+    .filter((group) => new Set(group.map((item) => item.pass)).size >= minimumSupport)
+    .map((group) => consensusOpening(group.map((item) => item.surface), floor));
 
   return normalizeRoomSurfaces([
     ...base.filter((surface) => surface.kind !== 'door' && surface.kind !== 'window'),
@@ -1005,7 +1055,9 @@ export async function detectRoomSurfaces(
   ].join('\n');
   const openingAuditPrompt = [
     prompt,
-    'This image is an empty room generated from an architectural floor plan. Treat every repeated framed rectangle as a separate physical opening, not as decoration.',
+    options.source === 'floorplan-render'
+      ? 'This image is an empty room generated from an architectural floor plan. Treat every repeated framed rectangle as a separate physical opening, not as decoration.'
+      : 'This is a real interior photograph. Treat only fixed architectural frames as openings; furniture, pictures, mirrors, cabinets, shadows and colored wall areas are not openings.',
     'Opening-first verification pass: count every visible door and window before tracing the room planes. Inspect the left wall, frontal wall, right wall and both image edges independently.',
     'Classify each opening from visual evidence before drawing its polygon. An opening showing glass, outdoor foliage, daylight or window panes is a window when any sill or wall remains below it, even on a strongly foreshortened side wall. It is not a door merely because the perspective makes it tall.',
     'Never use the complete side-wall outline as a door or window. The four opening corners must follow its own frame; compare its lower edge with the local wall-floor junction. If the lower edge is visibly above that junction, return window. Only a real passable threshold touching the floor is a door.',
@@ -1078,6 +1130,64 @@ export async function detectObjectRegion(provider: AiProvider, image: File, poin
   }));
   if (!parsed.found || Number(parsed.confidence) < .45 || !isSimpleRoomPolygon(points)) return null;
   return { label: String(parsed.label || 'Oggetto residuo').trim().slice(0, 80), points, confidence: Math.min(1, Math.max(0, Number(parsed.confidence))) } satisfies DetectedObjectRegion;
+}
+
+function regionBounds(region: DetectedObjectRegion) {
+  const xs = region.points.map((point) => point.x); const ys = region.points.map((point) => point.y);
+  return { left: Math.min(...xs), top: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
+}
+
+function regionIou(left: DetectedObjectRegion, right: DetectedObjectRegion) {
+  const a = regionBounds(left); const b = regionBounds(right);
+  const width = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+  const height = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+  const intersection = width * height;
+  const areaA = (a.right - a.left) * (a.bottom - a.top);
+  const areaB = (b.right - b.left) * (b.bottom - b.top);
+  return intersection / Math.max(areaA + areaB - intersection, Number.EPSILON);
+}
+
+export async function detectMovableObjectRegions(provider: AiProvider, image: File) {
+  const imageUrl = await fileToDataUri(image);
+  const response = await fetch(provider.id === 'grok' ? 'https://api.x.ai/v1/responses' : 'https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: provider.id === 'grok' ? 'grok-4.6' : 'gpt-5.4-mini',
+      input: [{ role: 'user', content: [
+        { type: 'input_image', image_url: imageUrl, detail: 'high' },
+        { type: 'input_text', text: [
+          'Find every visible movable or decorative object that must be removed to make this exact room empty.',
+          'Include beds, sofas, chairs, tables, movable cabinets, lamps, rugs, curtains, pictures, loose objects and partially cropped furniture. Group touching parts of one physical item into one region.',
+          'Never include walls, floor, ceiling, doors, windows, openings, skirting boards, radiators, fixed sanitary fixtures or built-in architectural elements.',
+          'Return a tight clockwise polygon with 4 to 16 normalized points around the complete visible silhouette of each removable object. Add only a small 1-2% inpainting margin.',
+          'Do not return one large room-wide polygon. Keep separate furniture groups separate, even when they overlap visually. Return an empty list only when the room is already empty.',
+          'Return only the structured result.',
+        ].join('\n') },
+      ] }],
+      max_output_tokens: 2400,
+      reasoning: { effort: 'medium' },
+      text: { format: { type: 'json_schema', name: 'movable_object_regions', schema: movableObjectRegionsSchema, strict: true } },
+      store: false,
+    }),
+    signal: AbortSignal.timeout(60000),
+  });
+  const payload = await response.json() as ResponsesPayload;
+  if (!response.ok) throw new Error(payload.error?.message ?? 'Riconoscimento automatico dei mobili non disponibile.');
+  const parsed = JSON.parse(responseText(payload).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) as { regions?: DetectedObjectRegion[] };
+  const valid = (parsed.regions ?? []).map((region) => ({
+    label: String(region.label || 'Oggetto').trim().slice(0, 80),
+    confidence: Math.min(1, Math.max(0, Number(region.confidence) || 0)),
+    points: (region.points ?? []).slice(0, 16).map((point) => ({
+      x: Math.min(1, Math.max(0, Number(point.x))), y: Math.min(1, Math.max(0, Number(point.y))),
+    })),
+  })).filter((region) => {
+    if (region.confidence < .55 || !isSimpleRoomPolygon(region.points)) return false;
+    const bounds = regionBounds(region);
+    const area = (bounds.right - bounds.left) * (bounds.bottom - bounds.top);
+    return area >= .002 && area <= .65;
+  }).sort((left, right) => right.confidence - left.confidence);
+  return valid.filter((region, index) => !valid.slice(0, index).some((kept) => regionIou(region, kept) >= .72));
 }
 
 async function remoteImageToDataUri(value: string) {

@@ -25,7 +25,7 @@ export async function POST(request: Request) {
       return json({ message: 'La fotografia deve essere in formato JPG o PNG.' }, headers, 400);
     }
     if (image.size > 20 * 1024 * 1024) return json({ message: 'La fotografia supera il limite di 20 MB.' }, headers, 413);
-    const surfaces = await detectRoomSurfaces(provider, image);
+    const surfaces = await detectRoomSurfaces(provider, image, { openingAudit: true, source: 'photo' });
     return json({ surfaces, provider: provider.id }, headers);
   } catch (caught) {
     return json({

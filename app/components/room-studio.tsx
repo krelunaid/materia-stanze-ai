@@ -97,7 +97,6 @@ function clientValidatedSurfaces(input: DetectedSurface[], idPrefix: string): Su
 }
 
 const HOSTED_SITE = 'https://materia-stanze-ai.andreagadducci.chatgpt.site';
-const EMPTY_ROOM_FRAMING_MIN = .64;
 
 const furnitureFacingLabels: Record<FurnitureFacing, string> = {
   'front-wall': 'Muro frontale',
@@ -473,52 +472,6 @@ function loadImageSource(source: string) {
     image.onerror = () => { window.clearTimeout(timer); reject(new Error('Non riesco a leggere una delle immagini.')); };
     image.src = source;
   });
-}
-
-async function framingSimilarity(originalSource: string, generatedSource: string) {
-  const [original, generated] = await Promise.all([
-    loadImageSource(originalSource),
-    loadImageSource(generatedSource),
-  ]);
-  const width = 96; const height = 64;
-  const originalCanvas = document.createElement('canvas');
-  const generatedCanvas = document.createElement('canvas');
-  originalCanvas.width = generatedCanvas.width = width;
-  originalCanvas.height = generatedCanvas.height = height;
-  const originalContext = originalCanvas.getContext('2d', { willReadFrequently: true });
-  const generatedContext = generatedCanvas.getContext('2d', { willReadFrequently: true });
-  if (!originalContext || !generatedContext) return 0;
-  drawImageCover(originalContext, original, width, height);
-  drawImageCover(generatedContext, generated, width, height);
-  const originalPixels = originalContext.getImageData(0, 0, width, height).data;
-  const generatedPixels = generatedContext.getImageData(0, 0, width, height).data;
-  let difference = 0; let gradientDifference = 0; let samples = 0;
-  const luminance = (pixels: Uint8ClampedArray, offset: number) => pixels[offset] * .2126 + pixels[offset + 1] * .7152 + pixels[offset + 2] * .0722;
-
-  // Furniture usually occupies the lower centre. The top and outside borders
-  // instead contain the architectural anchors that must not move or disappear.
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      if (y >= height * .38 && x >= width * .1 && x <= width * .9) continue;
-      const offset = (y * width + x) * 4;
-      difference += (
-        Math.abs(originalPixels[offset] - generatedPixels[offset])
-        + Math.abs(originalPixels[offset + 1] - generatedPixels[offset + 1])
-        + Math.abs(originalPixels[offset + 2] - generatedPixels[offset + 2])
-      ) / (3 * 255);
-      if (x + 1 < width && y + 1 < height) {
-        const right = offset + 4; const below = offset + width * 4;
-        const originalGradient = Math.hypot(luminance(originalPixels, right) - luminance(originalPixels, offset), luminance(originalPixels, below) - luminance(originalPixels, offset));
-        const generatedGradient = Math.hypot(luminance(generatedPixels, right) - luminance(generatedPixels, offset), luminance(generatedPixels, below) - luminance(generatedPixels, offset));
-        gradientDifference += Math.min(1, Math.abs(originalGradient - generatedGradient) / 96);
-      }
-      samples += 1;
-    }
-  }
-  if (!samples) return 0;
-  const colorSimilarity = 1 - difference / samples;
-  const edgeSimilarity = 1 - gradientDifference / samples;
-  return colorSimilarity * .42 + edgeSimilarity * .58;
 }
 
 function colorStabilizedRoomLayer(
@@ -1829,36 +1782,44 @@ export function RoomStudio() {
     setIsEmptyingRoom(true); setError(null);
     setShowProcessedPreview(false);
     setSurfaces(baselineSurfaces);
-    setNotice('L’IA sta riconoscendo e rimuovendo i mobili. L’originale resta sempre disponibile.');
+    setNotice('Grok sta delimitando automaticamente tutti i mobili. Pareti, pavimento e aperture resteranno pixel per pixel uguali.');
     try {
       const frozenSurfaces = baselineSurfaces.filter((surface) => surface.frozen);
-      const { inputImage, mask } = await createMaskedInput({ frozenSurfaces });
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        if (attempt > 0) setNotice('La precedente elaborazione ha cambiato l’inquadratura: la scarto e riprovo mantenendo tutti i bordi originali.');
-        const form = new FormData();
-        form.append('image', inputImage, 'room-input.jpg');
-        if (frozenSurfaces.length) form.append('mask', mask, 'freeze-mask.png');
-        form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
-        if (attempt > 0) form.append('strictRetry', 'true');
-        const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/empty-room'), { method: 'POST', body: form }, 180000);
-        if (!response.ok || !result.image) throw new Error(result.message ?? 'Immagine non disponibile.');
-        const protectedPreview = await protectAiResult(result.image, { frozenSurfaces, stabilizeColor: true });
-        const similarity = await framingSimilarity(room.previewUrl, protectedPreview);
-        if (similarity < EMPTY_ROOM_FRAMING_MIN) {
-          if (attempt < 2) continue;
-          throw new Error('Grok ha cambiato l’inquadratura della foto: il risultato è stato scartato e l’originale è rimasto intatto. Riprova tra poco.');
-        }
+      const detectionImage = await createGeometryInput(room.previewUrl);
+      const detectionForm = new FormData();
+      detectionForm.append('image', detectionImage, 'room-objects.jpg');
+      detectionForm.append('mode', 'all');
+      const detected = await requestJson<{ regions?: CleanupRegion[]; message?: string }>(
+        endpoint('/api/detect-object'), { method: 'POST', body: detectionForm }, 90000,
+      );
+      if (!detected.response.ok) throw new Error(detected.result.message ?? 'Non riesco a delimitare i mobili.');
+      const regions = (detected.result.regions ?? []).filter((region) => isValidPolygon(region.points));
+      if (!regions.length) throw new Error('Grok non vede mobili rimovibili con sicurezza. La foto originale è rimasta intatta.');
 
-        const approved = geometryForDerivedImage(baselineSurfaces);
-        originalSurfacesRef.current = geometryForDerivedImage(baselineSurfaces);
-        processedSurfacesRef.current = approved;
-        setSurfaces(approved); setPastSurfaces([]); setFutureSurfaces([]);
-        const preferred = approved.find((surface) => surface.kind === 'floor') ?? approved[0] ?? null;
-        setSelectedId(preferred?.id ?? null); setRenameDraft(preferred?.name ?? '');
-        setProcessedPreview(protectedPreview); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
-        setNotice('Stanza vuota pronta. I contorni approvati restano quelli della foto originale: l’IA non li ha ricalcolati.');
-        return;
-      }
+      const removalSurfaces: Surface[] = regions.map((region, index) => ({
+        id: `auto-clean-${index}`, name: region.label, kind: 'other', frozen: false, points: region.points,
+      }));
+      setNotice(`${regions.length} zone da pulire riconosciute. Modifico solo quei contorni e proteggo ogni altro pixel.`);
+      const { inputImage, mask } = await createMaskedInput({ editableSurfaces: removalSurfaces, sourceUrl: room.previewUrl });
+      const form = new FormData();
+      form.append('image', inputImage, 'room-input.jpg');
+      form.append('mask', mask, 'furniture-mask.png');
+      form.append('targetAreas', JSON.stringify(regions.map((region) => ({ label: region.label, points: region.points }))));
+      form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
+      const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/empty-room'), { method: 'POST', body: form }, 180000);
+      if (!response.ok || !result.image) throw new Error(result.message ?? 'Immagine non disponibile.');
+      const protectedPreview = await protectAiResult(result.image, {
+        editableSurfaces: removalSurfaces, protectedSurfaces: frozenSurfaces, sourceUrl: room.previewUrl, stabilizeColor: true,
+      });
+
+      const approved = geometryForDerivedImage(baselineSurfaces);
+      originalSurfacesRef.current = geometryForDerivedImage(baselineSurfaces);
+      processedSurfacesRef.current = approved;
+      setSurfaces(approved); setPastSurfaces([]); setFutureSurfaces([]);
+      const preferred = approved.find((surface) => surface.kind === 'floor') ?? approved[0] ?? null;
+      setSelectedId(preferred?.id ?? null); setRenameDraft(preferred?.name ?? '');
+      setProcessedPreview(protectedPreview); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
+      setNotice(`Stanza pulita in ${regions.length} zone. Fuori dai contorni dei mobili la fotografia e le misure sono rimaste identiche.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Non sono riuscito a svuotare la stanza.');
       setNotice(null);

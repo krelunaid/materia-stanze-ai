@@ -23,19 +23,36 @@ export async function POST(request: Request) {
     const image = incoming.get('image');
     const mask = incoming.get('mask');
     const protectedAreas = String(incoming.get('protectedAreas') ?? '').slice(0, 1000);
+    const targetAreasInput = String(incoming.get('targetAreas') ?? '').slice(0, 12000);
     const strictRetry = incoming.get('strictRetry') === 'true';
     if (!(image instanceof File) || !image.type.startsWith('image/')) {
       return json({ message: 'Carica una fotografia valida della stanza.' }, headers, 400);
     }
     if (image.size > 20 * 1024 * 1024) return json({ message: 'La fotografia supera il limite di 20 MB.' }, headers, 413);
+    let targetAreas = '';
+    try {
+      const parsed = JSON.parse(targetAreasInput) as Array<{ label?: unknown; points?: Array<{ x?: unknown; y?: unknown }> }>;
+      const safe = Array.isArray(parsed) ? parsed.slice(0, 12).map((region) => ({
+        label: String(region.label ?? 'oggetto').replace(/[^\p{L}\p{N} .,'’-]/gu, '').slice(0, 80),
+        points: Array.isArray(region.points) ? region.points.slice(0, 16).map((point) => ({
+          x: Math.min(1, Math.max(0, Number(point.x))), y: Math.min(1, Math.max(0, Number(point.y))),
+        })).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)) : [],
+      })).filter((region) => region.points.length >= 4) : [];
+      if (safe.length) targetAreas = JSON.stringify(safe);
+    } catch {
+      targetAreas = '';
+    }
+    if (!(mask instanceof File) || mask.type !== 'image/png' || !targetAreas) {
+      return json({ message: 'Aggiorna Materia: la pulizia sicura richiede i contorni automatici dei mobili.' }, headers, 409);
+    }
 
     const prompt = [
-      'This is a constrained photographic inpainting task, not a new room generation. Return the complete source photograph and erase only the precise silhouettes of movable objects.',
-      'Edit this exact interior photograph into the same room completely empty of movable furniture, lamps, rugs, decorations, curtains and loose objects.',
+      'This is strictly local photographic inpainting, not a new room generation. Return the complete source photograph and edit only the transparent areas of the technical mask.',
+      `Remove only the movable objects inside these automatically detected regions: ${targetAreas}.`,
       'The output must be a pixel-aligned edit of the input with the identical width-to-height ratio, field of view and framing. Every unchanged architectural landmark must remain at the same normalized image coordinates.',
       'The same four source-image corners and the complete top, bottom, left and right borders must all remain visible. Never zoom, crop, pan, rotate, extend or recompose the photograph.',
       'Preserve the wall-to-floor boundary at exactly the same height and perspective. Never replace a wall, ceiling, door or window with floor texture and never let the floor expand upward.',
-      'Remove wall-hung pictures, photo frames, posters, mirrors, clocks and every decorative object too; the final room must contain no movable or decorative item.',
+      'Inside each transparent mask region, remove the indicated furniture or decoration and reconstruct only the simplest continuation of the immediately surrounding architecture.',
       'Treat the source photograph as a strict architectural record: preserve the exact camera position, lens perspective, crop, room dimensions, wall edges, ceiling, floor, doors, windows, openings, skirting, radiators and every fixed detail already visible.',
       'Never create a new window, door, opening, radiator, column, cabinet, fixture, trim or architectural feature that is not visibly present in the source photograph.',
       'Where removed furniture hides part of the room, reconstruct only the simplest continuous extension of the nearest visible wall, wall covering, skirting and floor. When uncertain, continue the existing wall or floor; never invent a feature.',
@@ -46,12 +63,9 @@ export async function POST(request: Request) {
 
     const result = await editImage(provider, {
       source: image,
-      // Grok preserves the source aspect ratio for a single-image edit. Freeze
-      // pixels are restored client-side, so its technical mask must not turn
-      // this into a multi-image composition that can change the framing.
-      mask: provider.id === 'grok' ? null : mask instanceof File && mask.type === 'image/png' ? mask : null,
+      mask,
       prompt,
-      maskExplanation: 'solid white polygons identify protected Freeze areas that must remain visually unchanged; transparent areas may be reconstructed.',
+      maskExplanation: 'transparent polygons are the only editable furniture-removal areas; every solid white pixel is protected and must stay visually identical',
     });
     return json({ image: result, provider: provider.id }, headers);
   } catch (caught) {
