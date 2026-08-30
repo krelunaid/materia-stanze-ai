@@ -104,6 +104,15 @@ describe('RoomStudio', () => {
     expect(screen.getByLabelText('Modalità inserimento prodotto')).toBeInTheDocument();
   });
 
+  it('offers a simple manual furniture picker before the first cleanup', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    expect(screen.getByRole('button', { name: '◎ Indica un mobile' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '◎ Indica un mobile' }));
+    expect(screen.getByRole('button', { name: 'Annulla selezione' })).toBeInTheDocument();
+    expect(screen.getByText('Tocca il centro di un mobile nella foto: lo delimito e lo rimuovo.')).toBeInTheDocument();
+  });
+
   it('imports a floorplan, starts automatic room creation and keeps manual correction available', () => {
     render(<RoomStudio />);
     fireEvent.change(document.querySelector('#floorplan-file') as HTMLInputElement, { target: { files: [new File(['plan'], 'casa.png', { type: 'image/png' })] } });

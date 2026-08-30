@@ -1915,7 +1915,12 @@ export function RoomStudio() {
       form.append('x', String(point.x)); form.append('y', String(point.y));
       const { response, result } = await requestJson<{ region?: CleanupRegion | null; message?: string }>(endpoint('/api/detect-object'), { method: 'POST', body: form }, 70000);
       if (!response.ok) throw new Error(result.message ?? 'Riconoscimento non disponibile.');
-      if (!result.region || !isValidPolygon(result.region.points)) throw new Error('In quel punto non riconosco un oggetto mobile. Tocca il centro dell’oggetto rimasto.');
+      if (!result.region || !isValidPolygon(result.region.points)) {
+        setIsPickingCleanup(false);
+        setCleanupRegion(null);
+        setNotice('In quel punto non c’è un mobile da rimuovere. La selezione è stata chiusa: puoi riprovare su un oggetto oppure continuare.');
+        return;
+      }
       setCleanupRegion(result.region); setIsPickingCleanup(false);
       setNotice(`${result.region.label} riconosciuto. Controlla il contorno evidenziato e premi “Pulisci selezione”.`);
     } catch (caught) {
