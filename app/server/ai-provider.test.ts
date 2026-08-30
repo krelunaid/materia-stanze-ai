@@ -350,6 +350,26 @@ describe('getAiProvider', () => {
     expect(result.find((surface) => surface.kind === 'wall')?.points).toEqual(accurate.points);
   });
 
+  it('preserves a clearly detected far wall when the strongest pass omits it', () => {
+    const floor = { name: 'floor', kind: 'floor' as const, confidence: .98, points: [{ x: 0, y: .76 }, { x: .22, y: .64 }, { x: .78, y: .64 }, { x: 1, y: .76 }, { x: 1, y: 1 }, { x: 0, y: 1 }] };
+    const left = { name: 'left', kind: 'wall' as const, confidence: .97, points: [{ x: 0, y: 0 }, { x: .22, y: .18 }, { x: .22, y: .64 }, { x: 0, y: .76 }] };
+    const right = { name: 'right', kind: 'wall' as const, confidence: .97, points: [{ x: .78, y: .18 }, { x: 1, y: 0 }, { x: 1, y: .76 }, { x: .78, y: .64 }] };
+    const backA = { name: 'far wall', kind: 'wall' as const, confidence: .9, points: [{ x: .22, y: .18 }, { x: .78, y: .18 }, { x: .78, y: .64 }, { x: .22, y: .64 }] };
+    const backB = { ...backA, confidence: .88, points: [{ x: .21, y: .17 }, { x: .79, y: .17 }, { x: .79, y: .65 }, { x: .21, y: .65 }] };
+    const ceiling = { name: 'ceiling', kind: 'ceiling' as const, confidence: .99, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: .78, y: .18 }, { x: .22, y: .18 }] };
+
+    const result = reconcileRoomSurfaceCandidates([
+      [left, right, floor, ceiling],
+      [left, right, backA, floor],
+      [left, right, backB, floor],
+    ]);
+
+    expect(result.filter((surface) => surface.kind === 'wall')).toHaveLength(3);
+    expect(result.some((surface) => surface.kind === 'wall'
+      && Math.min(...surface.points.map((point) => point.x)) > .15
+      && Math.max(...surface.points.map((point) => point.x)) < .85)).toBe(true);
+  });
+
   it('extends a single full-width frontal wall to the top when no ceiling is visible', () => {
     const result = normalizeRoomSurfaces([
       { name: 'back wall', kind: 'wall', confidence: .92, points: [{ x: 0, y: .08 }, { x: 1, y: .08 }, { x: 1, y: .53 }, { x: 0, y: .56 }] },

@@ -847,6 +847,12 @@ function openingOverlap(left: DetectedRoomSurface, right: DetectedRoomSurface) {
 function geometryScore(candidate: DetectedRoomSurface[]) {
   const floor = candidate.find((surface) => surface.kind === 'floor');
   const walls = candidate.filter((surface) => surface.kind === 'wall');
+  const hasVisibleBackWall = walls.some((wall) => {
+    const bounds = surfaceBounds(wall);
+    return bounds.left < .48 && bounds.right > .52
+      && bounds.right - bounds.left >= .24
+      && (bounds.right - bounds.left) * (bounds.bottom - bounds.top) >= .07;
+  });
   const tinyWallFragments = walls.filter((wall) => {
     const bounds = surfaceBounds(wall);
     return (bounds.right - bounds.left) * (bounds.bottom - bounds.top) < .055;
@@ -856,6 +862,8 @@ function geometryScore(candidate: DetectedRoomSurface[]) {
   const wallConfidence = walls.length ? walls.reduce((total, wall) => total + wall.confidence, 0) / walls.length : 0;
   return structuralConfidence + wallConfidence
     + (walls.length ? 1.2 : 0)
+    + Math.min(3, walls.length) * .35
+    + (hasVisibleBackWall ? 1.1 : 0)
     - Math.max(0, walls.length - 3) * .65
     - tinyWallFragments * .8
     + (floor ? 4 - Math.max(0, floor.points.length - 8) * .08 : 0);
@@ -977,6 +985,31 @@ export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[]
     else base.push(floor);
   }
 
+  const wallGroups: Array<Array<{ surface: DetectedRoomSurface; pass: number }>> = [];
+  normalized.forEach((candidate, pass) => candidate
+    .filter((surface) => surface.kind === 'wall')
+    .forEach((surface) => {
+      const group = wallGroups.find((items) => items.some((item) => openingOverlap(item.surface, surface) >= .28));
+      if (group) group.push({ surface, pass });
+      else wallGroups.push([{ surface, pass }]);
+    }));
+  const baseWalls = base.filter((surface) => surface.kind === 'wall');
+  wallGroups.forEach((group) => {
+    const strongest = [...group].sort((left, right) => right.surface.confidence - left.surface.confidence)[0].surface;
+    const bounds = surfaceBounds(strongest);
+    const centralBackWall = bounds.left < .48 && bounds.right > .52
+      && bounds.right - bounds.left >= .24
+      && (bounds.right - bounds.left) * (bounds.bottom - bounds.top) >= .07;
+    const supported = new Set(group.map((item) => item.pass)).size >= 2;
+    const strongCentralBackWall = centralBackWall && strongest.confidence >= .82;
+    if ((!supported && !strongCentralBackWall) || baseWalls.some((wall) => openingOverlap(wall, strongest) >= .28)) return;
+    // The far wall may be absent from the numerically strongest pass even
+    // though another independent pass traces it clearly. Preserve that plane
+    // instead of leaving a hole between the side walls.
+    base.push(strongest);
+    baseWalls.push(strongest);
+  });
+
   const openings = normalized.flatMap((candidate, pass) => candidate
     .filter((surface) => surface.kind === 'door' || surface.kind === 'window')
     .map((surface) => ({ surface, pass })));
@@ -1014,6 +1047,8 @@ export async function detectRoomSurfaces(
     'Trace every visible structural planar surface: the complete floor, each genuinely distinct wall plane, the ceiling only when its plane is actually visible, and visible doors or windows as separate surfaces.',
     'A wall is one continuous architectural plane. Never split the same wall at a door, window, picture, cabinet, chair, color change, wall covering, tile joint, shadow or furniture edge. Infer that wall continuously behind all openings and objects, then return each door or window separately on top of it.',
     'For a mostly frontal wall with several doors, return one wall polygon spanning behind all those doors; never return narrow vertical wall strips aligned to door jambs or furniture.',
+    'When the room has visible depth, the far/back wall is a mandatory separate wall plane. Trace the complete smaller plane bounded by the left and right receding walls and by its real ceiling and floor junctions, even when it has the same color or material as the side walls.',
+    'Never omit the far wall because it is distant, partly covered, dark, low contrast, or contains windows. Infer it continuously behind openings and furniture; do not mistake the entire far wall for a window, doorway or decorative panel.',
     'Do not label the upper part of a wall as ceiling. If the photograph begins on the wall and no ceiling plane is visible, omit the ceiling entirely.',
     'When no ceiling plane is visible, every full-width frontal wall that reaches the top crop must use y=0 for its upper boundary; do not leave an unexplained horizontal gap above it.',
     'Before answering, inspect the entire image explicitly for every architectural opening. Do not omit low-contrast, overexposed or partially cropped windows and doors, including white frames on white walls.',
