@@ -214,6 +214,38 @@ describe('RoomStudio', () => {
     expect(document.querySelectorAll('.surface-kind-window')).toHaveLength(1);
   });
 
+  it('lets iPhone users remove a wrong point or cancel a door drawing', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: '＋ Porta' }));
+    const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+    fireEvent.pointerDown(overlay, { clientX: 100, clientY: 200 });
+    fireEvent.pointerDown(overlay, { clientX: 300, clientY: 200 });
+    expect(screen.getByRole('toolbar', { name: 'Correggi disegno Porta' })).toHaveTextContent('2/4 punti');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancella ultimo punto' }));
+    expect(screen.getByRole('toolbar', { name: 'Correggi disegno Porta' })).toHaveTextContent('1/4 punti');
+    fireEvent.click(screen.getByRole('button', { name: 'Annulla disegno Porta' }));
+    expect(overlay).not.toHaveClass('is-drawing');
+    expect(screen.queryByRole('toolbar', { name: 'Correggi disegno Porta' })).not.toBeInTheDocument();
+  });
+
+  it('keeps undo and delete visible after a door is created', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: '＋ Porta' }));
+    const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+    fireEvent.pointerDown(overlay, { clientX: 100, clientY: 200 });
+    fireEvent.pointerDown(overlay, { clientX: 300, clientY: 200 });
+    fireEvent.pointerDown(overlay, { clientX: 300, clientY: 550 });
+    fireEvent.pointerDown(overlay, { clientX: 100, clientY: 550 });
+    expect(screen.getByRole('toolbar', { name: 'Azioni per Porta 1' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Elimina Porta 1' }));
+    expect(document.querySelector('.surface-kind-door')).not.toBeInTheDocument();
+    expect(screen.queryByRole('toolbar', { name: 'Azioni per Porta 1' })).not.toBeInTheDocument();
+  });
+
   it('keeps invisible wall hit areas selectable outside correction mode', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));

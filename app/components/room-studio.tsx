@@ -1082,6 +1082,14 @@ export function RoomStudio() {
     setNotice(`${surface.name} creata${parentId ? ` e collegata a ${surfaces.find((item) => item.id === parentId)?.name ?? 'un muro'}` : ''}. Trascina i punti per correggerla.`);
   }
 
+  function undoDraftPoint() {
+    if (!drawKind || draft.length === 0) return;
+    const subject = drawKind === 'door' ? 'Porta' : drawKind === 'window' ? 'Finestra' : 'Muro';
+    setDraft((current) => current.slice(0, -1));
+    setError(null);
+    setNotice(`${subject}: ultimo punto cancellato. Tocca di nuovo la foto per continuare.`);
+  }
+
   function cancelDrawing() { manualOpeningParentRef.current = null; setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setNotice(null); }
 
   function beginVertexDrag(event: ReactPointerEvent<SVGCircleElement>, surfaceId: string, vertexIndex: number) {
@@ -2117,7 +2125,7 @@ export function RoomStudio() {
   }
 
   return (
-    <main ref={shellRef} className={`app-shell simple-mode step-${activeStep}`}>
+    <main ref={shellRef} className={`app-shell simple-mode step-${activeStep} ${activeStep === 2 && (drawKind || selected?.kind === 'door' || selected?.kind === 'window') ? 'has-mobile-surface-actions' : ''}`}>
       <header className="topbar">
         <a href="/projects" className="brand-lockup" aria-label="Vai ai progetti"><div className="brand-mark" aria-hidden="true"><span /><span /></div><div><p className="eyebrow">Studio materiali</p><p className="brand-name">Materia</p></div></a>
         <div className="project-heading"><span className="status-dot" /><div><p>{projectName}</p><span>{room ? `${room.sourceType === 'floorplan' ? 'Planimetria' : 'Foto'} · originale protetto` : 'Nuovo progetto locale'}</span></div></div>
@@ -2235,6 +2243,17 @@ export function RoomStudio() {
           <div className="phase-card"><span className="phase-index">0.3</span><div><p className="eyebrow">Modalità prova</p><strong>IA e Freeze pronti</strong><p>Ricerca prodotti, stanza vuota e render vengono elaborati dal server senza mostrare chiavi nell’app.</p></div></div>
         </aside>
       </div>
+      {activeStep === 2 && drawKind && <div className="mobile-surface-actions is-drawing" role="toolbar" aria-label={`Correggi disegno ${surfaceLabels[drawKind]}`}>
+        <div className="mobile-surface-action-state"><strong>{surfaceLabels[drawKind]}</strong><span>{lineWallDraw ? `${draft.length}/2 punti` : `${draft.length}/4 punti`}</span></div>
+        <button type="button" onClick={undoDraftPoint} disabled={draft.length === 0} aria-label="Cancella ultimo punto"><span aria-hidden="true">↶</span><small>Ultimo punto</small></button>
+        <button className="cancel-surface-action" type="button" onClick={cancelDrawing} aria-label={`Annulla disegno ${surfaceLabels[drawKind]}`}><span aria-hidden="true">×</span><small>Annulla</small></button>
+      </div>}
+      {activeStep === 2 && !drawKind && selected && (selected.kind === 'door' || selected.kind === 'window') && <div className="mobile-surface-actions is-selected" role="toolbar" aria-label={`Azioni per ${selected.name}`}>
+        <div className="mobile-surface-action-state"><strong>{selected.name}</strong><span>Modifica apertura</span></div>
+        <button type="button" onClick={undo} disabled={!pastSurfaces.length} aria-label={`Annulla ultima modifica a ${selected.name}`}><span aria-hidden="true">↶</span><small>Indietro</small></button>
+        <button className="delete-surface-action" type="button" onClick={deleteSelected} disabled={selected.frozen} aria-label={`Elimina ${selected.name}`}><span aria-hidden="true">⌫</span><small>Elimina</small></button>
+        <button className="finish-surface-action" type="button" onClick={() => { setSelectedId(null); setRenameDraft(''); setNotice('Apertura salvata.'); }} aria-label={`Termina modifica di ${selected.name}`}><span aria-hidden="true">✓</span><small>Fine</small></button>
+      </div>}
       {renderSummaryOpen && <div className="render-modal" role="dialog" aria-modal="true" aria-labelledby="render-summary-title"><div className="render-modal-card"><button className="modal-close" type="button" onClick={() => setRenderSummaryOpen(false)} aria-label="Chiudi riepilogo">×</button><p className="eyebrow">Richiesta pronta</p><h2 id="render-summary-title">Crea il render reale</h2><div className="render-checks"><div><span>Superfici con materiale</span><strong>{surfaces.filter((surface) => surface.materialId).length}</strong></div><div><span>Zone protette</span><strong>{surfaces.filter((surface) => surface.frozen).length}</strong></div><div><span>Mobili posizionati</span><strong>{placedFurniture.length}</strong></div></div><div className="render-list"><strong>Il motore riceverà:</strong><p>{surfaces.filter((surface) => surface.materialId).map((surface) => `${surface.name}: ${materialMap.get(surface.materialId!)?.name ?? 'materiale'}`).join(' · ') || 'Nessun materiale ancora applicato'}</p><p>{placedFurniture.length || customRequests.length ? `Da inserire: ${[...placedFurniture.map((item) => `${item.name} nel punto scelto`), ...customRequests].join(', ')}` : 'Nessun arredo aggiunto'}</p></div><div className="engine-warning"><span>AI</span><p><strong>{aiStatus === 'ready' ? `${aiProviderLabel ?? 'IA'} attiva` : 'L’app riproverà il collegamento'}</strong>L’IA riceve una maschera limitata a prodotti e mobili. Il resto della stanza, incluse aperture e Freeze, viene ricopiato pixel per pixel.</p></div><button className="modal-primary" type="button" onClick={() => void createFinalRender()} disabled={isRendering}>{isRendering ? 'Creo il render…' : 'Crea render reale con IA'}</button><button className="modal-secondary" type="button" onClick={() => setRenderSummaryOpen(false)}>Torna alle modifiche</button></div></div>}
     </main>
   );
