@@ -1165,12 +1165,12 @@ export async function detectMovableObjectRegions(provider: AiProvider, image: Fi
           'Return only the structured result.',
         ].join('\n') },
       ] }],
-      max_output_tokens: 2400,
-      reasoning: { effort: 'medium' },
+      max_output_tokens: 1800,
+      reasoning: { effort: 'low' },
       text: { format: { type: 'json_schema', name: 'movable_object_regions', schema: movableObjectRegionsSchema, strict: true } },
       store: false,
     }),
-    signal: AbortSignal.timeout(60000),
+    signal: AbortSignal.timeout(50000),
   });
   const payload = await response.json() as ResponsesPayload;
   if (!response.ok) throw new Error(payload.error?.message ?? 'Riconoscimento automatico dei mobili non disponibile.');
