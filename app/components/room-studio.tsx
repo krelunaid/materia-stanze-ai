@@ -1683,7 +1683,14 @@ export function RoomStudio() {
       });
       context.closePath();
     };
-    const expansion = Math.min(10, Math.max(4, Math.round(Math.min(width, height) * .008)));
+    // Object detectors usually stop at the visible body.  Include contact
+    // shadows and tiny attachment fringes as well, otherwise the room can be
+    // left with a table-shaped shadow after the table itself is removed.
+    const targetPoints = normalizedRegions.flatMap((region) => region.points);
+    const targetWidth = (Math.max(...targetPoints.map((point) => point.x)) - Math.min(...targetPoints.map((point) => point.x))) * width;
+    const targetHeight = (Math.max(...targetPoints.map((point) => point.y)) - Math.min(...targetPoints.map((point) => point.y))) * height;
+    const expansion = Math.min(40, Math.max(8, Math.round(Math.min(targetWidth, targetHeight) * .10)));
+    const shadowOffset = Math.round(expansion * .9);
     maskContext.fillStyle = '#ffffff'; maskContext.fillRect(0, 0, width, height);
     maskContext.globalCompositeOperation = 'destination-out';
     maskContext.fillStyle = '#000000'; maskContext.strokeStyle = '#000000';
@@ -1693,7 +1700,9 @@ export function RoomStudio() {
     maskReferenceContext.lineWidth = expansion * 2; maskReferenceContext.lineJoin = 'round'; maskReferenceContext.lineCap = 'round';
     for (const region of normalizedRegions) {
       traceRegion(maskContext, region); maskContext.fill(); maskContext.stroke();
+      maskContext.save(); maskContext.translate(0, shadowOffset); traceRegion(maskContext, region); maskContext.stroke(); maskContext.restore();
       traceRegion(maskReferenceContext, region); maskReferenceContext.fill(); maskReferenceContext.stroke();
+      maskReferenceContext.save(); maskReferenceContext.translate(0, shadowOffset); traceRegion(maskReferenceContext, region); maskReferenceContext.stroke(); maskReferenceContext.restore();
     }
     maskContext.globalCompositeOperation = 'source-over';
     const [inputImage, mask, maskReference] = await Promise.all([
@@ -1717,10 +1726,15 @@ export function RoomStudio() {
     const width = Math.max(1, Math.round(original.naturalWidth * scale));
     const height = Math.max(1, Math.round(original.naturalHeight * scale));
     const canvas = document.createElement('canvas');
+    const authorizationCanvas = document.createElement('canvas');
     canvas.width = width; canvas.height = height;
+    authorizationCanvas.width = width; authorizationCanvas.height = height;
     const context = canvas.getContext('2d');
-    if (!context) throw new Error('Non posso ricomporre la pulizia locale.');
+    const authorizationContext = authorizationCanvas.getContext('2d');
+    if (!context || !authorizationContext) throw new Error('Non posso ricomporre la pulizia locale.');
     context.drawImage(original, 0, 0, width, height);
+    authorizationContext.fillStyle = '#000000';
+    authorizationContext.fillRect(0, 0, width, height);
 
     const traceNormalized = (target: CanvasRenderingContext2D, points: Point[]) => {
       target.beginPath();
@@ -1757,11 +1771,16 @@ export function RoomStudio() {
       const softContext = softMask.getContext('2d');
       if (!patchContext || !sharpContext || !softContext) throw new Error('Non posso fondere il ritaglio pulito.');
       patchContext.drawImage(stabilized, tileLeft, tileTop, tileWidth, tileHeight);
-      const repairMargin = Math.min(10, Math.max(6, Math.round(Math.min(width, height) * .008)));
+      const resultPoints = result.regions.flatMap((region) => region.points);
+      const resultWidth = (Math.max(...resultPoints.map((point) => point.x)) - Math.min(...resultPoints.map((point) => point.x))) * width;
+      const resultHeight = (Math.max(...resultPoints.map((point) => point.y)) - Math.min(...resultPoints.map((point) => point.y))) * height;
+      const repairMargin = Math.min(40, Math.max(8, Math.round(Math.min(resultWidth, resultHeight) * .10)));
+      const shadowOffset = Math.round(repairMargin * .9);
       sharpContext.fillStyle = '#ffffff'; sharpContext.strokeStyle = '#ffffff';
       sharpContext.lineWidth = repairMargin * 2; sharpContext.lineJoin = 'round'; sharpContext.lineCap = 'round';
       for (const region of result.regions) {
         traceNormalized(sharpContext, region.points); sharpContext.fill(); sharpContext.stroke();
+        sharpContext.save(); sharpContext.translate(0, shadowOffset); traceNormalized(sharpContext, region.points); sharpContext.stroke(); sharpContext.restore();
       }
       const feather = Math.min(6, Math.max(3, Math.round(Math.min(width, height) * .004)));
       softContext.filter = `blur(${feather}px)`;
@@ -1769,6 +1788,26 @@ export function RoomStudio() {
       patchContext.globalCompositeOperation = 'destination-in';
       patchContext.drawImage(softMask, 0, 0);
       context.drawImage(fullPatch, 0, 0);
+
+      // The quality gate must receive the *actual* compositing envelope, not
+      // the detector's tighter polygon.  The previous raw-polygon guide made
+      // legitimate feather/shadow repairs look like unauthorized changes.
+      const authorizationMargin = repairMargin + feather * 3;
+      authorizationContext.fillStyle = '#ff00ff';
+      authorizationContext.strokeStyle = '#ff00ff';
+      authorizationContext.lineWidth = authorizationMargin * 2;
+      authorizationContext.lineJoin = 'round';
+      authorizationContext.lineCap = 'round';
+      for (const region of result.regions) {
+        traceNormalized(authorizationContext, region.points);
+        authorizationContext.fill();
+        authorizationContext.stroke();
+        authorizationContext.save();
+        authorizationContext.translate(0, shadowOffset);
+        traceNormalized(authorizationContext, region.points);
+        authorizationContext.stroke();
+        authorizationContext.restore();
+      }
     }
 
     // Doors, windows and user-frozen architecture always win over generated
@@ -1777,9 +1816,12 @@ export function RoomStudio() {
       context.save(); traceNormalized(context, surface.points); context.clip();
       context.drawImage(original, 0, 0, width, height); context.restore();
     }
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
-    if (!blob) throw new Error('Non posso completare la ricomposizione locale.');
-    return URL.createObjectURL(blob);
+    const [blob, authorizationReference] = await Promise.all([
+      new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png')),
+      new Promise<Blob | null>((resolve) => authorizationCanvas.toBlob(resolve, 'image/png')),
+    ]);
+    if (!blob || !authorizationReference) throw new Error('Non posso completare la ricomposizione locale.');
+    return { previewUrl: URL.createObjectURL(blob), authorizationReference };
   }
 
   async function generateCleanupTiles(
@@ -1935,6 +1977,7 @@ export function RoomStudio() {
     previewUrl: string,
     targetDescription: string,
     targetRegions: CleanupRegion[],
+    authorizationReference?: Blob,
   ) {
     const [source, renderedResponse] = await Promise.all([
       createGeometryInput(sourceUrl),
@@ -1946,17 +1989,30 @@ export function RoomStudio() {
     form.append('source', source, 'original-room.jpg');
     form.append('rendered', rendered, 'cleaned-room.png');
     form.append('targetDescription', targetDescription);
-    if (targetRegions.length) {
+    if (authorizationReference) {
+      form.append('maskReference', authorizationReference, 'authorized-cleanup-areas.png');
+    } else if (targetRegions.length) {
       const verificationSurfaces: Surface[] = targetRegions.map((region, index) => ({
         id: `verify-cleanup-${index}`, name: region.label, kind: 'other', frozen: false, points: region.points,
       }));
       const { maskReference } = await createMaskedInput({ editableSurfaces: verificationSurfaces, sourceUrl });
       form.append('maskReference', maskReference, 'authorized-cleanup-areas.png');
     }
-    const { response, result } = await requestJson<{ accepted?: boolean; message?: string }>(
+    const { response, result } = await requestJson<{
+      accepted?: boolean;
+      message?: string;
+      checks?: Record<string, boolean | number>;
+    }>(
       endpoint('/api/verify-cleanup'), { method: 'POST', body: form }, 90000,
     );
-    if (!response.ok || !result.accepted) throw new Error(result.message ?? 'La pulizia non ha superato il controllo fotografico.');
+    if (!response.ok || !result.accepted) {
+      if (result.checks) console.warn('Materia cleanup quality checks', result.checks);
+      const failure = new Error(result.message ?? 'La pulizia non ha superato il controllo fotografico.') as Error & {
+        cleanupChecks?: Record<string, boolean | number>;
+      };
+      failure.cleanupChecks = result.checks;
+      throw failure;
+    }
   }
 
   async function createFurnitureCutout(
@@ -2542,12 +2598,27 @@ export function RoomStudio() {
 
       setNotice(`${regions.length} zone da pulire riconosciute. Le elaboro in ritagli locali e proteggo ogni altro pixel.`);
       const architecturalAnchors = baselineSurfaces.filter((surface) => surface.frozen || surface.kind === 'door' || surface.kind === 'window');
-      const protectedPreview = await generateCleanupTiles(room.previewUrl, regions, architecturalAnchors, 'automatic');
+      const cleanupResult = await generateCleanupTiles(room.previewUrl, regions, architecturalAnchors, 'automatic');
+      const protectedPreview = cleanupResult.previewUrl;
       try {
         setNotice('Controllo che inquadratura, pareti, porte e finestre siano rimaste identiche…');
-        await verifyCleanupPreview(room.previewUrl, protectedPreview, regions.map((region) => region.label).join(', '), regions);
+        await verifyCleanupPreview(
+          room.previewUrl,
+          protectedPreview,
+          regions.map((region) => region.label).join(', '),
+          regions,
+          cleanupResult.authorizationReference,
+        );
       } catch (caught) {
-        URL.revokeObjectURL(protectedPreview);
+        if (new URLSearchParams(window.location.search).has('qa')) {
+          if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
+          processedBlobRef.current = protectedPreview;
+          setProcessedPreview(protectedPreview);
+          setProcessedLabel('Anteprima QA rifiutata');
+          setShowProcessedPreview(true);
+        } else {
+          URL.revokeObjectURL(protectedPreview);
+        }
         throw caught;
       }
       if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
@@ -2603,12 +2674,27 @@ export function RoomStudio() {
     setIsCleaningRegion(true); setError(null); setNotice(`Pulisco soltanto “${cleanupRegion.label}”. Tutto il resto viene ricopiato pixel per pixel.`);
     try {
       const architecturalAnchors = surfaces.filter((surface) => surface.frozen || surface.kind === 'door' || surface.kind === 'window');
-      const protectedPreview = await generateCleanupTiles(sourceUrl, [cleanupRegion], architecturalAnchors, 'local');
+      const cleanupResult = await generateCleanupTiles(sourceUrl, [cleanupRegion], architecturalAnchors, 'local');
+      const protectedPreview = cleanupResult.previewUrl;
       try {
         setNotice('Controllo che la pulizia locale non abbia alterato la stanza…');
-        await verifyCleanupPreview(sourceUrl, protectedPreview, cleanupRegion.label, [cleanupRegion]);
+        await verifyCleanupPreview(
+          sourceUrl,
+          protectedPreview,
+          cleanupRegion.label,
+          [cleanupRegion],
+          cleanupResult.authorizationReference,
+        );
       } catch (caught) {
-        URL.revokeObjectURL(protectedPreview);
+        if (new URLSearchParams(window.location.search).has('qa')) {
+          if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
+          processedBlobRef.current = protectedPreview;
+          setProcessedPreview(protectedPreview);
+          setProcessedLabel('Anteprima QA rifiutata');
+          setShowProcessedPreview(true);
+        } else {
+          URL.revokeObjectURL(protectedPreview);
+        }
         throw caught;
       }
       if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
