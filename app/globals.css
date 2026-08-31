@@ -276,6 +276,9 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .indicative-product-note span { margin-top:2px; color:#816b43; font-size:8px; line-height:1.35; }
 .indicative-product-note button { min-height:34px; padding:0 9px; border:1px solid #d9bd80; border-radius:8px; background:#fff; color:#765a2d; font-size:8px; font-weight:800; cursor:pointer; }
 .material-results { display:grid; gap:6px; max-height:220px; margin:9px 0 11px; overflow-y:auto; }
+.included-results-heading { display:flex; align-items:baseline; justify-content:space-between; gap:8px; padding:3px 2px; }
+.included-results-heading strong { color:var(--accent); font-size:9px; }
+.included-results-heading span { color:#77817d; font-size:8px; text-align:right; }
 .material-result { display:flex; align-items:center; gap:9px; width:100%; padding:7px; border:1px solid #e0e5e2; border-radius:11px; background:#fff; text-align:left; cursor:pointer; }
 .material-result.is-selected { border-color:var(--accent); background:#eef7f4; box-shadow:inset 3px 0 var(--accent); }
 .material-result>span:last-child { min-width:0; }
@@ -292,6 +295,7 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .custom-search-result { padding:11px; border:1px dashed #c7cfcb; border-radius:10px; background:#fafbfa; }
 .custom-search-result p { margin:0 0 8px; color:#6f7975; font-size:9px; }
 .custom-search-result button { width:100%; min-height:32px; border:0; border-radius:8px; background:var(--ink); color:#fff; font-size:9px; font-weight:700; cursor:pointer; }
+.opening-delete-inline,.opening-undo-inline { border-color:#e3b9af!important; background:#fff5f2!important; color:#8e3828!important; }
 .custom-color { display:flex; gap:7px; margin:0 0 10px; }
 .custom-color input { width:44px; height:36px; padding:3px; border:1px solid #d6deda; border-radius:8px; background:#fff; cursor:pointer; }
 .custom-color button { flex:1; border:1px solid #d6deda; border-radius:8px; background:#f7f9f7; font-size:9px; font-weight:700; cursor:pointer; }

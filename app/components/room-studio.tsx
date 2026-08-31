@@ -183,6 +183,53 @@ const catalogMaterials: StudioMaterial[] = [
   { id: 'wall-clay', name: 'Terra rosata', category: 'Colori', description: 'Pittura minerale', color: '#c9957f' },
 ];
 
+function normalizeProductSearch(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('it')
+    .replace(/\b(?:parquel|parqet|parket|parke|parche|parquetto)\b/g, 'parquet')
+    .replace(/\bpavimenti\b/g, 'pavimento')
+    .replace(/\blegni\b/g, 'legno')
+    .replace(/\broveri\b/g, 'rovere')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function catalogSearchText(item: StudioMaterial) {
+  const aliases = item.category === 'Pavimenti'
+    ? 'pavimento pavimenti parquet legno rovere doghe posa suolo'
+    : item.id === 'travertine'
+      ? 'pietra marmo beige lastra'
+      : item.id === 'concrete'
+        ? 'cemento calcestruzzo grigio materico piastrella'
+        : item.category === 'Colori'
+          ? 'parete muro pittura vernice colore'
+          : 'rivestimento parete muro piastrella';
+  return normalizeProductSearch(`${item.name} ${item.category} ${item.description} ${aliases}`);
+}
+
+function catalogSuggestions(rawQuery: string, requestedCategory: ProductSearchCategory) {
+  const query = normalizeProductSearch(rawQuery);
+  const flooringIntent = /\b(?:pavimento|parquet|legno|rovere|doghe)\b/.test(query);
+  const effectiveCategory = requestedCategory || (flooringIntent ? 'Pavimenti' : '');
+  const candidates = effectiveCategory
+    ? catalogMaterials.filter((item) => item.category === effectiveCategory)
+    : catalogMaterials;
+  if (!query) return candidates.slice(0, 4);
+  const tokens = query.split(/\s+/).filter((token) => token.length > 1);
+  const ranked = candidates.map((item, index) => {
+    const haystack = catalogSearchText(item);
+    const matched = tokens.filter((token) => haystack.includes(token)).length;
+    const intentBonus = flooringIntent && item.category === 'Pavimenti' ? 4 : 0;
+    const woodBonus = /\b(?:parquet|legno|rovere|doghe)\b/.test(query) && item.pattern === 'wood' ? 3 : 0;
+    return { item, score: matched * 3 + intentBonus + woodBonus, index };
+  }).filter(({ score }) => score > 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map(({ item }) => item);
+  return ranked.length ? ranked.slice(0, 4) : effectiveCategory ? candidates.slice(0, 4) : [];
+}
+
 const furnitureCatalog: Array<{ name: string; description: string; previewUrl?: string; sidePreviewUrl?: string }> = [
   { name: 'Divano chiaro', description: 'Soggiorno · tessuto', previewUrl: '/demo-sofa.png', sidePreviewUrl: '/demo-sofa-side.png' },
   { name: 'Poltrona', description: 'Soggiorno · relax' },
@@ -1002,14 +1049,8 @@ export function RoomStudio() {
   const projectName = room?.projectName ?? 'Progetto senza titolo';
   const importedCaption = useMemo(() => room ? `Immagine · ${room.displaySize}` : null, [room]);
   const filteredMaterials = useMemo(() => {
-    const query = [materialQuery, searchBrand, searchModel, searchColor].filter(Boolean).join(' ').trim().toLocaleLowerCase('it');
-    const byCategory = searchCategory ? catalogMaterials.filter((item) => item.category === searchCategory) : catalogMaterials;
-    if (!query) return byCategory.slice(0, 4);
-    const tokens = query.split(/\s+/).filter(Boolean);
-    return byCategory.filter((item) => {
-      const haystack = `${item.name} ${item.category} ${item.description}`.toLocaleLowerCase('it');
-      return tokens.every((token) => haystack.includes(token));
-    });
+    const query = [materialQuery, searchBrand, searchModel, searchColor].filter(Boolean).join(' ');
+    return catalogSuggestions(query, searchCategory);
   }, [materialQuery, searchBrand, searchModel, searchColor, searchCategory]);
   const filteredFurniture = useMemo(() => {
     if (searchCategory && searchCategory !== 'Arredi') return [];
@@ -1367,15 +1408,19 @@ export function RoomStudio() {
   }
 
   async function searchProductsOnline() {
+    const rawQuery = materialQuery.trim();
+    const combinedQuery = [rawQuery, searchBrand, searchModel, searchColor].filter(Boolean).join(' ');
+    const normalizedQuery = normalizeProductSearch(rawQuery);
+    const inferredFlooringCategory = /\b(?:pavimento|parquet|legno|rovere|doghe)\b/.test(normalizeProductSearch(combinedQuery));
     const criteria = {
       brand: searchBrand.trim(),
       model: searchModel.trim(),
       color: searchColor.trim(),
-      category: searchCategory,
+      category: searchCategory || (inferredFlooringCategory ? 'Pavimenti' : ''),
       sourceUrl: searchSourceUrl.trim(),
     };
-    const query = materialQuery.trim();
-    const readableSearch = [criteria.brand, criteria.model, criteria.color, criteria.category, query, criteria.sourceUrl].filter(Boolean).join(' · ');
+    const query = normalizedQuery || rawQuery;
+    const readableSearch = [criteria.brand, criteria.model, criteria.color, criteria.category, rawQuery, criteria.sourceUrl].filter(Boolean).join(' · ');
     if (readableSearch.length < 3 || isSearchingProducts) {
       if (readableSearch.length < 3) setError('Inserisci almeno una marca, un modello, un colore oppure una descrizione.');
       return;
@@ -1423,9 +1468,20 @@ export function RoomStudio() {
         };
       });
       setOnlineMaterials(found);
-      setNotice(found.length ? `${found.length} prodotti verificati. L’app indica chiaramente se ha trovato anche una texture ufficiale oppure soltanto i dati del catalogo.` : 'Nessun prodotto affidabile trovato. Prova con marca e collezione più precise.');
+      const includedSuggestions = catalogSuggestions(combinedQuery, criteria.category as ProductSearchCategory);
+      setNotice(found.length
+        ? `${found.length} prodotti verificati. L’app indica chiaramente se ha trovato anche una texture ufficiale oppure soltanto i dati del catalogo.`
+        : includedSuggestions.length
+          ? `Non ho trovato un prodotto online verificato, ma qui sotto trovi ${includedSuggestions.length} esempi compatibili da provare subito.`
+          : 'Nessun prodotto affidabile trovato. Prova con marca e collezione più precise.');
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Ricerca non disponibile.'); setNotice(null);
+      const includedSuggestions = catalogSuggestions(combinedQuery, criteria.category as ProductSearchCategory);
+      if (includedSuggestions.length) {
+        setError(null);
+        setNotice(`La ricerca online non ha risposto. Puoi comunque provare subito i ${includedSuggestions.length} esempi compatibili qui sotto.`);
+      } else {
+        setError(caught instanceof Error ? caught.message : 'Ricerca non disponibile.'); setNotice(null);
+      }
     } finally { setIsSearchingProducts(false); }
   }
 
@@ -2142,14 +2198,22 @@ export function RoomStudio() {
       const detectionForm = new FormData();
       detectionForm.append('image', detectionImage, 'room-objects.jpg');
       detectionForm.append('mode', 'all');
-      const detected = await requestJson<{ regions?: CleanupRegion[]; message?: string }>(
-        endpoint('/api/detect-object'), { method: 'POST', body: detectionForm }, 90000,
-      );
-      if (!detected.response.ok) throw new Error(detected.result.message ?? 'Non riesco a delimitare i mobili.');
+      let detected: Awaited<ReturnType<typeof requestJson<{ regions?: CleanupRegion[]; message?: string }>>>;
+      try {
+        detected = await requestJson<{ regions?: CleanupRegion[]; message?: string }>(
+          endpoint('/api/detect-object'), { method: 'POST', body: detectionForm }, 90000,
+        );
+        if (!detected.response.ok) throw new Error(detected.result.message ?? 'Non riesco a delimitare i mobili.');
+      } catch {
+        setIsPickingCleanup(true);
+        setError(null);
+        setNotice('Il riconoscimento automatico non si è concluso. Tocca il centro di un mobile: lo delimito e rimuovo senza cambiare la stanza. Puoi anche continuare con la foto originale.');
+        return;
+      }
       const regions = (detected.result.regions ?? []).filter((region) => isValidPolygon(region.points));
       if (!regions.length) {
         setIsPickingCleanup(true);
-        setNotice('Non riesco a delimitare tutti i mobili automaticamente. Tocca il centro di un mobile nella foto: lo riconosco e lo rimuovo senza cambiare la stanza.');
+        setNotice('Non vedo mobili da rimuovere: se la stanza è già vuota puoi continuare. Se ne è rimasto uno, tocca il suo centro per indicarlo.');
         return;
       }
 
@@ -2187,7 +2251,7 @@ export function RoomStudio() {
       setSelectedId(preferred?.id ?? null); setRenameDraft(preferred?.name ?? '');
       setNotice(`Stanza pulita in ${regions.length} zone. Formato della foto invariato; pareti e pavimento sono stati ricontrollati dopo la rimozione dei mobili.`);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Non sono riuscito a svuotare la stanza.');
+      setError(friendlyRequestError(caught).message);
       setNotice(null);
     } finally {
       setIsEmptyingRoom(false);
@@ -2621,7 +2685,7 @@ export function RoomStudio() {
           <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onRoomInput} /><input ref={cameraInputRef} id="camera-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" capture="environment" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onMaterialInput} /><input ref={furnitureInputRef} id="furniture-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onFurnitureInput} />
           {room?.sourceType === 'photo' && activeStep === 2 && <section className="empty-room-choice" aria-label="Svuota la stanza oppure continua"><div><strong>Vuoi svuotare la stanza?</strong><span>È facoltativo: puoi mantenere la foto originale e andare subito ai prodotti.</span></div><div className="empty-room-actions"><button className="skip-empty-room" type="button" onClick={skipEmptyRoom} disabled={isEmptyingRoom || isCleaningRegion}>Salta · usa foto originale →</button><button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom || isCleaningRegion}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button>{!cleanupRegion && <button type="button" className={isPickingCleanup ? 'is-active' : ''} onClick={() => { setIsPickingCleanup((current) => !current); setError(null); setNotice(isPickingCleanup ? 'Selezione annullata.' : processedPreview ? 'Tocca il centro dell’oggetto rimasto nella foto.' : 'Tocca il centro di un mobile nella foto: lo delimito e lo rimuovo.'); }} disabled={isDetectingCleanup || isCleaningRegion}>{isDetectingCleanup ? 'Riconosco…' : isPickingCleanup ? 'Annulla selezione' : processedPreview ? '◎ Pulisci un residuo' : '◎ Indica un mobile'}</button>}{cleanupRegion && <><button type="button" className="cleanup-confirm" onClick={() => void cleanResidualRegion()} disabled={isCleaningRegion}>{isCleaningRegion ? 'Pulisco…' : 'Pulisci selezione'}</button><button type="button" onClick={() => setCleanupRegion(null)} disabled={isCleaningRegion}>Annulla</button></>}</div></section>}
           {geometryDetectionStatus === 'fallback' && room?.sourceType === 'photo' && (activeStep === 2 || activeStep === 3) && <div className="geometry-fallback-warning" role="status"><div><strong>Contorni provvisori</strong><span>Il riconoscimento IA di questa foto non è riuscito. Non li presento come misure automatiche: correggili trascinando linee o pallini, oppure riprova.</span></div><button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview}>{isAutoFitting ? 'Riconosco…' : '✦ Riprova IA'}</button></div>}
-          <div className={`status-bar ${activeStep === 2 ? 'prepare-status' : ''}`}><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.'}</p>{room && (activeStep === 2 || activeStep === 3) && <button className={`edge-edit-button ${isCorrectingEdges ? 'is-active' : ''}`} type="button" onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine correzione' : activeStep === 3 ? '↔ Sposta linee' : room.sourceType === 'floorplan' ? 'Correggi il perimetro' : 'Correggi i bordi'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && <><button className={`opening-draw-button ${drawKind === 'door' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'door' ? cancelDrawing() : startDrawing('door', true)}>＋ Porta</button><button className={`opening-draw-button ${drawKind === 'window' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'window' ? cancelDrawing() : startDrawing('window', true)}>＋ Finestra</button></>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && <button className="continue-products-button" type="button" onClick={() => goToStep(3)}>Continua ai prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
+          <div className={`status-bar ${activeStep === 2 ? 'prepare-status' : ''}`}><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.'}</p>{drawKind && <button className="opening-undo-inline" type="button" onClick={undoDraftPoint} disabled={draft.length === 0}>↶ Ultimo punto</button>}{room && (activeStep === 2 || activeStep === 3) && !drawKind && <button className={`edge-edit-button ${isCorrectingEdges ? 'is-active' : ''}`} type="button" onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine correzione' : activeStep === 3 ? '↔ Sposta linee' : room.sourceType === 'floorplan' ? 'Correggi il perimetro' : 'Correggi i bordi'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && <><button className={`opening-draw-button ${drawKind === 'door' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'door' ? cancelDrawing() : startDrawing('door', true)}>{drawKind === 'door' ? '✕ Cancella porta' : '＋ Porta'}</button><button className={`opening-draw-button ${drawKind === 'window' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'window' ? cancelDrawing() : startDrawing('window', true)}>{drawKind === 'window' ? '✕ Cancella finestra' : '＋ Finestra'}</button></>}{activeStep === 2 && !drawKind && selected && (selected.kind === 'door' || selected.kind === 'window') && <button className="opening-delete-inline" type="button" onClick={deleteSelected} disabled={selected.frozen}>⌫ Elimina {selected.name}</button>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && !drawKind && <button className="continue-products-button" type="button" onClick={() => goToStep(3)}>Continua ai prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
         </section>
 
         <aside className="properties-panel" aria-label="Proprietà">
@@ -2656,7 +2720,7 @@ export function RoomStudio() {
               <div className="guided-search-actions"><button type="button" className="reset-search-button" onClick={resetProductSearch}>Azzera</button><button type="button" className="guided-search-button" onClick={() => void searchProductsOnline()} disabled={isSearchingProducts}>{isSearchingProducts ? 'Cerco nei cataloghi…' : `Cerca con ${aiProviderLabel ?? 'IA'}`}</button></div>
               <div className="search-scope"><span>Materiali</span><span>Colori</span><span>Arredi</span><span className="internet-ready">Prodotti reali con fonte</span></div>
               {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => { const missingFurnitureImage = item.category === 'Arredi' && !item.previewUrl; const target = recommendedSurface(item); return <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={`Riferimento ${item.name}`} /> : <span className="catalog-swatch tile" /> }<button className="online-product-info" type="button" onClick={() => void chooseOnlineProduct(item)} disabled={missingFurnitureImage} title={missingFurnitureImage ? 'Serve una foto prodotto prima di inserire questo mobile' : undefined}><strong>{item.brand} · {item.name}</strong><span className={`reference-badge reference-${item.referenceKind ?? 'metadata-only'}`}>{materialReferenceLabel(item)}</span><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a><button className="online-product-try" type="button" onClick={() => item.category === 'Arredi' ? void chooseOnlineProduct(item) : void applyMaterialAutomatically(item)} disabled={missingFurnitureImage || isApplyingProduct}>{item.category === 'Arredi' ? 'Inserisci nella stanza' : `Prova ora su ${target?.name ?? 'una superficie'}`}</button></div>; })}</div>}
-              <div className="material-results">{filteredMaterials.map((item) => <button type="button" key={item.id} className={`material-result ${material?.id === item.id ? 'is-selected' : ''}`} onClick={() => chooseMaterial(item)}><span className={`catalog-swatch ${item.pattern ?? 'color'}`} style={{ '--swatch-color': item.color } as CSSProperties} /><span><strong>{item.name}</strong><small>{item.category} · {item.description}</small></span></button>)}{filteredFurniture.map((item) => <button type="button" key={item.name} className={`material-result furniture-result ${pendingFurniture?.name === item.name ? 'is-selected' : ''}`} onClick={() => startFurniturePlacement(item.name, item.previewUrl, item.description, undefined, item.previewUrl, item.sidePreviewUrl)}>{item.previewUrl ? <img className="furniture-result-preview" src={item.previewUrl} alt="" /> : <span className="furniture-icon">＋</span>}<span><strong>{item.name}</strong><small>Tocca e poi scegli il punto nella stanza · {item.description}</small></span></button>)}{filteredMaterials.length === 0 && filteredFurniture.length === 0 && onlineMaterials.length === 0 && <div className="custom-search-result"><p>Nessun campione incluso corrisponde. Per trovare marca e prodotto esatti serve la ricerca IA attiva.</p><button type="button" onClick={addCustomRequest}>Aggiungi “{materialQuery.trim()}” alla richiesta</button></div>}</div>
+              <div className="material-results">{filteredMaterials.length > 0 && <div className="included-results-heading"><strong>Esempi compatibili</strong><span>Seleziona per provarli subito nella stanza</span></div>}{filteredMaterials.map((item) => <button type="button" key={item.id} className={`material-result ${material?.id === item.id ? 'is-selected' : ''}`} onClick={() => chooseMaterial(item)}><span className={`catalog-swatch ${item.pattern ?? 'color'}`} style={{ '--swatch-color': item.color } as CSSProperties} /><span><strong>{item.name}</strong><small>{item.category} · {item.description}</small></span></button>)}{filteredFurniture.map((item) => <button type="button" key={item.name} className={`material-result furniture-result ${pendingFurniture?.name === item.name ? 'is-selected' : ''}`} onClick={() => startFurniturePlacement(item.name, item.previewUrl, item.description, undefined, item.previewUrl, item.sidePreviewUrl)}>{item.previewUrl ? <img className="furniture-result-preview" src={item.previewUrl} alt="" /> : <span className="furniture-icon">＋</span>}<span><strong>{item.name}</strong><small>Tocca e poi scegli il punto nella stanza · {item.description}</small></span></button>)}{filteredMaterials.length === 0 && filteredFurniture.length === 0 && onlineMaterials.length === 0 && <div className="custom-search-result"><p>Nessun campione incluso corrisponde. Per trovare marca e prodotto esatti serve la ricerca IA attiva.</p><button type="button" onClick={addCustomRequest}>Aggiungi “{materialQuery.trim()}” alla richiesta</button></div>}</div>
               <div className="custom-color"><input type="color" aria-label="Scegli colore personalizzato" value={customColor} onChange={(event) => setCustomColor(event.target.value)} /><button type="button" onClick={chooseCustomColor}>Usa questo colore</button></div>
               {material && <div className="loaded-material">{material.previewUrl ? <img src={material.previewUrl} alt={`Campione ${material.name}`} /> : <span className="catalog-swatch tile" />}<div><strong>{material.name}</strong><small>{materialReferenceLabel(material)}</small></div></div>}
               {materialNeedsSample && <div className="indicative-product-note"><div><strong>Puoi provarlo subito.</strong><span>Senza un campione la resa sarà indicativa; la stanza e le misure restano protette.</span></div><button type="button" onClick={() => materialInputRef.current?.click()}>＋ Campione per resa esatta</button></div>}
@@ -2673,7 +2737,7 @@ export function RoomStudio() {
       {activeStep === 2 && drawKind && <div className="mobile-surface-actions is-drawing" role="toolbar" aria-label={`Correggi disegno ${surfaceLabels[drawKind]}`}>
         <div className="mobile-surface-action-state"><strong>{surfaceLabels[drawKind]}</strong><span>{lineWallDraw ? `${draft.length}/2 punti` : `${draft.length}/4 punti`}</span></div>
         <button type="button" onClick={undoDraftPoint} disabled={draft.length === 0} aria-label="Cancella ultimo punto"><span aria-hidden="true">↶</span><small>Ultimo punto</small></button>
-        <button className="cancel-surface-action" type="button" onClick={cancelDrawing} aria-label={`Annulla disegno ${surfaceLabels[drawKind]}`}><span aria-hidden="true">×</span><small>Annulla</small></button>
+        <button className="cancel-surface-action" type="button" onClick={cancelDrawing} aria-label={`Cancella tutto il disegno ${surfaceLabels[drawKind]}`}><span aria-hidden="true">⌫</span><small>Cancella tutto</small></button>
       </div>}
       {(activeStep === 2 || (activeStep === 3 && isCorrectingEdges)) && !drawKind && selected && <div className="mobile-surface-actions is-selected" role="toolbar" aria-label={`Azioni per ${selected.name}`}>
         <div className="mobile-surface-action-state"><strong>{selected.name}</strong><span>{selected.kind === 'door' || selected.kind === 'window' ? 'Modifica o elimina' : 'Correggi i contorni'}</span></div>

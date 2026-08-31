@@ -131,6 +131,28 @@ describe('RoomStudio', () => {
     expect(screen.getByText('Tocca il centro di un mobile nella foto: lo delimito e lo rimuovo.')).toBeInTheDocument();
   });
 
+  it('keeps cleanup usable when automatic detection finds no movable objects', async () => {
+    mockMaterialPhotoCrop();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/capabilities')) {
+        return new Response(JSON.stringify({ aiReady: true, providerLabel: 'Grok' }), { status: 200 });
+      }
+      if (url.includes('/api/detect-object')) {
+        return new Response(JSON.stringify({ regions: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: '⌂ Svuota la stanza' }));
+
+    expect(await screen.findByText(/Non vedo mobili da rimuovere/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Annulla selezione' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('imports a floorplan, starts automatic room creation and keeps manual correction available', () => {
     render(<RoomStudio />);
     fireEvent.change(document.querySelector('#floorplan-file') as HTMLInputElement, { target: { files: [new File(['plan'], 'casa.png', { type: 'image/png' })] } });
@@ -267,7 +289,8 @@ describe('RoomStudio', () => {
     expect(screen.getByRole('toolbar', { name: 'Correggi disegno Porta' })).toHaveTextContent('2/4 punti');
     fireEvent.click(screen.getByRole('button', { name: 'Cancella ultimo punto' }));
     expect(screen.getByRole('toolbar', { name: 'Correggi disegno Porta' })).toHaveTextContent('1/4 punti');
-    fireEvent.click(screen.getByRole('button', { name: 'Annulla disegno Porta' }));
+    expect(screen.getByRole('button', { name: '✕ Cancella porta' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancella tutto il disegno Porta' }));
     expect(overlay).not.toHaveClass('is-drawing');
     expect(screen.queryByRole('toolbar', { name: 'Correggi disegno Porta' })).not.toBeInTheDocument();
   });
@@ -283,6 +306,7 @@ describe('RoomStudio', () => {
     fireEvent.pointerDown(overlay, { clientX: 300, clientY: 550 });
     fireEvent.pointerDown(overlay, { clientX: 100, clientY: 550 });
     expect(screen.getByRole('toolbar', { name: 'Azioni per Porta 1' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '⌫ Elimina Porta 1' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Elimina Porta 1' }));
     expect(document.querySelector('.surface-kind-door')).not.toBeInTheDocument();
     expect(screen.queryByRole('toolbar', { name: 'Azioni per Porta 1' })).not.toBeInTheDocument();
@@ -444,6 +468,32 @@ describe('RoomStudio', () => {
     expect(movedTop).toBeGreaterThan(initialTop);
     expect(movedTop - initialTop).toBeLessThan(8);
     expect(Number.parseFloat((furniture as HTMLElement).style.width)).toBeGreaterThan(initialWidth);
+  });
+
+  it('shows parquet examples despite a common typo and keeps them after an empty online search', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/capabilities')) {
+        return new Response(JSON.stringify({ aiReady: true, providerLabel: 'Grok' }), { status: 200 });
+      }
+      if (url.includes('/api/search-products')) {
+        return new Response(JSON.stringify({ products: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+    fireEvent.change(screen.getByLabelText('Cerca materiali, colori o mobili'), { target: { value: 'pavimento parquel legno' } });
+
+    expect(screen.getByRole('button', { name: /Rovere naturale/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Rovere chiaro/ })).toBeInTheDocument();
+    expect(screen.getByText('Esempi compatibili')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Cerca con Grok' }));
+
+    expect(await screen.findByText(/2 esempi compatibili da provare subito/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Rovere naturale/ })).toBeInTheDocument();
   });
 
   it('offers separate brand, model, color and product type criteria', () => {

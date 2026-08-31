@@ -31,7 +31,7 @@ const policies: Record<AiRoute, LimitPolicy> = {
   'clean-room-region': { hourly: 16, daily: 48 },
   'detect-object': { hourly: 24, daily: 72 },
   'detect-surfaces': { hourly: 20, daily: 60 },
-  'empty-room': { hourly: 6, daily: 18 },
+  'empty-room': { hourly: 12, daily: 36 },
   'render-room': { hourly: 6, daily: 18 },
   'search-products': { hourly: 30, daily: 90 },
 };

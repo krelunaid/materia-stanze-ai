@@ -1461,14 +1461,14 @@ export async function detectMovableObjectRegions(provider: AiProvider, image: Fi
 
   let primaryFailure: Error | null = null;
   try {
-    const primary = await requestRegions(primaryPrompt, 'low', 50000);
+    const primary = await requestRegions(primaryPrompt, 'low', 35000);
     const regions = normalize(primary.regions ?? [], .5);
     if (regions.length) return regions;
   } catch (caught) {
     primaryFailure = caught instanceof Error ? caught : new Error('Riconoscimento automatico dei mobili non disponibile.');
   }
   try {
-    const recovered = await requestRegions(recoveryPrompt, 'medium', 65000);
+    const recovered = await requestRegions(recoveryPrompt, 'medium', 35000);
     return normalize(recovered.regions ?? [], .4);
   } catch (caught) {
     throw primaryFailure ?? (caught instanceof Error ? caught : new Error('Riconoscimento automatico dei mobili non disponibile.'));
@@ -1574,6 +1574,7 @@ export async function editImage(provider: AiProvider, input: {
         prompt,
         ...(images.length === 1 ? { image: images[0] } : { images }),
       }),
+      signal: AbortSignal.timeout(150000),
     });
     const payload = await response.json() as ImagePayload;
     const result = payload.data?.[0];
