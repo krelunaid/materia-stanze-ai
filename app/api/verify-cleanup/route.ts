@@ -20,6 +20,7 @@ export async function POST(request: Request) {
     const incoming = await request.formData();
     const source = incoming.get('source');
     const rendered = incoming.get('rendered');
+    const maskReference = incoming.get('maskReference');
     const targetDescription = String(incoming.get('targetDescription') ?? 'mobili indicati').slice(0, 12000);
     if (!(source instanceof File) || !source.type.startsWith('image/') || source.size > 20 * 1024 * 1024) {
       return json({ message: 'La fotografia originale non è valida.' }, headers, 400);
@@ -27,7 +28,13 @@ export async function POST(request: Request) {
     if (!(rendered instanceof File) || !rendered.type.startsWith('image/') || rendered.size > 20 * 1024 * 1024) {
       return json({ message: 'La fotografia pulita non è valida.' }, headers, 400);
     }
-    const verification = await verifyRoomCleanup(provider, { source, renderedFile: rendered, targetDescription });
+    if (maskReference != null && (!(maskReference instanceof File) || maskReference.type !== 'image/png' || maskReference.size > 8 * 1024 * 1024)) {
+      return json({ message: 'La guida delle aree autorizzate non è valida.' }, headers, 400);
+    }
+    const verification = await verifyRoomCleanup(provider, {
+      source, renderedFile: rendered, targetDescription,
+      maskReferenceFile: maskReference instanceof File ? maskReference : undefined,
+    });
     if (!acceptsRoomCleanup(verification)) {
       return json({
         code: 'cleanup_quality_rejected',

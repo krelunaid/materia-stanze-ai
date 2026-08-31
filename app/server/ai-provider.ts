@@ -1832,22 +1832,30 @@ export async function verifyRoomCleanup(provider: AiProvider, input: {
   source: File;
   renderedImage?: string;
   renderedFile?: File;
+  maskReferenceFile?: File;
   targetDescription: string;
 }) {
   const renderedImage = input.renderedFile
     ? await fileToDataUri(input.renderedFile)
     : input.renderedImage;
   if (!renderedImage) throw new Error('La fotografia pulita non è disponibile per il controllo.');
-  const content = [
+  const content: Array<
+    | { type: 'input_image'; image_url: string; detail: 'high' }
+    | { type: 'input_text'; text: string }
+  > = [
     { type: 'input_image', image_url: await fileToDataUri(input.source), detail: 'high' },
     { type: 'input_image', image_url: renderedImage, detail: 'high' },
+    ...(input.maskReferenceFile ? [{
+      type: 'input_image' as const, image_url: await fileToDataUri(input.maskReferenceFile), detail: 'high' as const,
+    }] : []),
     {
       type: 'input_text',
       text: [
         'You are a strict before/after quality gate for real-estate room emptying. Image 1 is the exact source photograph. Image 2 is the proposed empty-room result.',
+        input.maskReferenceFile ? 'Image 3 is a technical authorization map at the exact same normalized coordinates: MAGENTA is the only area where reconstruction is allowed and BLACK must remain identical. Never interpret it as a room photograph.' : '',
         `Authorized non-architectural removal targets: ${input.targetDescription}`,
         'sameCameraAndCrop is true only when the camera, perspective, field of view, four image borders, horizon and every architectural landmark remain at the same normalized coordinates.',
-        'sameArchitecture is true only when walls, floor, ceiling, corners, columns, beams, stairs, skirting and room dimensions are unchanged. Replacing a wall with floor or straightening/rebuilding the room is false.',
+        'sameArchitecture is true only when walls, floor, ceiling, corners, columns, beams, stairs, skirting and room dimensions outside the authorized magenta silhouette are unchanged. Revealing the simplest continuation of a wall, floor or skirting previously hidden inside magenta is allowed; replacing a wall with floor or straightening/rebuilding the room is false.',
         'openingsPreserved is true only when every source door and window keeps the same frame, size, position and appearance.',
         'removableTargetsRemoved is true only when the listed loose furniture, fitted cabinetry, appliances and bathroom furnishings are fully removed, including legs, shadows and fragments.',
         'noVisiblePatchArtifacts is true only when there are no rectangles, bands, repeated textures, seams, abrupt color blocks, floating fragments, smears or inconsistent perspective patches.',

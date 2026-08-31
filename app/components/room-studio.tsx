@@ -15,6 +15,14 @@ import {
   useState,
 } from 'react';
 import { drawImageCover } from '../lib/canvas-draw';
+import {
+  cleanupTileRatioMatches,
+  CleanupTileBounds,
+  CleanupTilePlan,
+  planCleanupTiles,
+  pointInCleanupTile,
+  snapCleanupTileBounds,
+} from '../lib/cleanup-tiles';
 import { AcceptedRoomFile, formatBytes, validateRoomFile } from '../lib/file-validation';
 import { furnitureEditRect, hasCompatibleImageGeometry, rectPoints } from '../lib/render-geometry';
 import { NormalizedProductBounds, removeConnectedProductBackground } from '../lib/product-cutout';
@@ -647,8 +655,8 @@ export function friendlyRequestError(caught: unknown) {
 }
 
 function colorStabilizedRoomLayer(
-  original: HTMLImageElement,
-  generated: HTMLImageElement,
+  original: CanvasImageSource & { naturalWidth?: number; width?: number; naturalHeight?: number; height?: number },
+  generated: CanvasImageSource & { naturalWidth?: number; width?: number; naturalHeight?: number; height?: number },
   width: number,
   height: number,
 ) {
@@ -754,6 +762,7 @@ async function requestJson<T>(url: string, init: RequestInit, timeoutMs: number)
 export function RoomStudio() {
   const [room, setRoom] = useState<ImportedRoom | null>(null);
   const [roomRatio, setRoomRatio] = useState(16 / 10);
+  const [canvasCssSize, setCanvasCssSize] = useState({ width: 1000, height: 625 });
   const [surfaces, setSurfaces] = useState<Surface[]>([]);
   const [pastSurfaces, setPastSurfaces] = useState<Surface[][]>([]);
   const [futureSurfaces, setFutureSurfaces] = useState<Surface[][]>([]);
@@ -870,6 +879,23 @@ export function RoomStudio() {
   useEffect(() => {
     shellRef.current?.scrollTo?.({ top: 0, left: 0, behavior: 'auto' });
   }, [activeStep]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const update = () => {
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) setCanvasCssSize({ width: rect.width, height: rect.height });
+    };
+    update();
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(update);
+      observer.observe(canvas);
+      return () => observer.disconnect();
+    }
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, [room, activeStep]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1317,7 +1343,7 @@ export function RoomStudio() {
     return linked.some((item) => surfaces.find((candidate) => candidate.id === item.surfaceId)?.frozen);
   }
 
-  function beginVertexDrag(event: ReactPointerEvent<SVGCircleElement>, surfaceId: string, vertexIndex: number) {
+  function beginVertexDrag(event: ReactPointerEvent<Element>, surfaceId: string, vertexIndex: number) {
     if (geometryDragRef.current) return;
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     const surface = surfaces.find((item) => item.id === surfaceId);
@@ -1625,6 +1651,177 @@ export function RoomStudio() {
     return { inputImage, mask, maskReference };
   }
 
+  async function createCleanupTileInput(source: HTMLImageElement, plan: CleanupTilePlan) {
+    const bounds = snapCleanupTileBounds(plan.bounds, source.naturalWidth, source.naturalHeight);
+    const normalizedRegions = plan.regions.map((region) => ({
+      ...region, points: region.points.map((point) => pointInCleanupTile(point, bounds)),
+    }));
+    const sourceLeft = Math.round(bounds.left * source.naturalWidth);
+    const sourceTop = Math.round(bounds.top * source.naturalHeight);
+    const sourceWidth = Math.max(1, Math.round((bounds.right - bounds.left) * source.naturalWidth));
+    const sourceHeight = Math.max(1, Math.round((bounds.bottom - bounds.top) * source.naturalHeight));
+    const maximumSide = isAppleTouchDevice() ? 1024 : 1280;
+    const scale = Math.min(1, maximumSide / Math.max(sourceWidth, sourceHeight));
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+    const imageCanvas = document.createElement('canvas');
+    const maskCanvas = document.createElement('canvas');
+    const maskReferenceCanvas = document.createElement('canvas');
+    imageCanvas.width = maskCanvas.width = maskReferenceCanvas.width = width;
+    imageCanvas.height = maskCanvas.height = maskReferenceCanvas.height = height;
+    const imageContext = imageCanvas.getContext('2d');
+    const maskContext = maskCanvas.getContext('2d');
+    const maskReferenceContext = maskReferenceCanvas.getContext('2d');
+    if (!imageContext || !maskContext || !maskReferenceContext) throw new Error('Non posso preparare il ritaglio locale.');
+    imageContext.drawImage(source, sourceLeft, sourceTop, sourceWidth, sourceHeight, 0, 0, width, height);
+
+    const traceRegion = (context: CanvasRenderingContext2D, region: CleanupRegion) => {
+      context.beginPath();
+      region.points.forEach((point, index) => {
+        const x = point.x * width; const y = point.y * height;
+        if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
+      });
+      context.closePath();
+    };
+    const expansion = Math.min(10, Math.max(4, Math.round(Math.min(width, height) * .008)));
+    maskContext.fillStyle = '#ffffff'; maskContext.fillRect(0, 0, width, height);
+    maskContext.globalCompositeOperation = 'destination-out';
+    maskContext.fillStyle = '#000000'; maskContext.strokeStyle = '#000000';
+    maskContext.lineWidth = expansion * 2; maskContext.lineJoin = 'round'; maskContext.lineCap = 'round';
+    maskReferenceContext.fillStyle = '#000000'; maskReferenceContext.fillRect(0, 0, width, height);
+    maskReferenceContext.fillStyle = '#ff00ff'; maskReferenceContext.strokeStyle = '#ff00ff';
+    maskReferenceContext.lineWidth = expansion * 2; maskReferenceContext.lineJoin = 'round'; maskReferenceContext.lineCap = 'round';
+    for (const region of normalizedRegions) {
+      traceRegion(maskContext, region); maskContext.fill(); maskContext.stroke();
+      traceRegion(maskReferenceContext, region); maskReferenceContext.fill(); maskReferenceContext.stroke();
+    }
+    maskContext.globalCompositeOperation = 'source-over';
+    const [inputImage, mask, maskReference] = await Promise.all([
+      new Promise<Blob | null>((resolve) => imageCanvas.toBlob(resolve, 'image/jpeg', .94)),
+      new Promise<Blob | null>((resolve) => maskCanvas.toBlob(resolve, 'image/png')),
+      new Promise<Blob | null>((resolve) => maskReferenceCanvas.toBlob(resolve, 'image/png')),
+    ]);
+    if (!inputImage || !mask || !maskReference) throw new Error('Non posso preparare foto e maschera del ritaglio locale.');
+    return { ...plan, bounds, normalizedRegions, inputImage, mask, maskReference };
+  }
+
+  async function composeCleanupTiles(
+    sourceUrl: string,
+    results: Array<{ bounds: CleanupTileBounds; regions: CleanupRegion[]; image: string }>,
+    protectedSurfaces: Surface[],
+  ) {
+    const original = await loadImageSource(sourceUrl);
+    const generated = await Promise.all(results.map((result) => loadImageSource(result.image)));
+    const maximumSide = isAppleTouchDevice() ? 1280 : 1536;
+    const scale = Math.min(1, maximumSide / Math.max(original.naturalWidth, original.naturalHeight));
+    const width = Math.max(1, Math.round(original.naturalWidth * scale));
+    const height = Math.max(1, Math.round(original.naturalHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width; canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Non posso ricomporre la pulizia locale.');
+    context.drawImage(original, 0, 0, width, height);
+
+    const traceNormalized = (target: CanvasRenderingContext2D, points: Point[]) => {
+      target.beginPath();
+      points.forEach((point, index) => {
+        const x = point.x * width; const y = point.y * height;
+        if (index === 0) target.moveTo(x, y); else target.lineTo(x, y);
+      });
+      target.closePath();
+    };
+    for (let resultIndex = 0; resultIndex < results.length; resultIndex += 1) {
+      const result = results[resultIndex];
+      const tileLeft = Math.round(result.bounds.left * width);
+      const tileTop = Math.round(result.bounds.top * height);
+      const tileWidth = Math.max(1, Math.round((result.bounds.right - result.bounds.left) * width));
+      const tileHeight = Math.max(1, Math.round((result.bounds.bottom - result.bounds.top) * height));
+      if (!cleanupTileRatioMatches(generated[resultIndex].naturalWidth, generated[resultIndex].naturalHeight, tileWidth, tileHeight)) {
+        throw new Error('Il ritaglio IA ha cambiato proporzioni: è stato scartato e la fotografia è rimasta intatta.');
+      }
+      const originalTile = document.createElement('canvas');
+      originalTile.width = tileWidth; originalTile.height = tileHeight;
+      const originalTileContext = originalTile.getContext('2d');
+      if (!originalTileContext) throw new Error('Non posso controllare il colore del ritaglio.');
+      originalTileContext.drawImage(original, result.bounds.left * original.naturalWidth, result.bounds.top * original.naturalHeight,
+        (result.bounds.right - result.bounds.left) * original.naturalWidth,
+        (result.bounds.bottom - result.bounds.top) * original.naturalHeight, 0, 0, tileWidth, tileHeight);
+      const stabilized = colorStabilizedRoomLayer(originalTile, generated[resultIndex], tileWidth, tileHeight);
+      const fullPatch = document.createElement('canvas');
+      const sharpMask = document.createElement('canvas');
+      const softMask = document.createElement('canvas');
+      fullPatch.width = sharpMask.width = softMask.width = width;
+      fullPatch.height = sharpMask.height = softMask.height = height;
+      const patchContext = fullPatch.getContext('2d');
+      const sharpContext = sharpMask.getContext('2d');
+      const softContext = softMask.getContext('2d');
+      if (!patchContext || !sharpContext || !softContext) throw new Error('Non posso fondere il ritaglio pulito.');
+      patchContext.drawImage(stabilized, tileLeft, tileTop, tileWidth, tileHeight);
+      const repairMargin = Math.min(10, Math.max(6, Math.round(Math.min(width, height) * .008)));
+      sharpContext.fillStyle = '#ffffff'; sharpContext.strokeStyle = '#ffffff';
+      sharpContext.lineWidth = repairMargin * 2; sharpContext.lineJoin = 'round'; sharpContext.lineCap = 'round';
+      for (const region of result.regions) {
+        traceNormalized(sharpContext, region.points); sharpContext.fill(); sharpContext.stroke();
+      }
+      const feather = Math.min(6, Math.max(3, Math.round(Math.min(width, height) * .004)));
+      softContext.filter = `blur(${feather}px)`;
+      softContext.drawImage(sharpMask, 0, 0);
+      patchContext.globalCompositeOperation = 'destination-in';
+      patchContext.drawImage(softMask, 0, 0);
+      context.drawImage(fullPatch, 0, 0);
+    }
+
+    // Doors, windows and user-frozen architecture always win over generated
+    // pixels, even when a furniture mask touches their border.
+    for (const surface of protectedSurfaces) {
+      context.save(); traceNormalized(context, surface.points); context.clip();
+      context.drawImage(original, 0, 0, width, height); context.restore();
+    }
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('Non posso completare la ricomposizione locale.');
+    return URL.createObjectURL(blob);
+  }
+
+  async function generateCleanupTiles(
+    sourceUrl: string,
+    regions: CleanupRegion[],
+    protectedSurfaces: Surface[],
+    mode: 'automatic' | 'local',
+  ) {
+    const source = await loadImageSource(sourceUrl);
+    const plans = planCleanupTiles(regions, mode === 'local' ? 1 : 3);
+    const results: Array<{ bounds: CleanupTileBounds; regions: CleanupRegion[]; image: string }> = [];
+    for (let index = 0; index < plans.length; index += 1) {
+      const plan = plans[index];
+      setNotice(mode === 'local'
+        ? 'Pulisco il ritaglio locale senza rigenerare il resto della fotografia…'
+        : `Pulisco la zona ${index + 1} di ${plans.length} senza rigenerare il resto della fotografia…`);
+      const prepared = await createCleanupTileInput(source, plan);
+      const form = new FormData();
+      form.append('image', prepared.inputImage, `room-tile-${index + 1}.jpg`);
+      form.append('mask', prepared.mask, `room-tile-mask-${index + 1}.png`);
+      form.append('maskReference', prepared.maskReference, `room-tile-guide-${index + 1}.png`);
+      form.append('localCrop', 'true');
+      let route = endpoint('/api/empty-room');
+      if (mode === 'local') {
+        route = endpoint('/api/clean-room-region');
+        form.append('targetLabel', prepared.normalizedRegions[0].label);
+        form.append('targetArea', JSON.stringify(prepared.normalizedRegions[0].points));
+      } else {
+        form.append('targetAreas', JSON.stringify(prepared.normalizedRegions.map((region) => ({
+          label: region.label, points: region.points,
+        }))));
+        form.append('protectedAreas', protectedSurfaces.map((surface) => surface.name).join(', '));
+      }
+      const { response, result } = await requestJson<{ image?: string; message?: string }>(
+        route, { method: 'POST', body: form }, 210000,
+      );
+      if (!response.ok || !result.image) throw new Error(result.message ?? 'Pulizia locale non disponibile.');
+      results.push({ bounds: prepared.bounds, regions: prepared.regions, image: result.image });
+    }
+    return composeCleanupTiles(sourceUrl, results, protectedSurfaces);
+  }
+
   async function protectAiResult(resultSource: string, options: {
     editableSurface?: Surface;
     editableSurfaces?: Surface[];
@@ -1733,7 +1930,12 @@ export function RoomStudio() {
     return protectedUrl;
   }
 
-  async function verifyCleanupPreview(sourceUrl: string, previewUrl: string, targetDescription: string) {
+  async function verifyCleanupPreview(
+    sourceUrl: string,
+    previewUrl: string,
+    targetDescription: string,
+    targetRegions: CleanupRegion[],
+  ) {
     const [source, renderedResponse] = await Promise.all([
       createGeometryInput(sourceUrl),
       fetch(previewUrl),
@@ -1744,6 +1946,13 @@ export function RoomStudio() {
     form.append('source', source, 'original-room.jpg');
     form.append('rendered', rendered, 'cleaned-room.png');
     form.append('targetDescription', targetDescription);
+    if (targetRegions.length) {
+      const verificationSurfaces: Surface[] = targetRegions.map((region, index) => ({
+        id: `verify-cleanup-${index}`, name: region.label, kind: 'other', frozen: false, points: region.points,
+      }));
+      const { maskReference } = await createMaskedInput({ editableSurfaces: verificationSurfaces, sourceUrl });
+      form.append('maskReference', maskReference, 'authorized-cleanup-areas.png');
+    }
     const { response, result } = await requestJson<{ accepted?: boolean; message?: string }>(
       endpoint('/api/verify-cleanup'), { method: 'POST', body: form }, 90000,
     );
@@ -2308,7 +2517,6 @@ export function RoomStudio() {
     setSurfaces(baselineSurfaces);
     setNotice('Grok sta delimitando automaticamente tutti i mobili. Pareti, pavimento e aperture resteranno pixel per pixel uguali.');
     try {
-      const frozenSurfaces = baselineSurfaces.filter((surface) => surface.frozen);
       const detectionImage = await createGeometryInput(room.previewUrl);
       const detectionForm = new FormData();
       detectionForm.append('image', detectionImage, 'room-objects.jpg');
@@ -2332,30 +2540,12 @@ export function RoomStudio() {
         return;
       }
 
-      const removalSurfaces: Surface[] = regions.map((region, index) => ({
-        id: `auto-clean-${index}`, name: region.label, kind: 'other', frozen: false, points: region.points,
-      }));
-      setNotice(`${regions.length} zone da pulire riconosciute. Modifico solo quei contorni e proteggo ogni altro pixel.`);
-      const { inputImage, mask, maskReference } = await createMaskedInput({ editableSurfaces: removalSurfaces, sourceUrl: room.previewUrl });
-      const form = new FormData();
-      form.append('image', inputImage, 'room-input.jpg');
-      form.append('mask', mask, 'furniture-mask.png');
-      form.append('maskReference', maskReference, 'furniture-mask-reference.png');
-      form.append('targetAreas', JSON.stringify(regions.map((region) => ({ label: region.label, points: region.points }))));
-      form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
-      const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/empty-room'), { method: 'POST', body: form }, 300000);
-      if (!response.ok || !result.image) throw new Error(result.message ?? 'Immagine non disponibile.');
+      setNotice(`${regions.length} zone da pulire riconosciute. Le elaboro in ritagli locali e proteggo ogni altro pixel.`);
       const architecturalAnchors = baselineSurfaces.filter((surface) => surface.frozen || surface.kind === 'door' || surface.kind === 'window');
-      const protectedPreview = await protectAiResult(result.image, {
-        editableSurfaces: removalSurfaces,
-        protectedSurfaces: architecturalAnchors,
-        sourceUrl: room.previewUrl,
-        stabilizeColor: true,
-        deferCommit: true,
-      });
+      const protectedPreview = await generateCleanupTiles(room.previewUrl, regions, architecturalAnchors, 'automatic');
       try {
         setNotice('Controllo che inquadratura, pareti, porte e finestre siano rimaste identiche…');
-        await verifyCleanupPreview(room.previewUrl, protectedPreview, regions.map((region) => region.label).join(', '));
+        await verifyCleanupPreview(room.previewUrl, protectedPreview, regions.map((region) => region.label).join(', '), regions);
       } catch (caught) {
         URL.revokeObjectURL(protectedPreview);
         throw caught;
@@ -2410,27 +2600,13 @@ export function RoomStudio() {
   async function cleanResidualRegion() {
     if (!cleanupRegion || !room?.previewUrl || isCleaningRegion) return;
     const sourceUrl = showProcessedPreview && processedPreview ? processedPreview : room.previewUrl;
-    const localRegion: Surface = { id: 'cleanup-region', name: cleanupRegion.label, kind: 'other', frozen: false, points: cleanupRegion.points };
     setIsCleaningRegion(true); setError(null); setNotice(`Pulisco soltanto “${cleanupRegion.label}”. Tutto il resto viene ricopiato pixel per pixel.`);
     try {
-      const { inputImage, mask, maskReference } = await createMaskedInput({ editableSurface: localRegion, sourceUrl });
-      const form = new FormData();
-      form.append('image', inputImage, 'cleanup-input.jpg'); form.append('mask', mask, 'cleanup-mask.png');
-      form.append('maskReference', maskReference, 'cleanup-mask-reference.png');
-      form.append('targetLabel', cleanupRegion.label); form.append('targetArea', JSON.stringify(cleanupRegion.points));
-      const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/clean-room-region'), { method: 'POST', body: form }, 180000);
-      if (!response.ok || !result.image) throw new Error(result.message ?? 'Pulizia locale non disponibile.');
       const architecturalAnchors = surfaces.filter((surface) => surface.frozen || surface.kind === 'door' || surface.kind === 'window');
-      const protectedPreview = await protectAiResult(result.image, {
-        editableSurface: localRegion,
-        protectedSurfaces: architecturalAnchors,
-        sourceUrl,
-        stabilizeColor: true,
-        deferCommit: true,
-      });
+      const protectedPreview = await generateCleanupTiles(sourceUrl, [cleanupRegion], architecturalAnchors, 'local');
       try {
         setNotice('Controllo che la pulizia locale non abbia alterato la stanza…');
-        await verifyCleanupPreview(sourceUrl, protectedPreview, cleanupRegion.label);
+        await verifyCleanupPreview(sourceUrl, protectedPreview, cleanupRegion.label, [cleanupRegion]);
       } catch (caught) {
         URL.revokeObjectURL(protectedPreview);
         throw caught;
@@ -2802,7 +2978,13 @@ export function RoomStudio() {
                 })}
                 {isCorrectingEdges && selected && !selected.frozen && <g className="surface-correction-controls" data-surface-id={selected.id}>
                   {selected.points.map((point, index) => { const next = selected.points[(index + 1) % selected.points.length]; return <g className="surface-edge-control" key={`${selected.id}-edge-${index}`}><line x1={point.x * 1000} y1={point.y * 625} x2={next.x * 1000} y2={next.y * 625} className="surface-edge" vectorEffect="non-scaling-stroke" aria-hidden="true" /><line x1={point.x * 1000} y1={point.y * 625} x2={next.x * 1000} y2={next.y * 625} className="surface-edge-hit" vectorEffect="non-scaling-stroke" aria-label={`Sposta linea ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginEdgeDrag(event, selected.id, index)} /></g>; })}
-                  {selected.points.map((point, index) => { const next = selected.points[(index + 1) % selected.points.length]; const midpointX = (point.x + next.x) * 500; const midpointY = (point.y + next.y) * 312.5; return <circle key={`${selected.id}-midpoint-${index}`} cx={midpointX} cy={midpointY} r="10" className="surface-edge-grip" aria-hidden="true" />; })}
+                  {selected.points.map((point, index) => {
+                    const next = selected.points[(index + 1) % selected.points.length];
+                    const edgeLength = Math.hypot((next.x - point.x) * canvasCssSize.width, (next.y - point.y) * canvasCssSize.height);
+                    if (edgeLength < 48) return null;
+                    const midpointX = (point.x + next.x) * 500; const midpointY = (point.y + next.y) * 312.5;
+                    return <circle key={`${selected.id}-midpoint-${index}`} cx={midpointX} cy={midpointY} r="10" className="surface-edge-grip" aria-hidden="true" />;
+                  })}
                   {selected.points.map((point, index) => <g key={`${selected.id}-vertex-${index}`}><circle cx={point.x * 1000} cy={point.y * 625} r="34" className="surface-vertex-hit" aria-label={`Sposta punto ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginVertexDrag(event, selected.id, index)} /><circle cx={point.x * 1000} cy={point.y * 625} r="16" className="surface-vertex" aria-hidden="true" /></g>)}
                 </g>}
                 {draft.length > 0 && <><polyline points={pointsToSvg(draft)} fill="none" stroke="#d7f05c" strokeWidth="5" vectorEffect="non-scaling-stroke" />{draft.map((point, index) => <circle key={index} cx={point.x * 1000} cy={point.y * 625} r="9" className="draft-vertex" />)}</>}
@@ -2811,17 +2993,27 @@ export function RoomStudio() {
               {isCorrectingEdges && selected && !selected.frozen && <div className="surface-correction-hit-layer" aria-label={`Controlli linee di ${selected.name}`}>
                 {selected.points.map((point, index) => {
                   const next = selected.points[(index + 1) % selected.points.length];
+                  const edgeLength = Math.hypot((next.x - point.x) * canvasCssSize.width, (next.y - point.y) * canvasCssSize.height);
+                  if (edgeLength < 48) return null;
+                  const hitSize = Math.min(56, Math.max(32, edgeLength - 16));
+                  const hitInset = Math.max(0, hitSize / 2 - 2);
                   return <button
                     key={`${selected.id}-midpoint-hit-${index}`}
                     type="button"
                     className="surface-edge-grip-hit"
                     data-testid={`edge-grip-hit-${index}`}
-                    style={{ left: `${((point.x + next.x) / 2) * 100}%`, top: `${((point.y + next.y) / 2) * 100}%`, touchAction: 'none' }}
+                    style={{
+                      width: `${hitSize}px`, height: `${hitSize}px`,
+                      left: `clamp(${hitInset}px, ${((point.x + next.x) / 2) * 100}%, calc(100% - ${hitInset}px))`,
+                      top: `clamp(${hitInset}px, ${((point.y + next.y) / 2) * 100}%, calc(100% - ${hitInset}px))`,
+                      touchAction: 'none',
+                    }}
                     aria-label={`Sposta punto centrale linea ${index + 1} di ${selected.name}`}
                     onPointerDown={(event) => beginEdgeDrag(event, selected.id, index)}
                     onPointerMove={handleGeometryPointerMove}
                     onPointerUp={handleGeometryPointerEnd}
                     onPointerCancel={handleGeometryPointerEnd}
+                    onClick={(event) => { event.preventDefault(); event.stopPropagation(); }}
                   />;
                 })}
               </div>}

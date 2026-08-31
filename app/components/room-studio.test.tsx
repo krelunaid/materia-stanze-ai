@@ -223,6 +223,16 @@ describe('RoomStudio', () => {
     expect(document.querySelector('.surface-vertex-hit')).not.toBeInTheDocument();
   });
 
+  it('keeps midpoint touch targets fully inside clipped iOS edges', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Correggi i bordi' }));
+    const midpoint = screen.getByTestId('edge-grip-hit-0');
+    expect(midpoint.style.left).toContain('clamp(26px');
+    expect(midpoint.style.top).toContain('clamp(26px');
+    expect(midpoint).toHaveStyle({ touchAction: 'none' });
+  });
+
   it('captures touch on the real vertex handle, moves it and restores it with undo', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
@@ -763,8 +773,8 @@ describe('RoomStudio', () => {
     const midpoint = screen.getByLabelText('Sposta punto centrale linea 1 di Pavimento') as HTMLButtonElement;
     expect(midpoint).toHaveClass('surface-edge-grip-hit');
     expect(midpoint).toHaveStyle({ touchAction: 'none' });
-    expect(midpoint.style.left).toMatch(/%$/);
-    expect(midpoint.style.top).toMatch(/%$/);
+    expect(midpoint.style.left).toContain('clamp(26px');
+    expect(midpoint.style.top).toContain('clamp(26px');
     expect(midpoint).toHaveAttribute('data-testid', 'edge-grip-hit-0');
     expect(midpoint).toHaveAttribute('type', 'button');
 
@@ -775,8 +785,9 @@ describe('RoomStudio', () => {
     const wallPolygons = Array.from(document.querySelectorAll('.surface-kind-wall polygon')) as SVGPolygonElement[];
     const wallsBefore = wallPolygons.map((polygon) => polygon.getAttribute('points'));
     const parsePoints = (value: string) => value.split(' ').map((point) => point.split(',').map(Number));
-    const midpointX = Number.parseFloat(midpoint.style.left) * 10;
-    const midpointY = Number.parseFloat(midpoint.style.top) * 6.25;
+    const visibleMidpoint = document.querySelector('.surface-correction-controls .surface-edge-grip') as SVGCircleElement;
+    const midpointX = Number(visibleMidpoint.getAttribute('cx'));
+    const midpointY = Number(visibleMidpoint.getAttribute('cy'));
     const capture = mockPointerCapture(midpoint);
 
     fireEvent.pointerDown(midpoint, { pointerId: 52, pointerType: 'pen', clientX: midpointX, clientY: midpointY });

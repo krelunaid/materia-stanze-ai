@@ -24,6 +24,7 @@ export async function POST(request: Request) {
     const mask = incoming.get('mask');
     const maskReference = incoming.get('maskReference');
     const protectedAreas = String(incoming.get('protectedAreas') ?? '').slice(0, 1000);
+    const localCrop = incoming.get('localCrop') === 'true';
     const targetAreasInput = String(incoming.get('targetAreas') ?? '').slice(0, 12000);
     if (!(image instanceof File) || !image.type.startsWith('image/')) {
       return json({ message: 'Carica una fotografia valida della stanza.' }, headers, 400);
@@ -51,6 +52,7 @@ export async function POST(request: Request) {
 
     const prompt = [
       'This is strictly local photographic inpainting, not a new room generation. Return the complete source photograph and edit only the areas marked editable by the technical mask.',
+      localCrop ? 'The source is an exact local crop from a larger room photograph. Preserve all four crop borders pixel-aligned so the result can be pasted back into the original photograph without any seam.' : '',
       `Remove every non-architectural target inside these real-estate-emptying regions: ${targetAreas}.`,
       'Each listed target is explicitly authorized for removal even when fitted, built-in, attached, wired or plumbed: this includes kitchen base, wall and tall cabinets, worktops, islands, integrated ovens, hobs, hoods, fitted wardrobes, bathroom vanities, cabinets, mirrors and storage.',
       'The output must be a pixel-aligned edit of the input with the identical width-to-height ratio, field of view and framing. Every unchanged architectural landmark must remain at the same normalized image coordinates.',

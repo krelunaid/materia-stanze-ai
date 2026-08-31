@@ -18,6 +18,7 @@ export async function POST(request: Request) {
   try {
     const incoming = await request.formData();
     const image = incoming.get('image'); const mask = incoming.get('mask'); const maskReference = incoming.get('maskReference');
+    const localCrop = incoming.get('localCrop') === 'true';
     const targetLabel = String(incoming.get('targetLabel') ?? 'oggetto residuo')
       .replace(/[^\p{L}\p{N} .,'’-]/gu, '')
       .slice(0, 80) || 'oggetto residuo';
@@ -38,6 +39,7 @@ export async function POST(request: Request) {
     if (!targetArea) return json({ message: 'La selezione da pulire non è valida. Disegnala di nuovo sulla fotografia.' }, headers, 409);
     const prompt = [
       'Perform a strictly local photographic inpainting on this exact interior photograph.',
+      localCrop ? 'The source is an exact crop from a larger room photograph. Preserve its four borders pixel-aligned so it can be pasted back without a seam; never zoom, pan, crop or recompose it.' : '',
       `Remove the complete non-architectural target identified as “${targetLabel}” inside the user-selected polygon ${targetArea}.`,
       'This polygon is an explicit removal request even when the target is fitted, built-in, attached, wired or plumbed, including kitchen cabinetry or appliances and bathroom furniture.',
       'Reconstruct the simplest continuous extension of the wall, floor, skirting or finish hidden by that target. Never recreate the removed unit or replace it with another object.',
