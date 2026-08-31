@@ -48,15 +48,17 @@ export async function POST(request: Request) {
 
     const prompt = [
       'This is strictly local photographic inpainting, not a new room generation. Return the complete source photograph and edit only the transparent areas of the technical mask.',
-      `Remove only the movable objects inside these automatically detected regions: ${targetAreas}.`,
+      `Remove every non-architectural target inside these real-estate-emptying regions: ${targetAreas}.`,
+      'Each listed target is explicitly authorized for removal even when fitted, built-in, attached, wired or plumbed: this includes kitchen base, wall and tall cabinets, worktops, islands, integrated ovens, hobs, hoods, fitted wardrobes, bathroom vanities, cabinets, mirrors and storage.',
       'The output must be a pixel-aligned edit of the input with the identical width-to-height ratio, field of view and framing. Every unchanged architectural landmark must remain at the same normalized image coordinates.',
       'The same four source-image corners and the complete top, bottom, left and right borders must all remain visible. Never zoom, crop, pan, rotate, extend or recompose the photograph.',
       'Preserve the wall-to-floor boundary at exactly the same height and perspective. Never replace a wall, ceiling, door or window with floor texture and never let the floor expand upward.',
-      'Inside each transparent mask region, remove the indicated furniture or decoration and reconstruct only the simplest continuation of the immediately surrounding architecture.',
-      'Treat the source photograph as a strict architectural record: preserve the exact camera position, lens perspective, crop, room dimensions, wall edges, ceiling, floor, doors, windows, openings, skirting, radiators and every fixed detail already visible.',
-      'Never create a new window, door, opening, radiator, column, cabinet, fixture, trim or architectural feature that is not visibly present in the source photograph.',
-      'Where removed furniture hides part of the room, reconstruct only the simplest continuous extension of the nearest visible wall, wall covering, skirting and floor. When uncertain, continue the existing wall or floor; never invent a feature.',
-      'Keep unchanged pixels visually identical wherever no movable object has to be removed. Do not redesign, recolor, restyle, enlarge, straighten or add anything.',
+      'Inside each transparent mask region, remove the complete indicated loose object, installed furnishing, fixed appliance or bathroom furnishing and reconstruct only the simplest continuation of the surrounding architecture.',
+      'Treat only genuine building architecture as protected: camera and room geometry, walls, floor, ceiling, structural columns and beams, stairs, doors, windows, openings, skirting and visible finish boundaries.',
+      'Do not preserve cabinetry, appliances or bathroom furniture merely because they are attached to a wall or connected to services. Never recreate a removed unit inside its mask.',
+      'Never create a new window, door, opening, column, beam, stair, trim or architectural feature that is not visibly present in the source photograph.',
+      'Where a removed installation hid the room, reconstruct the simplest continuous extension of the nearest visible wall, wall covering, skirting and floor. Do not invent niches, service holes, replacement cabinetry or fixtures.',
+      'Keep unchanged pixels visually identical outside the authorized masks. Do not redesign, recolor, restyle, enlarge, straighten or add anything.',
       strictRetry ? 'STRICT RETRY AFTER A REJECTED RESULT: the previous attempt changed the composition. Copy every unobstructed architectural pixel from the source, preserve every border exactly, and inpaint only inside removed-object silhouettes. A floor-only, zoomed, cropped or newly composed result is invalid.' : '',
       protectedAreas ? `These user-protected surfaces must remain unchanged: ${protectedAreas}.` : '',
     ].filter(Boolean).join(' ');

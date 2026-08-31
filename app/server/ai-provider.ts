@@ -47,7 +47,11 @@ export type DetectedObjectRegion = {
   label: string;
   points: Array<{ x: number; y: number }>;
   confidence: number;
+  removalKind: CleanupRemovalKind;
 };
+
+export type CleanupRemovalKind = 'loose-object' | 'installed-furnishing' | 'fixed-appliance' | 'bathroom-furnishing' | 'architecture';
+export type CleanupIntent = 'real-estate-emptying' | 'explicit-target-removal';
 
 export type ProductPhotoClassification = {
   kind: 'furniture' | 'surface-material' | 'unknown';
@@ -149,8 +153,9 @@ const objectRegionSchema = {
       },
     },
     confidence: { type: 'number', minimum: 0, maximum: 1 },
+    removalKind: { type: 'string', enum: ['loose-object', 'installed-furnishing', 'fixed-appliance', 'bathroom-furnishing', 'architecture'] },
   },
-  required: ['found', 'label', 'points', 'confidence'],
+  required: ['found', 'label', 'points', 'confidence', 'removalKind'],
 } as const;
 
 const productPhotoClassificationSchema = {
@@ -198,8 +203,9 @@ const movableObjectRegionsSchema = {
             },
           },
           confidence: { type: 'number', minimum: 0, maximum: 1 },
+          removalKind: { type: 'string', enum: ['loose-object', 'installed-furnishing', 'fixed-appliance', 'bathroom-furnishing', 'architecture'] },
         },
-        required: ['label', 'points', 'confidence'],
+        required: ['label', 'points', 'confidence', 'removalKind'],
       },
     },
   },
@@ -759,42 +765,6 @@ export function chooseSupportedImageAspectRatio(width: number, height: number): 
   ))[0].name;
 }
 
-function imageDimensions(bytes: Uint8Array) {
-  const isPng = bytes.length >= 24
-    && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
-  if (isPng) {
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    return { width: view.getUint32(16), height: view.getUint32(20) };
-  }
-
-  if (bytes.length >= 10 && bytes[0] === 0xff && bytes[1] === 0xd8) {
-    const startOfFrame = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
-    let offset = 2;
-    while (offset + 8 < bytes.length) {
-      if (bytes[offset] !== 0xff) { offset += 1; continue; }
-      const marker = bytes[offset + 1];
-      offset += 2;
-      if (marker === 0xd8 || marker === 0xd9) continue;
-      if (offset + 1 >= bytes.length) break;
-      const segmentLength = (bytes[offset] << 8) | bytes[offset + 1];
-      if (segmentLength < 2 || offset + segmentLength > bytes.length) break;
-      if (startOfFrame.has(marker) && segmentLength >= 7) {
-        return {
-          height: (bytes[offset + 3] << 8) | bytes[offset + 4],
-          width: (bytes[offset + 5] << 8) | bytes[offset + 6],
-        };
-      }
-      offset += segmentLength;
-    }
-  }
-  return null;
-}
-
-async function sourceImageAspectRatio(file: File) {
-  const dimensions = imageDimensions(new Uint8Array(await file.arrayBuffer()));
-  return dimensions ? chooseSupportedImageAspectRatio(dimensions.width, dimensions.height) : 'auto';
-}
-
 function polygonArea(points: Array<{ x: number; y: number }>) {
   return Math.abs(points.reduce((sum, point, index) => {
     const next = points[(index + 1) % points.length];
@@ -1349,7 +1319,12 @@ export async function detectRoomSurfaces(
   return surfaces;
 }
 
-export async function detectObjectRegion(provider: AiProvider, image: File, point: { x: number; y: number }) {
+export async function detectObjectRegion(
+  provider: AiProvider,
+  image: File,
+  point: { x: number; y: number },
+  intent: CleanupIntent = 'explicit-target-removal',
+) {
   const x = Math.min(1, Math.max(0, Number(point.x)));
   const y = Math.min(1, Math.max(0, Number(point.y)));
   if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('Punto di pulizia non valido.');
@@ -1362,10 +1337,12 @@ export async function detectObjectRegion(provider: AiProvider, image: File, poin
       input: [{ role: 'user', content: [
         { type: 'input_image', image_url: imageUrl, detail: 'high' },
         { type: 'input_text', text: [
-          `The user clicked normalized image coordinate x=${x.toFixed(4)}, y=${y.toFixed(4)} in an interior photograph after an empty-room edit.`,
-          'Identify the single movable or decorative residual object whose visible pixels contain that point (furniture, lamp, rug, curtain, picture, loose decoration).',
-          'Never select a wall, floor, ceiling, door, window, opening, radiator, skirting or other fixed architectural element.',
-          'If a removable object is present, return a tight clockwise polygon around its complete visible silhouette, with 4 to 16 normalized points and a short Italian label.',
+          `The user clicked normalized image coordinate x=${x.toFixed(4)}, y=${y.toFixed(4)} in an interior photograph after an empty-room edit. Intent: ${intent}.`,
+          'This click is an explicit removal request for any non-architectural target at that point, including loose furniture and decor, fitted or built-in kitchen cabinets, base cabinets, wall cabinets, tall units, worktops, islands, fitted wardrobes, integrated ovens, hobs, extractor hoods, fridges, bathroom vanities, mirrors and storage.',
+          'A target remains removable when attached to a wall or connected to electricity, water or gas. Attached, built-in, wired or plumbed does not make it architecture.',
+          'Classify it as exactly one removalKind: loose-object, installed-furnishing, fixed-appliance, bathroom-furnishing, architecture.',
+          'Use architecture only for the true building shell: walls, floor, ceiling, structural columns or beams, stairs, doors, windows, openings and skirting. Return found=false only for true architecture or empty space.',
+          'If a removable target is present, return one tight clockwise polygon around the complete visible functional group, with 4 to 16 normalized points and a short Italian label.',
           'Include a small 1-2% repair margin around the silhouette, but do not include unrelated architecture. If the point is only on architecture or empty space, found must be false and points must be empty.',
           'Return only the structured result.',
         ].join('\n') },
@@ -1379,12 +1356,13 @@ export async function detectObjectRegion(provider: AiProvider, image: File, poin
   });
   const payload = await response.json() as ResponsesPayload;
   if (!response.ok) throw new Error(payload.error?.message ?? 'Riconoscimento dell’oggetto non disponibile.');
-  const parsed = JSON.parse(responseText(payload).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) as { found?: boolean; label?: string; points?: Array<{ x: number; y: number }>; confidence?: number };
+  const parsed = JSON.parse(responseText(payload).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) as { found?: boolean; label?: string; points?: Array<{ x: number; y: number }>; confidence?: number; removalKind?: unknown };
   const points = (parsed.points ?? []).slice(0, 16).map((candidate) => ({
     x: Math.min(1, Math.max(0, Number(candidate.x))), y: Math.min(1, Math.max(0, Number(candidate.y))),
   }));
-  if (!parsed.found || Number(parsed.confidence) < .45 || !isSimpleRoomPolygon(points)) return null;
-  return { label: String(parsed.label || 'Oggetto residuo').trim().slice(0, 80), points, confidence: Math.min(1, Math.max(0, Number(parsed.confidence))) } satisfies DetectedObjectRegion;
+  const removalKind = normalizeCleanupRemovalKind(parsed.removalKind);
+  if (!parsed.found || removalKind === 'architecture' || Number(parsed.confidence) < .45 || !isSimpleRoomPolygon(points)) return null;
+  return { label: String(parsed.label || 'Oggetto residuo').trim().slice(0, 80), points, confidence: Math.min(1, Math.max(0, Number(parsed.confidence))), removalKind } satisfies DetectedObjectRegion;
 }
 
 function regionBounds(region: DetectedObjectRegion) {
@@ -1402,25 +1380,35 @@ function regionIou(left: DetectedObjectRegion, right: DetectedObjectRegion) {
   return intersection / Math.max(areaA + areaB - intersection, Number.EPSILON);
 }
 
-export async function detectMovableObjectRegions(provider: AiProvider, image: File) {
+const cleanupRemovalKinds: CleanupRemovalKind[] = ['loose-object', 'installed-furnishing', 'fixed-appliance', 'bathroom-furnishing', 'architecture'];
+
+function normalizeCleanupRemovalKind(value: unknown): CleanupRemovalKind {
+  return cleanupRemovalKinds.includes(value as CleanupRemovalKind) ? value as CleanupRemovalKind : 'architecture';
+}
+
+export function normalizeCleanupRegions(regions: Array<Partial<DetectedObjectRegion>>, minimumConfidence: number) {
+  const valid = regions.map((region) => ({
+    label: String(region.label || 'Oggetto').trim().slice(0, 80),
+    removalKind: normalizeCleanupRemovalKind(region.removalKind),
+    confidence: Math.min(1, Math.max(0, Number(region.confidence) || 0)),
+    points: (region.points ?? []).slice(0, 16).map((point) => ({
+      x: Math.min(1, Math.max(0, Number(point.x))), y: Math.min(1, Math.max(0, Number(point.y))),
+    })),
+  })).filter((region) => {
+    if (region.removalKind === 'architecture' || region.confidence < minimumConfidence || !isSimpleRoomPolygon(region.points)) return false;
+    const bounds = regionBounds(region);
+    const area = (bounds.right - bounds.left) * (bounds.bottom - bounds.top);
+    return area >= .002 && area <= .82;
+  }).sort((left, right) => right.confidence - left.confidence);
+  return valid.filter((region, index) => !valid.slice(0, index).some((kept) => regionIou(region, kept) >= .72));
+}
+
+export async function detectMovableObjectRegions(
+  provider: AiProvider,
+  image: File,
+  intent: CleanupIntent = 'real-estate-emptying',
+) {
   const imageUrl = await fileToDataUri(image);
-  const fixedArchitecture = /window|finestr|blind|venezian|persian|shutter|radiator|termosif|sconce|applique|wall lamp|lampada (?:a |da )?parete|door|porta|opening|apertura|skirting|battiscopa|sanitary|sanitari|built[- ]?in|incass/i;
-  const normalize = (regions: DetectedObjectRegion[], minimumConfidence: number) => {
-    const valid = regions.map((region) => ({
-      label: String(region.label || 'Oggetto').trim().slice(0, 80),
-      confidence: Math.min(1, Math.max(0, Number(region.confidence) || 0)),
-      points: (region.points ?? []).slice(0, 16).map((point) => ({
-        x: Math.min(1, Math.max(0, Number(point.x))), y: Math.min(1, Math.max(0, Number(point.y))),
-      })),
-    })).filter((region) => {
-      if (fixedArchitecture.test(region.label)) return false;
-      if (region.confidence < minimumConfidence || !isSimpleRoomPolygon(region.points)) return false;
-      const bounds = regionBounds(region);
-      const area = (bounds.right - bounds.left) * (bounds.bottom - bounds.top);
-      return area >= .002 && area <= .65;
-    }).sort((left, right) => right.confidence - left.confidence);
-    return valid.filter((region, index) => !valid.slice(0, index).some((kept) => regionIou(region, kept) >= .72));
-  };
   const requestRegions = async (instruction: string, effort: 'low' | 'medium', timeoutMs: number) => {
     const response = await fetch(provider.id === 'grok' ? 'https://api.x.ai/v1/responses' : 'https://api.openai.com/v1/responses', {
       method: 'POST',
@@ -1443,35 +1431,45 @@ export async function detectMovableObjectRegions(provider: AiProvider, image: Fi
     return JSON.parse(responseText(payload).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) as { regions?: DetectedObjectRegion[] };
   };
   const primaryPrompt = [
-    'Find every visible movable or decorative object that must be removed to make this exact room empty.',
-    'Include beds, sofas, chairs, tables, movable cabinets, lamps, rugs, curtains, pictures, loose objects and partially cropped furniture. Group touching parts of one physical item into one region.',
-    'Never include walls, floor, ceiling, doors, windows, openings, skirting boards, radiators, fixed sanitary fixtures or built-in architectural elements.',
+    `Intent: ${intent}. Find every visible non-architectural object or installed furnishing that must be removed to make this exact room empty for a real-estate photograph.`,
+    'Include beds, sofas, chairs, tables, cabinets, lamps, rugs, curtains, pictures, loose objects, fitted wardrobes, fitted kitchen cabinets and appliances, bathroom vanities, mirrors and storage. Group touching parts of one physical item or continuous fitted installation into one region.',
+    'Classify each region as exactly one removalKind: loose-object, installed-furnishing, fixed-appliance, bathroom-furnishing, architecture.',
+    'Attachment is not architecture: fitted, built-in, attached, wired or plumbed units are still removable. Use architecture only for walls, floor, ceiling, structural columns or beams, stairs, doors, windows, openings and skirting.',
     'Return a tight clockwise polygon with 4 to 16 normalized points around the complete visible silhouette of each removable object. Add only a small 1-2% inpainting margin.',
     'Do not return one large room-wide polygon. Keep separate furniture groups separate, even when they overlap visually. Return an empty list only when the room is already empty.',
     'Return only the structured result.',
   ].join('\n');
+  const fittedAuditPrompt = [
+    `Intent: ${intent}. Audit this complete interior specifically for fitted installations that a generic furniture pass often misses.`,
+    'Inventory kitchen base cabinets, wall cabinets, tall cabinets, islands, worktops, integrated ovens, hobs, extractor hoods, fridges, dishwashers, fitted wardrobes, made-to-measure storage, bathroom vanities, mirrors and bathroom cabinets. Preserve wall finishes and splashbacks as surfaces unless they are part of a removable freestanding unit.',
+    'A unit remains removable when fitted, built-in, attached, wired or plumbed: attachment is not architecture. Group one continuous kitchen or bathroom composition into a single complete functional region, not one region per door or drawer.',
+    'Classify each result as installed-furnishing, fixed-appliance or bathroom-furnishing. True architecture is only walls, floor, ceiling, structural columns or beams, stairs, doors, windows, openings and skirting, and must not be returned.',
+    'Trace each complete visible group as one tight clockwise polygon with 4 to 16 normalized points. Do not return a room-wide polygon. Return only the structured result.',
+  ].join('\n');
   const recoveryPrompt = [
-    'Recheck the complete interior photograph because a first automatic pass found no removable furniture.',
-    'Inspect the image systematically from left to right and foreground to background. First inventory every bed, mattress, blanket, sofa, chair, table, bedside table, movable wardrobe or cabinet, lamp, rug, curtain, picture and loose object; then trace each visible group.',
-    'Furniture partly hidden, touching another object, cropped by an image edge or covering most of the foreground is still removable and must not be omitted. A bed with bedding is one removable group.',
-    'Exclude fixed architecture: walls, wall coverings, floor, ceiling, doors, windows, openings, skirting, radiators, built-in units and fixed sanitary fixtures.',
+    `Recovery for ${intent}: both inventory passes found no removable content. Recheck the complete photograph from left to right and foreground to background.`,
+    'Inventory every bed, sofa, chair, table, cabinet, lamp, rug, curtain, picture, loose object, fitted kitchen, integrated appliance, fitted wardrobe and bathroom furnishing; then trace each visible functional group.',
+    'Furniture partly hidden, attached, built-in, wired, plumbed, cropped by an image edge or covering most of the foreground is still removable and must not be omitted. A bed with bedding and a continuous kitchen run are each one removable group.',
+    'Classify each region using removalKind. Exclude only true architecture: walls, floor, ceiling, structural columns or beams, stairs, doors, windows, openings and skirting.',
     'For each likely movable group return a tight clockwise 4-to-16-point normalized polygon and an honest confidence. Never return a room-wide polygon. Return an empty list only when careful inspection confirms that the room is already empty.',
     'Return only the structured result.',
   ].join('\n');
 
-  let primaryFailure: Error | null = null;
-  try {
-    const primary = await requestRegions(primaryPrompt, 'low', 35000);
-    const regions = normalize(primary.regions ?? [], .5);
-    if (regions.length) return regions;
-  } catch (caught) {
-    primaryFailure = caught instanceof Error ? caught : new Error('Riconoscimento automatico dei mobili non disponibile.');
-  }
+  const inventoryAttempts = await Promise.allSettled([
+    requestRegions(primaryPrompt, 'low', 35000),
+    requestRegions(fittedAuditPrompt, 'low', 35000),
+  ]);
+  const inventoryRegions = inventoryAttempts.flatMap((attempt) => attempt.status === 'fulfilled' ? attempt.value.regions ?? [] : []);
+  const normalizedInventory = normalizeCleanupRegions(inventoryRegions, .5);
+  if (normalizedInventory.length) return normalizedInventory;
   try {
     const recovered = await requestRegions(recoveryPrompt, 'medium', 35000);
-    return normalize(recovered.regions ?? [], .4);
+    return normalizeCleanupRegions(recovered.regions ?? [], .4);
   } catch (caught) {
-    throw primaryFailure ?? (caught instanceof Error ? caught : new Error('Riconoscimento automatico dei mobili non disponibile.'));
+    const earlierFailure = inventoryAttempts.find((attempt): attempt is PromiseRejectedResult => attempt.status === 'rejected');
+    throw earlierFailure?.reason instanceof Error
+      ? earlierFailure.reason
+      : (caught instanceof Error ? caught : new Error('Riconoscimento automatico dei mobili non disponibile.'));
   }
 }
 

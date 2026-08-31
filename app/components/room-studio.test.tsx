@@ -25,6 +25,21 @@ function mockMaterialPhotoCrop() {
   vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback) => callback(new Blob(['sample'], { type: 'image/png' })));
 }
 
+function mockPointerCapture(target: SVGElement) {
+  let capturedPointer: number | null = null;
+  const setPointerCapture = vi.fn((pointerId: number) => { capturedPointer = pointerId; });
+  const hasPointerCapture = vi.fn((pointerId: number) => capturedPointer === pointerId);
+  const releasePointerCapture = vi.fn((pointerId: number) => {
+    if (capturedPointer === pointerId) capturedPointer = null;
+  });
+  Object.defineProperties(target, {
+    setPointerCapture: { configurable: true, value: setPointerCapture },
+    hasPointerCapture: { configurable: true, value: hasPointerCapture },
+    releasePointerCapture: { configurable: true, value: releasePointerCapture },
+  });
+  return { setPointerCapture, releasePointerCapture };
+}
+
 describe('RoomStudio', () => {
   it('replaces editable geometry after emptying while preserving Freeze areas', () => {
     const previous = [
@@ -196,7 +211,7 @@ describe('RoomStudio', () => {
     expect(document.querySelector('.surface-vertex-hit')).not.toBeInTheDocument();
   });
 
-  it('continues moving a correction handle from window pointer events', () => {
+  it('captures touch on the real vertex handle, moves it and restores it with undo', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
     fireEvent.click(screen.getByRole('button', { name: 'Correggi i bordi' }));
@@ -205,10 +220,15 @@ describe('RoomStudio', () => {
     const selectedPolygon = document.querySelector('.is-selected-surface polygon') as SVGPolygonElement;
     const before = selectedPolygon.getAttribute('points');
     const handle = document.querySelector('.surface-vertex-hit') as SVGCircleElement;
-    fireEvent.pointerDown(handle, { pointerId: 9, clientX: 218, clientY: 81 });
-    fireEvent.pointerMove(window, { pointerId: 9, clientX: 300, clientY: 125 });
-    fireEvent.pointerUp(window, { pointerId: 9 });
+    const capture = mockPointerCapture(handle);
+    fireEvent.pointerDown(handle, { pointerId: 9, pointerType: 'touch', clientX: 218, clientY: 81 });
+    fireEvent.pointerMove(handle, { pointerId: 9, pointerType: 'touch', clientX: 300, clientY: 125 });
+    fireEvent.pointerUp(handle, { pointerId: 9, pointerType: 'touch' });
+    expect(capture.setPointerCapture).toHaveBeenCalledWith(9);
+    expect(capture.releasePointerCapture).toHaveBeenCalledWith(9);
     expect(selectedPolygon.getAttribute('points')).not.toBe(before);
+    fireEvent.click(screen.getByRole('button', { name: 'Annulla ultima modifica' }));
+    expect(selectedPolygon).toHaveAttribute('points', before);
   });
 
   it('keeps every shared corner linked across repeated pointer moves', () => {
@@ -692,10 +712,13 @@ describe('RoomStudio', () => {
       x: (Number(edge.getAttribute('x1')) + Number(edge.getAttribute('x2'))) / 2,
       y: (Number(edge.getAttribute('y1')) + Number(edge.getAttribute('y2'))) / 2,
     };
+    const capture = mockPointerCapture(edge);
 
     fireEvent.pointerDown(edge, { pointerId: 41, pointerType: 'pen', clientX: edgeMidpoint.x, clientY: edgeMidpoint.y });
-    fireEvent.pointerMove(window, { pointerId: 41, pointerType: 'pen', clientX: edgeMidpoint.x, clientY: edgeMidpoint.y + 35 });
-    fireEvent.pointerUp(window, { pointerId: 41, pointerType: 'pen' });
+    fireEvent.pointerMove(edge, { pointerId: 41, pointerType: 'pen', clientX: edgeMidpoint.x, clientY: edgeMidpoint.y + 35 });
+    fireEvent.pointerUp(edge, { pointerId: 41, pointerType: 'pen' });
+    expect(capture.setPointerCapture).toHaveBeenCalledWith(41);
+    expect(capture.releasePointerCapture).toHaveBeenCalledWith(41);
 
     const selectedAfter = parsePoints(selectedPolygon.getAttribute('points') as string);
     const selectedOriginal = parsePoints(selectedBefore);
@@ -738,10 +761,13 @@ describe('RoomStudio', () => {
     const parsePoints = (value: string) => value.split(' ').map((point) => point.split(',').map(Number));
     const midpointX = Number(midpoint.getAttribute('cx'));
     const midpointY = Number(midpoint.getAttribute('cy'));
+    const capture = mockPointerCapture(midpoint);
 
     fireEvent.pointerDown(midpoint, { pointerId: 52, pointerType: 'pen', clientX: midpointX, clientY: midpointY });
-    fireEvent.pointerMove(window, { pointerId: 52, pointerType: 'pen', clientX: midpointX, clientY: midpointY + 30 });
-    fireEvent.pointerUp(window, { pointerId: 52, pointerType: 'pen' });
+    fireEvent.pointerMove(midpoint, { pointerId: 52, pointerType: 'pen', clientX: midpointX, clientY: midpointY + 30 });
+    fireEvent.pointerUp(midpoint, { pointerId: 52, pointerType: 'pen' });
+    expect(capture.setPointerCapture).toHaveBeenCalledWith(52);
+    expect(capture.releasePointerCapture).toHaveBeenCalledWith(52);
 
     const floorAfter = parsePoints(floorPolygon.getAttribute('points') as string);
     const floorOriginal = parsePoints(floorBefore);

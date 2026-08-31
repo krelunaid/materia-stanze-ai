@@ -90,7 +90,7 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .surface-name { pointer-events:none; fill:#fff; stroke:#17352f; stroke-width:5px; paint-order:stroke; text-anchor:middle; dominant-baseline:middle; font-size:22px; font-weight:850; letter-spacing:.4px; }
 .surface-vertex,.draft-vertex { fill:var(--accent); stroke:#fff; stroke-width:4; vector-effect:non-scaling-stroke; }
 .surface-vertex { cursor:grab; pointer-events:none; touch-action:none; filter:drop-shadow(0 2px 3px rgba(15,37,32,.3)); }
-.surface-vertex-hit { fill:rgba(255,255,255,.01); cursor:grab; pointer-events:auto; touch-action:none; }
+.surface-vertex-hit { fill:rgba(255,255,255,.01); cursor:grab; pointer-events:all; touch-action:none; }
 .surface-edge-hit { stroke:rgba(255,255,255,.01); stroke-width:48; cursor:move; pointer-events:all; touch-action:none; }
 .surface-edge { stroke:var(--lime); stroke-width:7; stroke-linecap:round; pointer-events:none; filter:drop-shadow(0 2px 3px rgba(15,37,32,.32)); }
 .surface-edge-grip { fill:var(--lime); stroke:#fff; stroke-width:4; vector-effect:non-scaling-stroke; pointer-events:none; filter:drop-shadow(0 2px 3px rgba(15,37,32,.32)); }
@@ -154,7 +154,8 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .surface-overlay { pointer-events:none; touch-action:pan-y; }
 .surface-overlay polygon,.surface-overlay .surface-vertex-hit { pointer-events:auto; }
 .surface-overlay .surface-edge-hit { pointer-events:all; }
-.surface-overlay .surface-vertex-hit,.surface-overlay .surface-edge-hit,.surface-overlay.is-drawing,.surface-overlay.is-correcting { touch-action:none; }
+.surface-overlay .surface-vertex-hit,.surface-overlay .surface-edge-hit,.surface-overlay .surface-edge-grip-hit,.surface-overlay.is-drawing,.surface-overlay.is-correcting { touch-action:none; -webkit-touch-callout:none; user-select:none; }
+.surface-overlay.is-correcting { overscroll-behavior:contain; }
 .simple-mode.step-3 .surface-overlay>g:not(.is-selected-surface)>polygon { opacity:0; }
 .simple-mode.step-3 .surface-overlay>g:not(.is-selected-surface)>.surface-name { display:none; }
 .simple-mode.step-3 .surface-overlay>.is-selected-surface>polygon { fill:rgba(215,240,92,.09)!important; opacity:.9; }

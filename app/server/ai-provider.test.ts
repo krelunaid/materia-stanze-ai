@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { acceptsFurnitureRender, chooseSupportedImageAspectRatio, classifyProductPhoto, detectMovableObjectRegions, detectObjectRegion, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, knownRetailerProductImage, normalizeProductPhotoClassification, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
+import { acceptsFurnitureRender, chooseSupportedImageAspectRatio, classifyProductPhoto, detectMovableObjectRegions, detectObjectRegion, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, knownRetailerProductImage, normalizeCleanupRegions, normalizeProductPhotoClassification, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -491,7 +491,7 @@ describe('getAiProvider', () => {
 
   it('detects a removable object around the user-selected point', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ output: [{ content: [{
-      type: 'output_text', text: JSON.stringify({ found: true, label: 'Sedia', confidence: .91, points: [
+      type: 'output_text', text: JSON.stringify({ found: true, label: 'Sedia', confidence: .91, removalKind: 'loose-object', points: [
         { x: .3, y: .4 }, { x: .5, y: .4 }, { x: .5, y: .8 }, { x: .3, y: .8 },
       ] }),
     }] }] }), { status: 200 }));
@@ -502,14 +502,33 @@ describe('getAiProvider', () => {
     );
     expect(result).toMatchObject({ label: 'Sedia', confidence: .91 });
     expect(result?.points).toHaveLength(4);
+    const payload = JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body));
+    expect(payload.input[0].content[1].text).toContain('explicit removal request');
+    expect(payload.input[0].content[1].text).toContain('built-in kitchen cabinets');
+  });
+
+  it('keeps fitted kitchens and bathroom furnishings while rejecting true architecture', () => {
+    const rectangle = (left: number, top: number, right: number, bottom: number) => [
+      { x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom },
+    ];
+    const result = normalizeCleanupRegions([
+      { label: 'Cucina incassata', removalKind: 'installed-furnishing', confidence: .96, points: rectangle(.03, .08, .96, .82) },
+      { label: 'Forno e cappa', removalKind: 'fixed-appliance', confidence: .91, points: rectangle(.1, .2, .28, .55) },
+      { label: 'Mobile lavabo', removalKind: 'bathroom-furnishing', confidence: .88, points: rectangle(.58, .42, .88, .82) },
+      { label: 'Parete portante', removalKind: 'architecture', confidence: .99, points: rectangle(0, 0, 1, .7) },
+      { label: 'Senza categoria', confidence: .99, points: rectangle(.4, .1, .6, .3) },
+    ], .5);
+
+    expect(result.map((region) => region.label)).toEqual(['Cucina incassata', 'Forno e cappa', 'Mobile lavabo']);
+    expect(result.every((region) => region.removalKind !== 'architecture')).toBe(true);
   });
 
   it('detects all movable objects for safe automatic room cleaning', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ output: [{ content: [{
       type: 'output_text', text: JSON.stringify({ regions: [
-        { label: 'Letto', confidence: .94, points: [{ x: .2, y: .45 }, { x: .7, y: .45 }, { x: .75, y: .9 }, { x: .15, y: .9 }] },
-        { label: 'Comodino', confidence: .88, points: [{ x: .72, y: .5 }, { x: .86, y: .5 }, { x: .86, y: .72 }, { x: .72, y: .72 }] },
-        { label: 'Applique a parete', confidence: .91, points: [{ x: .8, y: .2 }, { x: .9, y: .2 }, { x: .9, y: .3 }, { x: .8, y: .3 }] },
+        { label: 'Letto', confidence: .94, removalKind: 'loose-object', points: [{ x: .2, y: .45 }, { x: .7, y: .45 }, { x: .75, y: .9 }, { x: .15, y: .9 }] },
+        { label: 'Comodino', confidence: .88, removalKind: 'loose-object', points: [{ x: .72, y: .5 }, { x: .86, y: .5 }, { x: .86, y: .72 }, { x: .72, y: .72 }] },
+        { label: 'Applique a parete', confidence: .91, removalKind: 'architecture', points: [{ x: .8, y: .2 }, { x: .9, y: .2 }, { x: .9, y: .3 }, { x: .8, y: .3 }] },
       ] }),
     }] }] }), { status: 200 }));
 
@@ -519,6 +538,15 @@ describe('getAiProvider', () => {
     );
 
     expect(result.map((region) => region.label)).toEqual(['Letto', 'Comodino']);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    const prompts = vi.mocked(fetch).mock.calls.map((call) => JSON.parse(String(call[1]?.body)).input[0].content[1].text as string);
+    expect(prompts.join('\n')).toContain('base cabinets');
+    expect(prompts.join('\n')).toContain('wall cabinets');
+    expect(prompts.join('\n')).toContain('integrated ovens');
+    expect(prompts.join('\n')).toContain('hobs');
+    expect(prompts.join('\n')).toContain('extractor hoods');
+    expect(prompts.join('\n')).toContain('bathroom vanities');
+    expect(prompts.join('\n')).toContain('attachment is not architecture');
   });
 
   it('rechecks the full room when the first furniture pass returns empty', async () => {
@@ -527,8 +555,11 @@ describe('getAiProvider', () => {
         type: 'output_text', text: JSON.stringify({ regions: [] }),
       }] }] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ output: [{ content: [{
+        type: 'output_text', text: JSON.stringify({ regions: [] }),
+      }] }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ output: [{ content: [{
         type: 'output_text', text: JSON.stringify({ regions: [
-          { label: 'Divano', confidence: .48, points: [{ x: .1, y: .45 }, { x: .82, y: .45 }, { x: .86, y: .9 }, { x: .08, y: .9 }] },
+          { label: 'Divano', confidence: .48, removalKind: 'loose-object', points: [{ x: .1, y: .45 }, { x: .82, y: .45 }, { x: .86, y: .9 }, { x: .08, y: .9 }] },
         ] }),
       }] }] }), { status: 200 }));
 
@@ -538,7 +569,7 @@ describe('getAiProvider', () => {
     );
 
     expect(result).toMatchObject([{ label: 'Divano', confidence: .48 }]);
-    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);
   });
 
   it('rejects an opening hallucinated by only one geometry pass', () => {

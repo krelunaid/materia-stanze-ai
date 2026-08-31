@@ -8,6 +8,7 @@ import {
   DragEvent,
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -52,9 +53,10 @@ type StudioMaterial = {
   sourceUrl?: string;
 };
 type LinkedVertex = { surfaceId: string; vertexIndex: number };
-type DragVertex = { surfaceId: string; vertexIndex: number; pointerId: number; origin: Point; linked: LinkedVertex[] };
+type DragVertex = { kind: 'vertex'; surfaceId: string; vertexIndex: number; pointerId: number; origin: Point; linked: LinkedVertex[] };
 type DragEdgeEndpoint = { origin: Point; linked: LinkedVertex[] };
-type DragEdge = { surfaceId: string; edgeIndex: number; pointerId: number; start: Point; endpoints: [DragEdgeEndpoint, DragEdgeEndpoint] };
+type DragEdge = { kind: 'edge'; surfaceId: string; edgeIndex: number; pointerId: number; start: Point; endpoints: [DragEdgeEndpoint, DragEdgeEndpoint] };
+type GeometryDrag = DragVertex | DragEdge;
 type FurnitureFacing = 'front-wall' | 'left-wall' | 'right-wall';
 type PlacedFurniture = {
   id: string;
@@ -817,11 +819,15 @@ export function RoomStudio() {
   const roomBlobRef = useRef<string | null>(null);
   const materialBlobRef = useRef<string | null>(null);
   const materialSampleRef = useRef<Blob | null>(null);
+  const materialIdRef = useRef(0);
   const furnitureBlobUrlsRef = useRef<string[]>([]);
   const furnitureFilesRef = useRef<Map<string, File>>(new Map());
   const furnitureIdRef = useRef(0);
+  const geometryDetectionIdRef = useRef(0);
   const processedBlobRef = useRef<string | null>(null);
   const dragStartRef = useRef<Surface[] | null>(null);
+  const geometryDragRef = useRef<GeometryDrag | null>(null);
+  const geometryCaptureTargetRef = useRef<SVGElement | null>(null);
   const roomImageRef = useRef<HTMLImageElement>(null);
   const autoFitPreviewRef = useRef<string | null>(null);
   const originalSurfacesRef = useRef<Surface[]>([]);
@@ -832,8 +838,11 @@ export function RoomStudio() {
 
   useEffect(() => {
     shellRef.current?.setAttribute('data-hydrated', 'true');
-    setLocalCleaningTestAvailable(isLocalPreview() && new URLSearchParams(window.location.search).has('roomTest'));
+    const localTestTimer = window.setTimeout(() => {
+      setLocalCleaningTestAvailable(isLocalPreview() && new URLSearchParams(window.location.search).has('roomTest'));
+    }, 0);
     return () => {
+      window.clearTimeout(localTestTimer);
       if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
       if (materialBlobRef.current) URL.revokeObjectURL(materialBlobRef.current);
       if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
@@ -958,88 +967,6 @@ export function RoomStudio() {
     else originalSurfacesRef.current = surfaces;
   }, [processedPreview, room, showProcessedPreview, surfaces]);
 
-  useEffect(() => {
-    const activeDrag = dragVertex ?? dragEdge;
-    if (!activeDrag) return;
-    const preventTouchScroll = (event: TouchEvent) => event.preventDefault();
-    const moveGeometryAt = (clientX: number, clientY: number) => {
-      if (!surfaceOverlayRef.current) return;
-      const rect = surfaceOverlayRef.current.getBoundingClientRect();
-      if (!rect.width || !rect.height) return;
-      const point = {
-        x: Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)),
-        y: Math.min(1, Math.max(0, (clientY - rect.top) / rect.height)),
-      };
-      setSurfaces((current) => {
-        let edgeDelta: Point | null = null;
-        if (dragEdge) {
-          const allOrigins = dragEdge.endpoints.flatMap((endpoint) => endpoint.linked.map(() => endpoint.origin));
-          const wantedX = point.x - dragEdge.start.x;
-          const wantedY = point.y - dragEdge.start.y;
-          const minX = Math.max(...allOrigins.map((origin) => -origin.x));
-          const maxX = Math.min(...allOrigins.map((origin) => 1 - origin.x));
-          const minY = Math.max(...allOrigins.map((origin) => -origin.y));
-          const maxY = Math.min(...allOrigins.map((origin) => 1 - origin.y));
-          edgeDelta = {
-            x: Math.min(maxX, Math.max(minX, wantedX)),
-            y: Math.min(maxY, Math.max(minY, wantedY)),
-          };
-        }
-        const next = current.map((surface) => {
-          if (surface.frozen) return surface;
-          const linkedPoints = surface.points.map((candidate, index) => {
-            if (dragVertex) {
-              const isLinked = dragVertex.linked.some((linked) => linked.surfaceId === surface.id && linked.vertexIndex === index);
-              return isLinked ? point : candidate;
-            }
-            if (dragEdge && edgeDelta) {
-              const endpoint = dragEdge.endpoints.find((item) => item.linked.some((linked) => linked.surfaceId === surface.id && linked.vertexIndex === index));
-              return endpoint ? { x: endpoint.origin.x + edgeDelta.x, y: endpoint.origin.y + edgeDelta.y } : candidate;
-            }
-            return candidate;
-          });
-          return { ...surface, points: linkedPoints };
-        });
-        if (!next.every((surface) => isValidPolygon(surface.points))) return current;
-        syncGeometrySnapshots(next);
-        return next;
-      });
-    };
-    const finishGeometryDrag = (pointerId: number) => {
-      if (pointerId !== activeDrag.pointerId) return;
-      try {
-        if (surfaceOverlayRef.current?.hasPointerCapture?.(pointerId)) surfaceOverlayRef.current.releasePointerCapture(pointerId);
-      } catch { /* Safari may already have released the Pencil pointer. */ }
-      const dragStart = dragStartRef.current;
-      if (dragStart) {
-        setPastSurfaces((history) => [...history, dragStart].slice(-40));
-        setFutureSurfaces([]);
-      }
-      dragStartRef.current = null;
-      setDragVertex(null);
-      setDragEdge(null);
-      shellRef.current?.classList.remove('is-moving-vertex');
-    };
-    const move = (event: PointerEvent) => {
-      if (event.pointerId !== activeDrag.pointerId) return;
-      event.preventDefault();
-      moveGeometryAt(event.clientX, event.clientY);
-    };
-    const finish = (event: PointerEvent) => {
-      if (event.pointerId === activeDrag.pointerId) finishGeometryDrag(event.pointerId);
-    };
-    document.addEventListener('touchmove', preventTouchScroll, { passive: false });
-    window.addEventListener('pointermove', move, { passive: false });
-    window.addEventListener('pointerup', finish);
-    window.addEventListener('pointercancel', finish);
-    return () => {
-      document.removeEventListener('touchmove', preventTouchScroll);
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', finish);
-      window.removeEventListener('pointercancel', finish);
-    };
-  }, [dragEdge, dragVertex]);
-
   const selected = surfaces.find((surface) => surface.id === selectedId) ?? null;
   const roomMeasurement = useMemo(() => inferRoomMeasurement(surfaces, roomRatio, manualRoomWidth), [surfaces, roomRatio, manualRoomWidth]);
   const materialNeedsSample = requiresVerifiedSurfaceSample(material);
@@ -1063,21 +990,24 @@ export function RoomStudio() {
   useEffect(() => {
     const floor = surfaces.find((surface) => surface.kind === 'floor');
     if (!floor) return;
-    setPlacedFurniture((current) => {
-      let changed = false;
-      const next = current.map((item) => {
-        if (!item.autoScale) return item;
-        const floorContact = floorContactYAtX(floor, item.x);
-        const scale = perspectiveFurnitureScale(item.name, item.description, item.y, floorContact, floor, roomMeasurement);
-        if (Math.abs(scale - item.scale) < .05) return item;
-        changed = true;
-        return { ...item, scale };
+    const frame = window.requestAnimationFrame(() => {
+      setPlacedFurniture((current) => {
+        let changed = false;
+        const next = current.map((item) => {
+          if (!item.autoScale) return item;
+          const floorContact = floorContactYAtX(floor, item.x);
+          const scale = perspectiveFurnitureScale(item.name, item.description, item.y, floorContact, floor, roomMeasurement);
+          if (Math.abs(scale - item.scale) < .05) return item;
+          changed = true;
+          return { ...item, scale };
+        });
+        return changed ? next : current;
       });
-      return changed ? next : current;
     });
+    return () => window.cancelAnimationFrame(frame);
   }, [roomMeasurement, surfaces]);
 
-  function syncGeometrySnapshots(next: Surface[]) {
+  const syncGeometrySnapshots = useCallback((next: Surface[]) => {
     if (!room || room.sourceType !== 'photo') return;
     const snapshots = geometrySnapshotsAfterEdit(
       next,
@@ -1085,6 +1015,108 @@ export function RoomStudio() {
     );
     originalSurfacesRef.current = snapshots.original;
     if (snapshots.processed) processedSurfacesRef.current = snapshots.processed;
+  }, [processedPreview, room]);
+
+  const moveGeometryAt = useCallback((clientX: number, clientY: number) => {
+    const activeDrag = geometryDragRef.current;
+    const overlay = surfaceOverlayRef.current;
+    if (!activeDrag || !overlay) return;
+    const rect = overlay.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const point = {
+      x: Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)),
+      y: Math.min(1, Math.max(0, (clientY - rect.top) / rect.height)),
+    };
+    setSurfaces((current) => {
+      let edgeDelta: Point | null = null;
+      if (activeDrag.kind === 'edge') {
+        const allOrigins = activeDrag.endpoints.flatMap((endpoint) => endpoint.linked.map(() => endpoint.origin));
+        const wantedX = point.x - activeDrag.start.x;
+        const wantedY = point.y - activeDrag.start.y;
+        const minX = Math.max(...allOrigins.map((origin) => -origin.x));
+        const maxX = Math.min(...allOrigins.map((origin) => 1 - origin.x));
+        const minY = Math.max(...allOrigins.map((origin) => -origin.y));
+        const maxY = Math.min(...allOrigins.map((origin) => 1 - origin.y));
+        edgeDelta = {
+          x: Math.min(maxX, Math.max(minX, wantedX)),
+          y: Math.min(maxY, Math.max(minY, wantedY)),
+        };
+      }
+      const next = current.map((surface) => {
+        if (surface.frozen) return surface;
+        const linkedPoints = surface.points.map((candidate, index) => {
+          if (activeDrag.kind === 'vertex') {
+            const isLinked = activeDrag.linked.some((linked) => linked.surfaceId === surface.id && linked.vertexIndex === index);
+            return isLinked ? point : candidate;
+          }
+          if (edgeDelta) {
+            const endpoint = activeDrag.endpoints.find((item) => item.linked.some((linked) => linked.surfaceId === surface.id && linked.vertexIndex === index));
+            return endpoint ? { x: endpoint.origin.x + edgeDelta.x, y: endpoint.origin.y + edgeDelta.y } : candidate;
+          }
+          return candidate;
+        });
+        return { ...surface, points: linkedPoints };
+      });
+      if (!next.every((surface) => isValidPolygon(surface.points))) return current;
+      syncGeometrySnapshots(next);
+      return next;
+    });
+  }, [syncGeometrySnapshots]);
+
+  const finishGeometryDrag = useCallback((pointerId: number) => {
+    const activeDrag = geometryDragRef.current;
+    if (!activeDrag || pointerId !== activeDrag.pointerId) return;
+    const captureTarget = geometryCaptureTargetRef.current;
+    geometryDragRef.current = null;
+    geometryCaptureTargetRef.current = null;
+    try {
+      if (captureTarget?.hasPointerCapture?.(pointerId)) captureTarget.releasePointerCapture(pointerId);
+    } catch { /* Safari may already have released the Pencil pointer. */ }
+    const dragStart = dragStartRef.current;
+    if (dragStart) {
+      setPastSurfaces((history) => [...history, dragStart].slice(-40));
+      setFutureSurfaces([]);
+    }
+    dragStartRef.current = null;
+    setDragVertex(null);
+    setDragEdge(null);
+    shellRef.current?.classList.remove('is-moving-vertex');
+  }, []);
+
+  useEffect(() => {
+    const activeDrag = dragVertex ?? dragEdge;
+    if (!activeDrag) return;
+    const preventTouchScroll = (event: TouchEvent) => event.preventDefault();
+    const move = (event: PointerEvent) => {
+      if (event.pointerId !== geometryDragRef.current?.pointerId) return;
+      event.preventDefault();
+      moveGeometryAt(event.clientX, event.clientY);
+    };
+    const finish = (event: PointerEvent) => {
+      if (event.pointerId === geometryDragRef.current?.pointerId) finishGeometryDrag(event.pointerId);
+    };
+    document.addEventListener('touchmove', preventTouchScroll, { passive: false });
+    window.addEventListener('pointermove', move, { passive: false });
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
+    return () => {
+      document.removeEventListener('touchmove', preventTouchScroll);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+    };
+  }, [dragEdge, dragVertex, finishGeometryDrag, moveGeometryAt]);
+
+  function handleGeometryPointerMove(event: ReactPointerEvent<SVGSVGElement>) {
+    if (event.pointerId !== geometryDragRef.current?.pointerId) return;
+    event.preventDefault(); event.stopPropagation();
+    moveGeometryAt(event.clientX, event.clientY);
+  }
+
+  function handleGeometryPointerEnd(event: ReactPointerEvent<SVGSVGElement>) {
+    if (event.pointerId !== geometryDragRef.current?.pointerId) return;
+    event.preventDefault(); event.stopPropagation();
+    finishGeometryDrag(event.pointerId);
   }
 
   function commitSurfaces(next: Surface[]) {
@@ -1295,11 +1327,14 @@ export function RoomStudio() {
       return;
     }
     event.preventDefault(); event.stopPropagation();
-    try { surfaceOverlayRef.current?.setPointerCapture?.(event.pointerId); } catch { /* Global listeners keep the drag active. */ }
+    const activeDrag: DragVertex = { kind: 'vertex', surfaceId, vertexIndex, pointerId: event.pointerId, origin, linked };
+    geometryDragRef.current = activeDrag;
+    geometryCaptureTargetRef.current = event.currentTarget;
+    try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { /* Global listeners keep the drag active. */ }
     shellRef.current?.classList.add('is-moving-vertex');
     dragStartRef.current = surfaces;
     setDragEdge(null);
-    setDragVertex({ surfaceId, vertexIndex, pointerId: event.pointerId, origin, linked });
+    setDragVertex(activeDrag);
   }
 
   function beginEdgeDrag(event: ReactPointerEvent<SVGElement>, surfaceId: string, edgeIndex: number) {
@@ -1316,11 +1351,8 @@ export function RoomStudio() {
     const rect = surfaceOverlayRef.current.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
     event.preventDefault(); event.stopPropagation();
-    try { surfaceOverlayRef.current?.setPointerCapture?.(event.pointerId); } catch { /* Global listeners keep the drag active. */ }
-    shellRef.current?.classList.add('is-moving-vertex');
-    dragStartRef.current = surfaces;
-    setDragVertex(null);
-    setDragEdge({
+    const activeDrag: DragEdge = {
+      kind: 'edge',
       surfaceId,
       edgeIndex,
       pointerId: event.pointerId,
@@ -1329,11 +1361,19 @@ export function RoomStudio() {
         { origin: first, linked: firstLinked },
         { origin: second, linked: secondLinked },
       ],
-    });
+    };
+    geometryDragRef.current = activeDrag;
+    geometryCaptureTargetRef.current = event.currentTarget;
+    try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { /* Global listeners keep the drag active. */ }
+    shellRef.current?.classList.add('is-moving-vertex');
+    dragStartRef.current = surfaces;
+    setDragVertex(null);
+    setDragEdge(activeDrag);
   }
 
   function toggleEdgeCorrection() {
     if (isCorrectingEdges) {
+      if (geometryDragRef.current) finishGeometryDrag(geometryDragRef.current.pointerId);
       setIsCorrectingEdges(false);
       setDragVertex(null);
       setDragEdge(null);
@@ -1385,7 +1425,8 @@ export function RoomStudio() {
     const previewUrl = URL.createObjectURL(file);
     materialBlobRef.current = previewUrl;
     materialSampleRef.current = file;
-    const next: StudioMaterial = { id: `material-${Date.now()}`, name: file.name.replace(/\.[^.]+$/, ''), category: 'Rivestimenti', description: 'Campione fotografico personale', previewUrl, textureUrl: previewUrl, referenceKind: 'uploaded-sample' };
+    materialIdRef.current += 1;
+    const next: StudioMaterial = { id: `material-${materialIdRef.current}`, name: file.name.replace(/\.[^.]+$/, ''), category: 'Rivestimenti', description: 'Campione fotografico personale', previewUrl, textureUrl: previewUrl, referenceKind: 'uploaded-sample' };
     setMaterial(next); setError(null); setNotice(`Campione “${next.name}” pronto. Seleziona una superficie e applicalo.`);
   }
 
@@ -1845,8 +1886,9 @@ export function RoomStudio() {
         const previewUrl = URL.createObjectURL(sample);
         materialBlobRef.current = previewUrl;
         materialSampleRef.current = sample;
+        materialIdRef.current += 1;
         const next: StudioMaterial = {
-          id: `material-${Date.now()}`,
+          id: `material-${materialIdRef.current}`,
           name: result.label || file.name.replace(/\.[^.]+$/, ''),
           category: result.category,
           description: 'Campione riconosciuto automaticamente dalla foto',
@@ -2073,7 +2115,8 @@ export function RoomStudio() {
       150000,
     );
     if (!response.ok || !result.surfaces?.length) throw new Error(result.message ?? 'Grok non ha trovato superfici affidabili.');
-    return clientValidatedSurfaces(result.surfaces, `grok-${Date.now()}`);
+    geometryDetectionIdRef.current += 1;
+    return clientValidatedSurfaces(result.surfaces, `grok-${geometryDetectionIdRef.current}`);
   }
 
   async function autoFitSurfaces() {
@@ -2156,7 +2199,8 @@ export function RoomStudio() {
       const { response, result } = await requestJson<{ image?: string; surfaces?: DetectedSurface[]; message?: string }>(endpoint('/api/floorplan-room'), { method: 'POST', body: form }, 180000);
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Stanza non disponibile.');
 
-      const created = clientValidatedSurfaces(result.surfaces ?? [], `floorplan-room-${Date.now()}`);
+      geometryDetectionIdRef.current += 1;
+      const created = clientValidatedSurfaces(result.surfaces ?? [], `floorplan-room-${geometryDetectionIdRef.current}`);
       originalSurfacesRef.current = created;
       processedSurfacesRef.current = null;
       autoFitPreviewRef.current = created.length ? result.image : null;
@@ -2585,6 +2629,7 @@ export function RoomStudio() {
       setNotice('Inserimento del mobile annullato.');
     }
     if (step !== 2 && step !== 3) {
+      if (geometryDragRef.current) finishGeometryDrag(geometryDragRef.current.pointerId);
       setIsCorrectingEdges(false);
       setDragVertex(null);
       setDragEdge(null);
@@ -2651,7 +2696,7 @@ export function RoomStudio() {
             <div ref={canvasRef} className={`canvas ${isDraggingFile ? 'is-dragging' : ''} ${pendingFurniture ? 'is-placing-furniture' : ''} ${isPickingCleanup ? 'is-picking-cleanup' : ''}`} id="editor-title" style={room ? { aspectRatio: roomRatio } : undefined} onClick={handleCanvasClick} onDragEnter={() => setIsDraggingFile(true)} onDragLeave={() => setIsDraggingFile(false)} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
             {room?.previewUrl ? <div className="editor-media">
               <img ref={roomImageRef} src={showProcessedPreview && processedPreview ? processedPreview : room.previewUrl} alt={showProcessedPreview ? `Anteprima elaborata: ${processedLabel}` : `Originale importato: ${room.file.name}`} onLoad={(event) => onRoomImageLoad(event.currentTarget)} />
-              <svg ref={surfaceOverlayRef} className={`surface-overlay ${drawKind ? 'is-drawing' : ''} ${isCorrectingEdges ? 'is-correcting' : ''} ${isPickingCleanup ? 'is-cleanup-picking' : ''} ${!showSurfaceGuides ? 'hide-product-guides' : ''}`} viewBox="0 0 1000 625" preserveAspectRatio="none" onPointerDown={addDraftPoint}>
+              <svg ref={surfaceOverlayRef} className={`surface-overlay ${drawKind ? 'is-drawing' : ''} ${isCorrectingEdges ? 'is-correcting' : ''} ${isPickingCleanup ? 'is-cleanup-picking' : ''} ${!showSurfaceGuides ? 'hide-product-guides' : ''}`} viewBox="0 0 1000 625" preserveAspectRatio="none" onPointerDown={addDraftPoint} onPointerMove={handleGeometryPointerMove} onPointerUp={handleGeometryPointerEnd} onPointerCancel={handleGeometryPointerEnd} onLostPointerCapture={handleGeometryPointerEnd}>
                 <defs>
                   {catalogMaterials.filter((item) => item.pattern).map((item) => <pattern id={`catalog-material-${item.id}`} key={item.id} width={item.pattern === 'wood' ? 180 : 120} height={item.pattern === 'wood' ? 42 : 120} patternUnits="userSpaceOnUse"><rect width="100%" height="100%" fill={item.color} /><path d={item.pattern === 'wood' ? 'M0 2H180 M0 40H180 M45 2V40 M135 2V40' : 'M0 1H120 M1 0V120'} stroke="rgba(67,55,43,.22)" strokeWidth="3" /><path d={item.pattern === 'stone' ? 'M8 38 C38 17 64 55 110 25 M14 92 C45 68 77 106 116 74' : ''} fill="none" stroke="rgba(255,255,255,.24)" strokeWidth="5" /></pattern>)}
                   {material?.previewUrl && <pattern id={`uploaded-material-${material.id}`} width="140" height="140" patternUnits="userSpaceOnUse"><image href={material.previewUrl} width="140" height="140" preserveAspectRatio="xMidYMid slice" /></pattern>}
