@@ -803,7 +803,6 @@ export function RoomStudio() {
   const [dragVertex, setDragVertex] = useState<DragVertex | null>(null);
   const [dragEdge, setDragEdge] = useState<DragEdge | null>(null);
   const [isCorrectingEdges, setIsCorrectingEdges] = useState(false);
-  const [edgeGripRadius, setEdgeGripRadius] = useState({ x: 68, y: 46 });
   const [geometryDetectionStatus, setGeometryDetectionStatus] = useState<GeometryDetectionStatus>(null);
   const [showSurfaceGuides, setShowSurfaceGuides] = useState(true);
   const [manualRoomWidth, setManualRoomWidth] = useState<number | null>(null);
@@ -828,7 +827,7 @@ export function RoomStudio() {
   const processedBlobRef = useRef<string | null>(null);
   const dragStartRef = useRef<Surface[] | null>(null);
   const geometryDragRef = useRef<GeometryDrag | null>(null);
-  const geometryCaptureTargetRef = useRef<SVGElement | null>(null);
+  const geometryCaptureTargetRef = useRef<Element | null>(null);
   const roomImageRef = useRef<HTMLImageElement>(null);
   const autoFitPreviewRef = useRef<string | null>(null);
   const originalSurfacesRef = useRef<Surface[]>([]);
@@ -1018,31 +1017,6 @@ export function RoomStudio() {
     if (snapshots.processed) processedSurfacesRef.current = snapshots.processed;
   }, [processedPreview, room]);
 
-  useEffect(() => {
-    if (!isCorrectingEdges) return;
-    const overlay = surfaceOverlayRef.current;
-    if (!overlay) return;
-    const updateGripRadius = () => {
-      const rect = overlay.getBoundingClientRect();
-      if (!rect.width || !rect.height) return;
-      const targetRadiusCssPx = 28;
-      setEdgeGripRadius({
-        x: targetRadiusCssPx * 1000 / rect.width,
-        y: targetRadiusCssPx * 625 / rect.height,
-      });
-    };
-    updateGripRadius();
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateGripRadius);
-    observer?.observe(overlay);
-    window.addEventListener('resize', updateGripRadius);
-    window.visualViewport?.addEventListener('resize', updateGripRadius);
-    return () => {
-      observer?.disconnect();
-      window.removeEventListener('resize', updateGripRadius);
-      window.visualViewport?.removeEventListener('resize', updateGripRadius);
-    };
-  }, [isCorrectingEdges]);
-
   const moveGeometryAt = useCallback((clientX: number, clientY: number) => {
     const activeDrag = geometryDragRef.current;
     const overlay = surfaceOverlayRef.current;
@@ -1133,13 +1107,13 @@ export function RoomStudio() {
     };
   }, [dragEdge, dragVertex, finishGeometryDrag, moveGeometryAt]);
 
-  function handleGeometryPointerMove(event: ReactPointerEvent<SVGSVGElement>) {
+  function handleGeometryPointerMove(event: ReactPointerEvent<Element>) {
     if (event.pointerId !== geometryDragRef.current?.pointerId) return;
     event.preventDefault(); event.stopPropagation();
     moveGeometryAt(event.clientX, event.clientY);
   }
 
-  function handleGeometryPointerEnd(event: ReactPointerEvent<SVGSVGElement>) {
+  function handleGeometryPointerEnd(event: ReactPointerEvent<Element>) {
     if (event.pointerId !== geometryDragRef.current?.pointerId) return;
     event.preventDefault(); event.stopPropagation();
     finishGeometryDrag(event.pointerId);
@@ -1365,7 +1339,7 @@ export function RoomStudio() {
     setDragVertex(activeDrag);
   }
 
-  function beginEdgeDrag(event: ReactPointerEvent<SVGElement>, surfaceId: string, edgeIndex: number) {
+  function beginEdgeDrag(event: ReactPointerEvent<Element>, surfaceId: string, edgeIndex: number) {
     if (geometryDragRef.current) return;
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     const surface = surfaces.find((item) => item.id === surfaceId);
@@ -1589,51 +1563,66 @@ export function RoomStudio() {
     const height = Math.max(1, Math.round(image.naturalHeight * scale));
     const imageCanvas = document.createElement('canvas');
     const maskCanvas = document.createElement('canvas');
-    imageCanvas.width = maskCanvas.width = width;
-    imageCanvas.height = maskCanvas.height = height;
+    const maskReferenceCanvas = document.createElement('canvas');
+    imageCanvas.width = maskCanvas.width = maskReferenceCanvas.width = width;
+    imageCanvas.height = maskCanvas.height = maskReferenceCanvas.height = height;
     const imageContext = imageCanvas.getContext('2d');
     const maskContext = maskCanvas.getContext('2d');
-    if (!imageContext || !maskContext) throw new Error('Non posso preparare la superficie.');
+    const maskReferenceContext = maskReferenceCanvas.getContext('2d');
+    if (!imageContext || !maskContext || !maskReferenceContext) throw new Error('Non posso preparare la superficie.');
     imageContext.drawImage(image, 0, 0, width, height);
 
-    const drawPoints = (points: Point[]) => {
-      maskContext.beginPath();
+    const drawPoints = (context: CanvasRenderingContext2D, points: Point[]) => {
+      context.beginPath();
       points.forEach((point, index) => {
         const x = point.x * width; const y = point.y * height;
-        if (index === 0) maskContext.moveTo(x, y); else maskContext.lineTo(x, y);
+        if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
       });
-      maskContext.closePath(); maskContext.fill();
+      context.closePath(); context.fill();
     };
-    const drawPolygon = (surface: Surface) => drawPoints(surface.points);
+    const drawPolygon = (context: CanvasRenderingContext2D, surface: Surface) => drawPoints(context, surface.points);
 
     const editableSurfaces = options.editableSurfaces ?? (options.editableSurface ? [options.editableSurface] : []);
     const editableFurniture = options.editableFurniture ?? [];
     if (editableSurfaces.length || editableFurniture.length) {
       maskContext.fillStyle = '#ffffff'; maskContext.fillRect(0, 0, width, height);
       maskContext.globalCompositeOperation = 'destination-out';
-      for (const surface of editableSurfaces) drawPolygon(surface);
+      for (const surface of editableSurfaces) drawPolygon(maskContext, surface);
       maskContext.globalCompositeOperation = 'source-over';
       maskContext.fillStyle = '#ffffff';
-      for (const surface of options.protectedSurfaces ?? []) drawPolygon(surface);
+      for (const surface of options.protectedSurfaces ?? []) drawPolygon(maskContext, surface);
       // A requested item is allowed to naturally occlude a protected wall.
       // Open its placement window after restoring the architectural mask.
       maskContext.globalCompositeOperation = 'destination-out';
-      for (const item of editableFurniture) drawPoints(rectPoints(furnitureEditRect(item)));
+      for (const item of editableFurniture) drawPoints(maskContext, rectPoints(furnitureEditRect(item)));
       maskContext.globalCompositeOperation = 'source-over';
+
+      maskReferenceContext.fillStyle = '#000000'; maskReferenceContext.fillRect(0, 0, width, height);
+      maskReferenceContext.fillStyle = '#ff00ff';
+      for (const surface of editableSurfaces) drawPolygon(maskReferenceContext, surface);
+      for (const item of editableFurniture) drawPoints(maskReferenceContext, rectPoints(furnitureEditRect(item)));
+      maskReferenceContext.fillStyle = '#000000';
+      for (const surface of options.protectedSurfaces ?? []) drawPolygon(maskReferenceContext, surface);
+      maskReferenceContext.fillStyle = '#ff00ff';
+      for (const item of editableFurniture) drawPoints(maskReferenceContext, rectPoints(furnitureEditRect(item)));
     } else {
       maskContext.clearRect(0, 0, width, height);
       maskContext.fillStyle = '#ffffff';
-      for (const surface of options.frozenSurfaces ?? []) drawPolygon(surface);
+      for (const surface of options.frozenSurfaces ?? []) drawPolygon(maskContext, surface);
+      maskReferenceContext.fillStyle = '#ff00ff'; maskReferenceContext.fillRect(0, 0, width, height);
+      maskReferenceContext.fillStyle = '#000000';
+      for (const surface of options.frozenSurfaces ?? []) drawPolygon(maskReferenceContext, surface);
     }
 
-    const [inputImage, mask] = await Promise.all([
+    const [inputImage, mask, maskReference] = await Promise.all([
       // JPEG keeps the multipart request comfortably below mobile/edge body
       // limits; the lossless PNG is reserved for the technical mask.
       new Promise<Blob | null>((resolve) => imageCanvas.toBlob(resolve, 'image/jpeg', .92)),
       new Promise<Blob | null>((resolve) => maskCanvas.toBlob(resolve, 'image/png')),
+      new Promise<Blob | null>((resolve) => maskReferenceCanvas.toBlob(resolve, 'image/png')),
     ]);
-    if (!inputImage || !mask) throw new Error('Non posso preparare foto e maschera della superficie.');
-    return { inputImage, mask };
+    if (!inputImage || !mask || !maskReference) throw new Error('Non posso preparare foto e maschera della superficie.');
+    return { inputImage, mask, maskReference };
   }
 
   async function protectAiResult(resultSource: string, options: {
@@ -1855,10 +1844,11 @@ export function RoomStudio() {
       ? `Creo una prova indicativa di ${chosenMaterial.name} su ${target.name} usando i dati del prodotto…`
       : `Adatto ${chosenMaterial.name} a ${target.name} rispettando prospettiva e zone bloccate…`);
     try {
-      const { inputImage, mask } = await createMaskedInput({ editableSurface: target });
+      const { inputImage, mask, maskReference } = await createMaskedInput({ editableSurface: target });
       const form = new FormData();
       form.append('image', inputImage, 'surface-input.jpg');
       form.append('mask', mask, 'surface-mask.png');
+      form.append('maskReference', maskReference, 'surface-mask-reference.png');
       form.append('productName', `${chosenMaterial.brand ? `${chosenMaterial.brand} ` : ''}${chosenMaterial.name}`);
       form.append('productDescription', `${chosenMaterial.description} · fonte: ${chosenMaterial.sourceUrl}`);
       form.append('targetName', target.name);
@@ -2346,10 +2336,11 @@ export function RoomStudio() {
         id: `auto-clean-${index}`, name: region.label, kind: 'other', frozen: false, points: region.points,
       }));
       setNotice(`${regions.length} zone da pulire riconosciute. Modifico solo quei contorni e proteggo ogni altro pixel.`);
-      const { inputImage, mask } = await createMaskedInput({ editableSurfaces: removalSurfaces, sourceUrl: room.previewUrl });
+      const { inputImage, mask, maskReference } = await createMaskedInput({ editableSurfaces: removalSurfaces, sourceUrl: room.previewUrl });
       const form = new FormData();
       form.append('image', inputImage, 'room-input.jpg');
       form.append('mask', mask, 'furniture-mask.png');
+      form.append('maskReference', maskReference, 'furniture-mask-reference.png');
       form.append('targetAreas', JSON.stringify(regions.map((region) => ({ label: region.label, points: region.points }))));
       form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
       const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/empty-room'), { method: 'POST', body: form }, 300000);
@@ -2422,9 +2413,10 @@ export function RoomStudio() {
     const localRegion: Surface = { id: 'cleanup-region', name: cleanupRegion.label, kind: 'other', frozen: false, points: cleanupRegion.points };
     setIsCleaningRegion(true); setError(null); setNotice(`Pulisco soltanto “${cleanupRegion.label}”. Tutto il resto viene ricopiato pixel per pixel.`);
     try {
-      const { inputImage, mask } = await createMaskedInput({ editableSurface: localRegion, sourceUrl });
+      const { inputImage, mask, maskReference } = await createMaskedInput({ editableSurface: localRegion, sourceUrl });
       const form = new FormData();
       form.append('image', inputImage, 'cleanup-input.jpg'); form.append('mask', mask, 'cleanup-mask.png');
+      form.append('maskReference', maskReference, 'cleanup-mask-reference.png');
       form.append('targetLabel', cleanupRegion.label); form.append('targetArea', JSON.stringify(cleanupRegion.points));
       const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/clean-room-region'), { method: 'POST', body: form }, 180000);
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Pulizia locale non disponibile.');
@@ -2548,7 +2540,7 @@ export function RoomStudio() {
         setNotice('Nessuna modifica visiva richiesta: la fotografia è rimasta identica e non è stata inviata all’IA.');
         return;
       }
-      const { inputImage, mask } = await createMaskedInput({
+      const { inputImage, mask, maskReference } = await createMaskedInput({
         editableSurfaces: editableMaterialSurfaces,
         editableFurniture: placedFurniture,
         protectedSurfaces,
@@ -2557,6 +2549,7 @@ export function RoomStudio() {
       const form = new FormData();
       form.append('image', inputImage, 'render-input.jpg');
       form.append('mask', mask, 'controlled-edit-mask.png');
+      form.append('maskReference', maskReference, 'controlled-edit-mask-reference.png');
       form.append('materials', materialAssignments.join('\n'));
       form.append('furniture', furnitureAssignments.join('\n'));
       form.append('requests', customRequests.join(', '));
@@ -2809,12 +2802,29 @@ export function RoomStudio() {
                 })}
                 {isCorrectingEdges && selected && !selected.frozen && <g className="surface-correction-controls" data-surface-id={selected.id}>
                   {selected.points.map((point, index) => { const next = selected.points[(index + 1) % selected.points.length]; return <g className="surface-edge-control" key={`${selected.id}-edge-${index}`}><line x1={point.x * 1000} y1={point.y * 625} x2={next.x * 1000} y2={next.y * 625} className="surface-edge" vectorEffect="non-scaling-stroke" aria-hidden="true" /><line x1={point.x * 1000} y1={point.y * 625} x2={next.x * 1000} y2={next.y * 625} className="surface-edge-hit" vectorEffect="non-scaling-stroke" aria-label={`Sposta linea ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginEdgeDrag(event, selected.id, index)} /></g>; })}
-                  {selected.points.map((point, index) => { const next = selected.points[(index + 1) % selected.points.length]; const midpointX = (point.x + next.x) * 500; const midpointY = (point.y + next.y) * 312.5; return <g key={`${selected.id}-midpoint-${index}`}><circle cx={midpointX} cy={midpointY} r="10" className="surface-edge-grip" aria-hidden="true" /><ellipse cx={midpointX} cy={midpointY} rx={edgeGripRadius.x} ry={edgeGripRadius.y} className="surface-edge-grip-hit" data-testid={`edge-grip-hit-${index}`} style={{ cursor: 'move', pointerEvents: 'all', touchAction: 'none' }} aria-label={`Sposta punto centrale linea ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginEdgeDrag(event, selected.id, index)} /></g>; })}
+                  {selected.points.map((point, index) => { const next = selected.points[(index + 1) % selected.points.length]; const midpointX = (point.x + next.x) * 500; const midpointY = (point.y + next.y) * 312.5; return <circle key={`${selected.id}-midpoint-${index}`} cx={midpointX} cy={midpointY} r="10" className="surface-edge-grip" aria-hidden="true" />; })}
                   {selected.points.map((point, index) => <g key={`${selected.id}-vertex-${index}`}><circle cx={point.x * 1000} cy={point.y * 625} r="34" className="surface-vertex-hit" aria-label={`Sposta punto ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginVertexDrag(event, selected.id, index)} /><circle cx={point.x * 1000} cy={point.y * 625} r="16" className="surface-vertex" aria-hidden="true" /></g>)}
                 </g>}
                 {draft.length > 0 && <><polyline points={pointsToSvg(draft)} fill="none" stroke="#d7f05c" strokeWidth="5" vectorEffect="non-scaling-stroke" />{draft.map((point, index) => <circle key={index} cx={point.x * 1000} cy={point.y * 625} r="9" className="draft-vertex" />)}</>}
                 {cleanupRegion && <polygon className="cleanup-region" points={pointsToSvg(cleanupRegion.points)} aria-label={`Zona da pulire: ${cleanupRegion.label}`} />}
               </svg>
+              {isCorrectingEdges && selected && !selected.frozen && <div className="surface-correction-hit-layer" aria-label={`Controlli linee di ${selected.name}`}>
+                {selected.points.map((point, index) => {
+                  const next = selected.points[(index + 1) % selected.points.length];
+                  return <button
+                    key={`${selected.id}-midpoint-hit-${index}`}
+                    type="button"
+                    className="surface-edge-grip-hit"
+                    data-testid={`edge-grip-hit-${index}`}
+                    style={{ left: `${((point.x + next.x) / 2) * 100}%`, top: `${((point.y + next.y) / 2) * 100}%`, touchAction: 'none' }}
+                    aria-label={`Sposta punto centrale linea ${index + 1} di ${selected.name}`}
+                    onPointerDown={(event) => beginEdgeDrag(event, selected.id, index)}
+                    onPointerMove={handleGeometryPointerMove}
+                    onPointerUp={handleGeometryPointerEnd}
+                    onPointerCancel={handleGeometryPointerEnd}
+                  />;
+                })}
+              </div>}
               {activeStep === 3 && <div className="furniture-placement-layer" aria-label="Mobili posizionati">{placedFurniture.map((item) => {
                 const usesSideAsset = item.facing !== 'front-wall' && Boolean(item.sidePreviewUrl);
                 const imageUrl = usesSideAsset ? item.sidePreviewUrl : item.cutoutUrl ?? item.previewUrl;

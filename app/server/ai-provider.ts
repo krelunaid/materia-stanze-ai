@@ -805,6 +805,42 @@ export function chooseSupportedImageAspectRatio(width: number, height: number): 
   ))[0].name;
 }
 
+async function supportedImageAspectRatioForFile(file: File): Promise<SupportedImageAspectRatio | null> {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (bytes.length >= 24
+      && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+      && bytes[12] === 0x49 && bytes[13] === 0x48 && bytes[14] === 0x44 && bytes[15] === 0x52) {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      return chooseSupportedImageAspectRatio(view.getUint32(16), view.getUint32(20));
+    }
+    if (bytes.length >= 12 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+      const startOfFrame = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+      let offset = 2;
+      while (offset + 8 < bytes.length) {
+        if (bytes[offset] !== 0xff) { offset += 1; continue; }
+        let markerOffset = offset + 1;
+        while (markerOffset < bytes.length && bytes[markerOffset] === 0xff) markerOffset += 1;
+        const marker = bytes[markerOffset];
+        if (marker === 0xd9 || marker === 0xda) break;
+        const sizeOffset = markerOffset + 1;
+        if (sizeOffset + 1 >= bytes.length) break;
+        const segmentLength = (bytes[sizeOffset] << 8) | bytes[sizeOffset + 1];
+        if (segmentLength < 2 || sizeOffset + segmentLength > bytes.length) break;
+        if (startOfFrame.has(marker) && sizeOffset + 7 < bytes.length) {
+          const height = (bytes[sizeOffset + 3] << 8) | bytes[sizeOffset + 4];
+          const width = (bytes[sizeOffset + 5] << 8) | bytes[sizeOffset + 6];
+          return chooseSupportedImageAspectRatio(width, height);
+        }
+        offset = sizeOffset + segmentLength;
+      }
+    }
+  } catch {
+    // A missing ratio must not make the image edit fail; Grok can use its automatic ratio.
+  }
+  return null;
+}
+
 function polygonArea(points: Array<{ x: number; y: number }>) {
   return Math.abs(points.reduce((sum, point, index) => {
     const next = points[(index + 1) % points.length];
@@ -1636,6 +1672,7 @@ async function referenceBlob(value: string) {
 export async function editImage(provider: AiProvider, input: {
   source: File;
   mask?: File | null;
+  maskReferenceFile?: File | null;
   referenceImageUrl?: string | null;
   referenceImageFile?: File | null;
   referenceImageRole?: 'furniture' | 'material' | 'combined';
@@ -1643,15 +1680,23 @@ export async function editImage(provider: AiProvider, input: {
   maskExplanation?: string;
 }) {
   if (provider.id === 'grok') {
+    const aspectRatio = await supportedImageAspectRatioForFile(input.source);
     const images: Array<{ type: 'image_url'; url: string }> = [
       { type: 'image_url', url: await fileToDataUri(input.source) },
     ];
+    const technicalMask = input.maskReferenceFile ?? input.mask;
+    const hasMaskReference = Boolean(technicalMask && technicalMask.type === 'image/png' && images.length < 3);
+    if (hasMaskReference && technicalMask) images.push({ type: 'image_url', url: await fileToDataUri(technicalMask) });
     if (input.referenceImageFile && images.length < 3) images.push({ type: 'image_url', url: await fileToDataUri(input.referenceImageFile) });
     const reference = input.referenceImageUrl ? validPublicUrl(input.referenceImageUrl) : null;
     if (reference && images.length < 3) images.push({ type: 'image_url', url: reference.toString() });
     const prompt = [
       input.prompt,
-      input.mask && input.maskExplanation ? `The client will enforce this protected-area rule after generation: ${input.maskExplanation}. Keep the source composition and normalized coordinates unchanged.` : '',
+      hasMaskReference && input.maskExplanation
+        ? `Input image 1 is the source photograph. Input image 2 is a technical edit mask at the exact same normalized coordinates. ${input.maskReferenceFile ? 'MAGENTA pixels are the only editable area and BLACK pixels are protected.' : input.maskExplanation} It is not another photograph and must never appear in the result. Use it only to localize the edit, keep every protected source pixel and landmark fixed, and preserve the source composition.`
+        : input.mask && input.maskExplanation
+          ? `The client will enforce this protected-area rule after generation: ${input.maskExplanation}. Keep the source composition and normalized coordinates unchanged.`
+          : '',
       input.referenceImageFile ? `One additional image is the exact ${input.referenceImageRole ?? 'furniture'} reference selected by the user.` : '',
       reference && images.some((image) => image.url === reference.toString()) ? 'One additional image is the exact material reference selected by the user.' : '',
     ].filter(Boolean).join(' ');
@@ -1661,6 +1706,7 @@ export async function editImage(provider: AiProvider, input: {
       body: JSON.stringify({
         model: 'grok-imagine-image-2.0',
         prompt,
+        ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
         ...(images.length === 1 ? { image: images[0] } : { images }),
       }),
       signal: AbortSignal.timeout(150000),

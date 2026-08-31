@@ -25,7 +25,7 @@ function mockMaterialPhotoCrop() {
   vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback) => callback(new Blob(['sample'], { type: 'image/png' })));
 }
 
-function mockPointerCapture(target: SVGElement) {
+function mockPointerCapture(target: Element) {
   let capturedPointer: number | null = null;
   const setPointerCapture = vi.fn((pointerId: number) => { capturedPointer = pointerId; });
   const hasPointerCapture = vi.fn((pointerId: number) => capturedPointer === pointerId);
@@ -760,12 +760,13 @@ describe('RoomStudio', () => {
 
     const guideActions = document.querySelector('.surface-guide-actions') as HTMLDivElement;
     fireEvent.click(within(guideActions).getByRole('button', { name: '↔ Sposta linee' }));
-    const midpoint = screen.getByLabelText('Sposta punto centrale linea 1 di Pavimento') as unknown as SVGEllipseElement;
+    const midpoint = screen.getByLabelText('Sposta punto centrale linea 1 di Pavimento') as HTMLButtonElement;
     expect(midpoint).toHaveClass('surface-edge-grip-hit');
-    expect(midpoint).toHaveStyle({ pointerEvents: 'all', touchAction: 'none' });
-    expect(Number(midpoint.getAttribute('rx'))).toBeGreaterThanOrEqual(28);
-    expect(Number(midpoint.getAttribute('ry'))).toBeGreaterThanOrEqual(28);
+    expect(midpoint).toHaveStyle({ touchAction: 'none' });
+    expect(midpoint.style.left).toMatch(/%$/);
+    expect(midpoint.style.top).toMatch(/%$/);
     expect(midpoint).toHaveAttribute('data-testid', 'edge-grip-hit-0');
+    expect(midpoint).toHaveAttribute('type', 'button');
 
     const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
     vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
@@ -774,8 +775,8 @@ describe('RoomStudio', () => {
     const wallPolygons = Array.from(document.querySelectorAll('.surface-kind-wall polygon')) as SVGPolygonElement[];
     const wallsBefore = wallPolygons.map((polygon) => polygon.getAttribute('points'));
     const parsePoints = (value: string) => value.split(' ').map((point) => point.split(',').map(Number));
-    const midpointX = Number(midpoint.getAttribute('cx'));
-    const midpointY = Number(midpoint.getAttribute('cy'));
+    const midpointX = Number.parseFloat(midpoint.style.left) * 10;
+    const midpointY = Number.parseFloat(midpoint.style.top) * 6.25;
     const capture = mockPointerCapture(midpoint);
 
     fireEvent.pointerDown(midpoint, { pointerId: 52, pointerType: 'pen', clientX: midpointX, clientY: midpointY });

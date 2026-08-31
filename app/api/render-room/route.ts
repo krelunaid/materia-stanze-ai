@@ -22,6 +22,7 @@ export async function POST(request: Request) {
     const incoming = await request.formData();
     const image = incoming.get('image');
     const mask = incoming.get('mask');
+    const maskReference = incoming.get('maskReference');
     const materialReference = incoming.get('materialReference');
     const combinedReference = incoming.get('combinedReference');
     const furnitureReference = incoming.get('furnitureReference');
@@ -42,6 +43,7 @@ export async function POST(request: Request) {
     }
     if (image.size > 20 * 1024 * 1024) return json({ message: 'La fotografia supera il limite di 20 MB.' }, headers, 413);
     if (!(mask instanceof File) || mask.type !== 'image/png') return json({ message: 'La maschera del render controllato non è valida.' }, headers, 400);
+    if (maskReference != null && (!(maskReference instanceof File) || maskReference.type !== 'image/png' || maskReference.size > 8 * 1024 * 1024)) return json({ message: 'La guida visiva della maschera non è valida.' }, headers, 400);
     if (furnitureReference instanceof File && (!furnitureReference.type.startsWith('image/') || furnitureReference.size > 20 * 1024 * 1024)) {
       return json({ message: 'La fotografia del mobile non è valida.' }, headers, 400);
     }
@@ -81,18 +83,19 @@ export async function POST(request: Request) {
       materials && referenceType === 'metadata-only' ? 'No verified texture is supplied. Keep any product visualization restrained and approximate; do not invent distinctive graphics or claim exact visual fidelity.' : '',
       roomMeasurements ? `Use this room-scale calibration to size products, furniture, joints and repeating patterns: ${roomMeasurements}. It describes the existing room and must never cause its geometry, crop or perspective to change.` : '',
       furniture ? `Insert these furniture elements at the exact user-selected image anchors, approximate sizes and floor-plane orientations below. Treat x/y as percentages of the full source photograph; keep each item's floor contact point at its anchor and preserve the user's composition. Orientation is yaw on the floor plane: never roll or tilt the furniture image.\n${furniture}` : '',
-      furniture ? 'MANDATORY: every listed furniture item must be clearly visible in the final photograph, entirely inside its transparent mask window. A clean room with the furniture omitted is an invalid result. Put the furniture floor-contact point exactly at the requested anchor and keep its real product proportions. Use the editable floor band beneath it to create a visible, soft contact shadow and ambient occlusion at every leg or base contact. Match the shadow direction, softness, intensity and color to the existing room light; never leave a bright gap or a uniformly sharp pasted lower edge.' : '',
+      furniture ? 'MANDATORY: every listed furniture item must be clearly visible in the final photograph, entirely inside its authorized mask window. A clean room with the furniture omitted is an invalid result. Put the furniture floor-contact point exactly at the requested anchor and keep its real product proportions. Use the editable floor band beneath it to create a visible, soft contact shadow and ambient occlusion at every leg or base contact. Match the shadow direction, softness, intensity and color to the existing room light; never leave a bright gap or a uniformly sharp pasted lower edge.' : '',
       !(combinedReference instanceof File) && furnitureReference instanceof File ? `Use the supplied furniture reference image to preserve the exact appearance of “${furnitureReferenceName || 'the selected furniture'}”. It may already be a transparent cutout: never recreate its former catalog background. Integrate only the physical object with correct floor contact, perspective, scale, room lighting and a natural contact shadow.` : '',
       !(combinedReference instanceof File) && furnitureReferenceUrl && !(furnitureReference instanceof File) ? `Use the supplied online product photograph to preserve the appearance and proportions of “${furnitureReferenceName || 'the selected furniture'}”; remove its original photo background before integrating it.` : '',
       requests ? `Also follow these user requests: ${requests}.` : '',
       protectedAreas ? `These Freeze areas must remain unchanged except for the physically correct foreground occlusion caused by furniture explicitly requested by the user: ${protectedAreas}.` : '',
-      'The transparent parts of the technical mask show the complete and only editable regions and placement windows. Never modify a solid white pixel.',
+      'The technical mask shows the complete and only editable regions and placement windows. Every protected region must remain fixed.',
       'Do not add unrelated objects, text, logos, extra doors or extra windows. Do not change the room dimensions or perspective. The result must look like a professional photograph of the same room.',
     ].filter(Boolean).join('\n');
 
     const editInput = {
       source: image,
       mask: mask instanceof File ? mask : null,
+      maskReferenceFile: maskReference instanceof File ? maskReference : null,
       referenceImageUrl: combinedReference instanceof File
         ? null
         : (furnitureReferenceUrl && !(furnitureReference instanceof File)

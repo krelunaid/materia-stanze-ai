@@ -22,6 +22,7 @@ export async function POST(request: Request) {
     const incoming = await request.formData();
     const image = incoming.get('image');
     const mask = incoming.get('mask');
+    const maskReference = incoming.get('maskReference');
     const materialReference = incoming.get('materialReference');
     const productName = String(incoming.get('productName') ?? '').slice(0, 300);
     const productDescription = String(incoming.get('productDescription') ?? '').slice(0, 1000);
@@ -35,6 +36,9 @@ export async function POST(request: Request) {
       : 'metadata-only';
     if (!(image instanceof File) || !(mask instanceof File) || mask.type !== 'image/png') {
       return json({ message: 'Foto o maschera della superficie non valida.' }, headers, 400);
+    }
+    if (maskReference != null && (!(maskReference instanceof File) || maskReference.type !== 'image/png' || maskReference.size > 8 * 1024 * 1024)) {
+      return json({ message: 'La guida visiva della maschera non è valida.' }, headers, 400);
     }
     if (materialReference instanceof File && (!materialReference.type.startsWith('image/') || materialReference.size > 12 * 1024 * 1024)) {
       return json({ message: 'Il campione materiale non è valido.' }, headers, 400);
@@ -67,6 +71,7 @@ export async function POST(request: Request) {
     const result = await editImage(provider, {
       source: image,
       mask,
+      maskReferenceFile: maskReference instanceof File ? maskReference : null,
       referenceImageUrl: referenceType === 'metadata-only' ? null : imageUrl || null,
       referenceImageFile: materialReference instanceof File ? materialReference : null,
       referenceImageRole: 'material',

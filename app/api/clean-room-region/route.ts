@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   if (!provider) return json({ code: 'not_configured', message: 'La pulizia locale non è momentaneamente disponibile.' }, headers, 503);
   try {
     const incoming = await request.formData();
-    const image = incoming.get('image'); const mask = incoming.get('mask');
+    const image = incoming.get('image'); const mask = incoming.get('mask'); const maskReference = incoming.get('maskReference');
     const targetLabel = String(incoming.get('targetLabel') ?? 'oggetto residuo')
       .replace(/[^\p{L}\p{N} .,'’-]/gu, '')
       .slice(0, 80) || 'oggetto residuo';
@@ -34,6 +34,7 @@ export async function POST(request: Request) {
     }
     if (!(image instanceof File) || !image.type.startsWith('image/') || image.size > 20 * 1024 * 1024) return json({ message: 'La fotografia non è valida.' }, headers, 400);
     if (!(mask instanceof File) || mask.type !== 'image/png' || mask.size > 8 * 1024 * 1024) return json({ message: 'La maschera locale non è valida.' }, headers, 400);
+    if (maskReference != null && (!(maskReference instanceof File) || maskReference.type !== 'image/png' || maskReference.size > 8 * 1024 * 1024)) return json({ message: 'La guida visiva della maschera non è valida.' }, headers, 400);
     if (!targetArea) return json({ message: 'La selezione da pulire non è valida. Disegnala di nuovo sulla fotografia.' }, headers, 409);
     const prompt = [
       'Perform a strictly local photographic inpainting on this exact interior photograph.',
@@ -41,10 +42,10 @@ export async function POST(request: Request) {
       'This polygon is an explicit removal request even when the target is fitted, built-in, attached, wired or plumbed, including kitchen cabinetry or appliances and bathroom furniture.',
       'Reconstruct the simplest continuous extension of the wall, floor, skirting or finish hidden by that target. Never recreate the removed unit or replace it with another object.',
       'Do not remove, add, move or redesign anything outside that polygon. Preserve true architecture: camera, crop, perspective, lighting, room geometry, walls, floor, ceiling, structural columns and beams, stairs, doors, windows and openings.',
-      'The second image is a technical mask: transparent pixels are the only editable area and every white pixel is protected. Return the complete photograph.',
+      'The second image is a technical mask: magenta pixels are the only editable area and black pixels are protected. Return the complete photograph.',
     ].join('\n');
     const result = await editImage(provider, {
-      source: image, mask,
+      source: image, mask, maskReferenceFile: maskReference instanceof File ? maskReference : null,
       prompt,
       maskExplanation: 'transparent pixels are the only local object-removal area; every solid white pixel is protected and must stay unchanged',
     });

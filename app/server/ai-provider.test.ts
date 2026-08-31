@@ -723,9 +723,10 @@ describe('getAiProvider', () => {
     expect(thirdPayload.input[0].content[1].text).toContain('Opening-first verification pass');
   });
 
-  it('lets Grok image edits preserve the exact source ratio without forcing a preset', async () => {
+  it('sends Grok the supported aspect ratio closest to the exact source ratio', async () => {
     const png = new Uint8Array(24);
-    png.set([0x89, 0x50, 0x4e, 0x47], 0);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    png.set([0x49, 0x48, 0x44, 0x52], 12);
     new DataView(png.buffer).setUint32(16, 600);
     new DataView(png.buffer).setUint32(20, 400);
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
@@ -738,12 +739,11 @@ describe('getAiProvider', () => {
     );
 
     const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
-    expect(payload).toMatchObject({ model: 'grok-imagine-image-2.0' });
-    expect(payload).not.toHaveProperty('aspect_ratio');
+    expect(payload).toMatchObject({ model: 'grok-imagine-image-2.0', aspect_ratio: '3:2' });
     expect(chooseSupportedImageAspectRatio(1080, 1920)).toBe('9:16');
   });
 
-  it('does not send a technical mask to Grok as if it were a second room photograph', async () => {
+  it('sends the technical mask as the second Grok input with explicit non-photographic semantics', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       data: [{ b64_json: 'dGVzdA==', mime_type: 'image/jpeg' }],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
@@ -753,16 +753,19 @@ describe('getAiProvider', () => {
       {
         source: new File(['room'], 'room.jpg', { type: 'image/jpeg' }),
         mask: new File(['mask'], 'mask.png', { type: 'image/png' }),
+        maskReferenceFile: new File(['magenta-reference'], 'mask-reference.png', { type: 'image/png' }),
         prompt: 'Remove the selected sofa',
         maskExplanation: 'transparent pixels are editable',
       },
     );
 
     const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
-    expect(payload).toHaveProperty('image');
-    expect(payload).not.toHaveProperty('images');
-    expect(payload.prompt).toContain('client will enforce this protected-area rule');
-    expect(payload.prompt).not.toContain('second image');
+    expect(payload.images).toHaveLength(2);
+    expect(payload.images[0].url).toMatch(/^data:image\/jpeg;base64,/);
+    expect(payload.images[1].url).toMatch(/^data:image\/png;base64,/);
+    expect(payload.prompt).toContain('Input image 2 is a technical edit mask');
+    expect(payload.prompt).toContain('MAGENTA pixels are the only editable area');
+    expect(payload.prompt).toContain('must never appear in the result');
   });
 });
 
