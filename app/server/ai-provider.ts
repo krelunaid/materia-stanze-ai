@@ -1343,6 +1343,14 @@ export async function detectRoomSurfaces(
     'Check the left and right image edges and every visible room corner at high zoom. Coordinates must be normalized to the complete source image, not a crop.',
     'Return the entire surface list and no comments.',
   ].join('\n');
+  const structuralPassPrompt = [
+    'Architectural structural-only pass for one complete interior photograph. Return only the visible wall planes, the complete floor plane and the ceiling plane when it is visible; omit doors, windows, furniture and objects in this pass.',
+    'First count the distinct wall planes created by perspective: left receding wall, far/back wall, right receding wall and any additional real wall plane. A far wall between two side walls is mandatory even when partly covered or the same color.',
+    'Trace every plane continuously behind furniture. Use the true wall-wall, wall-floor and wall-ceiling junctions, never furniture edges, shadows, sunlight, rugs, tile seams or color changes.',
+    'The floor upper boundary and every wall lower boundary must use exactly the same normalized vertices. The ceiling lower boundary and wall upper boundaries must also share exact vertices. Leave no gaps and no overlaps.',
+    'A side wall must extend from the image edge to the far-wall corner; never return only a narrow strip. The floor must reach the lower image border and both side borders wherever it leaves the crop.',
+    'Return normalized x/y coordinates on the complete uncropped source image, clockwise, using up to 24 points. Return the full structural surface list and no comments.',
+  ].join('\n');
   const openingAuditPrompt = [
     prompt,
     options.source === 'floorplan-render'
@@ -1357,11 +1365,11 @@ export async function detectRoomSurfaces(
     'After the opening count, return the complete floor and wall geometry as well so each opening can be attached to its real wall. Return the full surface list and no comments.',
   ].join('\n\n');
   const requests = [
-    requestGeometry(prompt, 'medium', 3600, 65000),
-    requestGeometry(`${prompt}\n\n${auditPrompt}`, 'high', 3800, 70000),
+    requestGeometry(structuralPassPrompt, 'medium', 3200, 60000),
+    requestGeometry(`${prompt}\n\n${auditPrompt}`, 'medium', 3600, 65000),
   ];
   if (options.openingAudit || options.source === 'floorplan-render') {
-    requests.push(requestGeometry(openingAuditPrompt, 'high', 3800, 70000));
+    requests.push(requestGeometry(openingAuditPrompt, 'medium', 3600, 65000));
   }
   const attempts = await Promise.allSettled(requests);
   const candidates = attempts
@@ -1787,11 +1795,11 @@ export async function verifyRoomCleanup(provider: AiProvider, input: {
       model: provider.id === 'grok' ? 'grok-4.6' : 'gpt-5.4-mini',
       input: [{ role: 'user', content }],
       max_output_tokens: 600,
-      reasoning: { effort: 'medium' },
+      reasoning: { effort: 'low' },
       text: { format: { type: 'json_schema', name: 'room_cleanup_verification', schema: roomCleanupVerificationSchema, strict: true } },
       store: false,
     }),
-    signal: AbortSignal.timeout(60000),
+    signal: AbortSignal.timeout(45000),
   });
   const payload = await response.json() as ResponsesPayload;
   if (!response.ok) throw new Error(payload.error?.message ?? 'Verifica della stanza svuotata non disponibile.');

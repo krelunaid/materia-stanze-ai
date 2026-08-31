@@ -45,7 +45,7 @@ export async function POST(request: Request) {
       return json({ message: 'Aggiorna Materia: la pulizia sicura richiede i contorni automatici dei mobili.' }, headers, 409);
     }
 
-    const promptForAttempt = (strictRetry: boolean, previousReason = '') => [
+    const prompt = [
       'This is strictly local photographic inpainting, not a new room generation. Return the complete source photograph and edit only the transparent areas of the technical mask.',
       `Remove every non-architectural target inside these real-estate-emptying regions: ${targetAreas}.`,
       'Each listed target is explicitly authorized for removal even when fitted, built-in, attached, wired or plumbed: this includes kitchen base, wall and tall cabinets, worktops, islands, integrated ovens, hobs, hoods, fitted wardrobes, bathroom vanities, cabinets, mirrors and storage.',
@@ -58,39 +58,36 @@ export async function POST(request: Request) {
       'Never create a new window, door, opening, column, beam, stair, trim or architectural feature that is not visibly present in the source photograph.',
       'Where a removed installation hid the room, reconstruct the simplest continuous extension of the nearest visible wall, wall covering, skirting and floor. Do not invent niches, service holes, replacement cabinetry or fixtures.',
       'Keep unchanged pixels visually identical outside the authorized masks. Do not redesign, recolor, restyle, enlarge, straighten or add anything.',
-      strictRetry ? `STRICT RETRY AFTER A REJECTED RESULT (${previousReason || 'visual quality failure'}): copy the exact source camera and architecture. Remove all target objects cleanly without rectangles, bands, seams, floating fragments or repeated texture. A floor-only, zoomed, cropped, patched or newly composed result is invalid.` : '',
       protectedAreas ? `These user-protected surfaces must remain unchanged: ${protectedAreas}.` : '',
     ].filter(Boolean).join(' ');
     const verificationProvider = getAiProvider() ?? provider;
-    const createAndVerify = async (strictRetry: boolean, previousReason = '') => {
-      const result = await editImage(provider, {
-        source: image,
-        mask,
-        prompt: promptForAttempt(strictRetry, previousReason),
-        maskExplanation: 'transparent polygons are the only editable furniture-removal areas; every solid white pixel is protected and must stay visually identical',
-      });
-      const verification = await verifyRoomCleanup(verificationProvider, {
-        source: image,
-        renderedImage: result,
-        targetDescription: targetAreas,
-      });
-      return { result, verification };
-    };
-
-    let attempt = await createAndVerify(false);
-    if (!acceptsRoomCleanup(attempt.verification)) {
-      attempt = await createAndVerify(true, attempt.verification.reason);
-    }
-    if (!acceptsRoomCleanup(attempt.verification)) {
+    const result = await editImage(provider, {
+      source: image,
+      mask,
+      prompt,
+      maskExplanation: 'transparent polygons are the only editable furniture-removal areas; every solid white pixel is protected and must stay visually identical',
+    });
+    const verification = await verifyRoomCleanup(verificationProvider, {
+      source: image,
+      renderedImage: result,
+      targetDescription: targetAreas,
+    });
+    if (!acceptsRoomCleanup(verification)) {
       return json({
         code: 'cleanup_quality_rejected',
-        message: `Il risultato non ha superato il controllo fotografico (${attempt.verification.reason}). Ho mantenuto intatta la foto originale: riprova oppure indica un mobile alla volta.`,
+        message: `Il risultato non ha superato il controllo fotografico (${verification.reason}). Ho mantenuto intatta la foto originale: riprova oppure indica un mobile alla volta.`,
       }, headers, 422);
     }
-    return json({ image: attempt.result, provider: provider.id, verification: attempt.verification }, headers);
+    return json({ image: result, provider: provider.id, verification }, headers);
   } catch (caught) {
+    const caughtRecord = caught && typeof caught === 'object' ? caught as { message?: unknown; name?: unknown } : null;
+    const message = caughtRecord?.message ? String(caughtRecord.message) : caught instanceof Error ? caught.message : '';
+    const failureName = caughtRecord?.name ? String(caughtRecord.name) : '';
+    const timedOut = /aborted|aborterror|timeout|timed out/i.test(`${failureName} ${message}`);
     return json({
-      message: caught instanceof Error ? caught.message : 'Non sono riuscito a preparare la stanza vuota. Riprova tra poco.',
+      message: timedOut
+        ? 'Il controllo IA ha impiegato troppo tempo. La foto originale è rimasta intatta: riprova oppure indica un mobile alla volta.'
+        : message || 'Non sono riuscito a preparare la stanza vuota. Riprova tra poco.',
     }, headers, 500);
   }
 }

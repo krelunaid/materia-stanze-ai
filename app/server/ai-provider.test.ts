@@ -349,15 +349,16 @@ describe('getAiProvider', () => {
     const payload = JSON.parse(String(request?.body));
     expect(payload).toMatchObject({
       model: 'grok-4.6',
-      max_output_tokens: 3600,
+      max_output_tokens: 3200,
       reasoning: { effort: 'medium' },
       text: { format: { type: 'json_schema', name: 'room_surface_geometry', strict: true } },
     });
     expect(payload.input[0].content[0]).toMatchObject({ type: 'input_image', detail: 'high' });
+    expect(payload.input[0].content[1].text).toContain('structural-only pass');
     expect(payload.text.format.schema.properties.surfaces.items.properties.points.maxItems).toBe(24);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const auditPayload = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
-    expect(auditPayload).toMatchObject({ max_output_tokens: 3800, reasoning: { effort: 'high' } });
+    expect(auditPayload).toMatchObject({ max_output_tokens: 3600, reasoning: { effort: 'medium' } });
     expect(auditPayload.input[0].content[1].text).toContain('independent second architectural segmentation');
     expect(auditPayload.input[0].content[1].text).toContain('sunlit patch, reflection, shadow');
     expect(auditPayload.input[0].content[1].text).toContain('shared junction vertices');
@@ -701,7 +702,7 @@ describe('getAiProvider', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(result.some((surface) => surface.kind === 'window')).toBe(true);
     const thirdPayload = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body));
-    expect(thirdPayload.reasoning).toEqual({ effort: 'high' });
+    expect(thirdPayload.reasoning).toEqual({ effort: 'medium' });
     expect(thirdPayload.input[0].content[1].text).toContain('Opening-first verification pass');
   });
 
