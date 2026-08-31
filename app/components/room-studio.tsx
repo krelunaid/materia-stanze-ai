@@ -2656,9 +2656,28 @@ export function RoomStudio() {
       const { response, result } = await requestJson<{ region?: CleanupRegion | null; message?: string }>(endpoint('/api/detect-object'), { method: 'POST', body: form }, 70000);
       if (!response.ok) throw new Error(result.message ?? 'Riconoscimento non disponibile.');
       if (!result.region || !isValidPolygon(result.region.points)) {
+        // A cleanup residue is often a shadow, reflection or generated smear,
+        // not a recognizable piece of furniture.  The user's tap is still an
+        // explicit authorization: create a small editable patch around it
+        // instead of making “Pulisci un residuo” a no-op.
+        const halfWidth = .075;
+        const halfHeight = .09;
+        const left = Math.max(0, point.x - halfWidth);
+        const right = Math.min(1, point.x + halfWidth);
+        const top = Math.max(0, point.y - halfHeight);
+        const bottom = Math.min(1, point.y + halfHeight);
+        setCleanupRegion({
+          label: 'residuo indicato',
+          confidence: 1,
+          points: [
+            { x: left, y: top },
+            { x: right, y: top },
+            { x: right, y: bottom },
+            { x: left, y: bottom },
+          ],
+        });
         setIsPickingCleanup(false);
-        setCleanupRegion(null);
-        setNotice('In quel punto non c’è un mobile da rimuovere. La selezione è stata chiusa: puoi riprovare su un oggetto oppure continuare.');
+        setNotice('Non è un mobile riconoscibile: ho preparato una piccola zona attorno al punto indicato. Premi “Pulisci selezione” per correggere anche ombre, riflessi o residui.');
         return;
       }
       setCleanupRegion(result.region); setIsPickingCleanup(false);
