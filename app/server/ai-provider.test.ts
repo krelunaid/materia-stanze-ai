@@ -425,6 +425,23 @@ describe('getAiProvider', () => {
       && Math.max(...surface.points.map((point) => point.x)) < .85)).toBe(true);
   });
 
+  it('preserves a confident side return from one pass when it shares the physical floor junction', () => {
+    const mergedFront = { name: 'front merged with return', kind: 'wall' as const, confidence: .94, points: [{ x: .2, y: .08 }, { x: 1, y: .05 }, { x: 1, y: .55 }, { x: .2, y: .58 }] };
+    const left = { name: 'left', kind: 'wall' as const, confidence: .92, points: [{ x: 0, y: 0 }, { x: .2, y: .08 }, { x: .2, y: .58 }, { x: 0, y: .72 }] };
+    const floor = { name: 'floor', kind: 'floor' as const, confidence: .94, points: [{ x: 0, y: .72 }, { x: .2, y: .58 }, { x: .93, y: .62 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] };
+    const front = { name: 'front', kind: 'wall' as const, confidence: .88, points: [{ x: .2, y: .08 }, { x: .93, y: .08 }, { x: .93, y: .62 }, { x: .2, y: .58 }] };
+    const rightReturn = { name: 'right return', kind: 'wall' as const, confidence: .84, points: [{ x: .93, y: .08 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: .93, y: .62 }] };
+
+    const result = reconcileRoomSurfaceCandidates([
+      [left, mergedFront, floor],
+      [left, front, rightReturn, floor],
+    ]);
+
+    expect(result.some((surface) => surface.kind === 'wall'
+      && Math.min(...surface.points.map((point) => point.x)) >= .92
+      && Math.max(...surface.points.map((point) => point.x)) === 1)).toBe(true);
+  });
+
   it('prefers the floor that shares the real wall junction over mutually agreeing reflection lines', () => {
     const wall = { name: 'back wall', kind: 'wall' as const, confidence: .94, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .62 }, { x: 0, y: .62 }] };
     const physicalFloor = { name: 'physical floor', kind: 'floor' as const, confidence: .86, points: [{ x: 0, y: .62 }, { x: 1, y: .62 }, { x: 1, y: 1 }, { x: 0, y: 1 }] };

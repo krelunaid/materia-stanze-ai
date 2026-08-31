@@ -108,7 +108,10 @@ describe('real-estate room cleanup prompts', () => {
     const response = await verifyCleanup(formRequest(verificationForm()));
 
     expect(response.status).toBe(422);
-    expect(await response.text()).toContain('lasciato intatta la foto originale');
+    const result = await response.json() as { message?: string; checks?: Record<string, unknown> };
+    expect(result.message).toContain('lasciato intatta la foto originale');
+    expect(result.checks).toMatchObject({ sameArchitecture: false, noVisiblePatchArtifacts: false, confidence: .94 });
+    expect(result.checks).not.toHaveProperty('reason');
     expect(mocks.verifyRoomCleanup).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'grok' }),
       expect.objectContaining({ renderedFile: expect.any(File), targetDescription: 'Divano' }),

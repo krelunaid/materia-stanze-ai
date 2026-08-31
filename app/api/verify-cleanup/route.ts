@@ -32,6 +32,16 @@ export async function POST(request: Request) {
       return json({
         code: 'cleanup_quality_rejected',
         message: 'La pulizia non ha mantenuto perfettamente inquadratura, pareti e aperture. Ho lasciato intatta la foto originale: riprova oppure indica un mobile alla volta.',
+        checks: {
+          sameCameraAndCrop: verification.sameCameraAndCrop,
+          sameArchitecture: verification.sameArchitecture,
+          openingsPreserved: verification.openingsPreserved,
+          removableTargetsRemoved: verification.removableTargetsRemoved,
+          noVisiblePatchArtifacts: verification.noVisiblePatchArtifacts,
+          noNewObjects: verification.noNewObjects,
+          realisticContinuation: verification.realisticContinuation,
+          confidence: verification.confidence,
+        },
       }, headers, 422);
     }
     return json({ accepted: true, verification }, headers);

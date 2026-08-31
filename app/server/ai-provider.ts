@@ -1218,12 +1218,27 @@ export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[]
   wallGroups.forEach((group) => {
     const strongest = [...group].sort((left, right) => right.surface.confidence - left.surface.confidence)[0].surface;
     const bounds = surfaceBounds(strongest);
+    const width = bounds.right - bounds.left;
+    const height = bounds.bottom - bounds.top;
     const centralBackWall = bounds.left < .48 && bounds.right > .52
-      && bounds.right - bounds.left >= .24
-      && (bounds.right - bounds.left) * (bounds.bottom - bounds.top) >= .07;
+      && width >= .24
+      && width * height >= .07;
+    const touchesOneImageSide = (bounds.left <= .025) !== (bounds.right >= .975);
+    const outsideImageCentre = bounds.right < .52 || bounds.left > .48;
+    const coherentWithOwnFloor = group.some(({ surface, pass }) => {
+      const candidateFloor = normalized[pass].find((candidate) => candidate.kind === 'floor');
+      return candidateFloor && wallFloorJunctionQuality(candidateFloor, [surface]) >= .68;
+    });
+    const sideWallPlane = touchesOneImageSide
+      && outsideImageCentre
+      && width >= .055
+      && height >= .25
+      && width * height >= .03
+      && coherentWithOwnFloor;
     const supported = new Set(group.map((item) => item.pass)).size >= 2;
     const strongCentralBackWall = centralBackWall && strongest.confidence >= .82;
-    if ((!supported && !strongCentralBackWall) || baseWalls.some((wall) => openingOverlap(wall, strongest) >= .28)) return;
+    const strongSideWall = sideWallPlane && strongest.confidence >= .8;
+    if ((!supported && !strongCentralBackWall && !strongSideWall) || baseWalls.some((wall) => openingOverlap(wall, strongest) >= .28)) return;
     // The far wall may be absent from the numerically strongest pass even
     // though another independent pass traces it clearly. Preserve that plane
     // instead of leaving a hole between the side walls.
