@@ -1,6 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ editImage: vi.fn() }));
+const acceptedVerification = {
+  sameCameraAndCrop: true,
+  sameArchitecture: true,
+  openingsPreserved: true,
+  removableTargetsRemoved: true,
+  noVisiblePatchArtifacts: true,
+  noNewObjects: true,
+  realisticContinuation: true,
+  confidence: .95,
+  reason: 'ok',
+};
+
+const mocks = vi.hoisted(() => ({ editImage: vi.fn(), verifyRoomCleanup: vi.fn() }));
 
 vi.mock('../server/ai-api-guard.ts', () => ({
   guardAiRequest: vi.fn(async () => ({ ok: true, headers: new Headers() })),
@@ -8,8 +20,11 @@ vi.mock('../server/ai-api-guard.ts', () => ({
 }));
 
 vi.mock('../server/ai-provider.ts', () => ({
+  acceptsRoomCleanup: vi.fn((verification) => Object.values(verification).filter((value) => typeof value === 'boolean').every(Boolean) && verification.confidence >= .82),
   editImage: mocks.editImage,
+  getAiProvider: vi.fn(() => ({ id: 'grok', label: 'Grok', apiKey: 'test' })),
   getRenderProvider: vi.fn(() => ({ id: 'grok', label: 'Grok', apiKey: 'test' })),
+  verifyRoomCleanup: mocks.verifyRoomCleanup,
 }));
 
 import { POST as cleanRoomRegion } from './clean-room-region/route';
@@ -28,6 +43,7 @@ function baseForm() {
 
 beforeEach(() => {
   mocks.editImage.mockReset().mockResolvedValue('data:image/png;base64,result');
+  mocks.verifyRoomCleanup.mockReset().mockResolvedValue(acceptedVerification);
 });
 
 describe('real-estate room cleanup prompts', () => {
@@ -51,6 +67,47 @@ describe('real-estate room cleanup prompts', () => {
     expect(prompt).toContain('kitchen base, wall and tall cabinets');
     expect(prompt).toContain('Treat only genuine building architecture as protected');
     expect(prompt).not.toContain('Remove only the movable objects');
+  });
+
+  it('retries a visually rejected cleanup and returns only the verified image', async () => {
+    const form = baseForm();
+    form.append('targetAreas', JSON.stringify([{
+      label: 'Divano',
+      points: [{ x: .1, y: .3 }, { x: .8, y: .3 }, { x: .8, y: .85 }, { x: .1, y: .85 }],
+    }]));
+    mocks.editImage.mockResolvedValueOnce('data:image/png;base64,bad').mockResolvedValueOnce('data:image/png;base64,good');
+    mocks.verifyRoomCleanup
+      .mockResolvedValueOnce({ ...acceptedVerification, noVisiblePatchArtifacts: false, confidence: .9, reason: 'visible rectangular bands' })
+      .mockResolvedValueOnce(acceptedVerification);
+
+    const response = await emptyRoom(formRequest(form));
+    const result = await response.json() as { image?: string };
+
+    expect(response.ok).toBe(true);
+    expect(result.image).toBe('data:image/png;base64,good');
+    expect(mocks.editImage).toHaveBeenCalledTimes(2);
+    expect(mocks.editImage.mock.calls[1]?.[1]?.prompt).toContain('STRICT RETRY AFTER A REJECTED RESULT');
+  });
+
+  it('keeps the original when both cleanup attempts fail the visual gate', async () => {
+    const form = baseForm();
+    form.append('targetAreas', JSON.stringify([{
+      label: 'Letto',
+      points: [{ x: .1, y: .3 }, { x: .8, y: .3 }, { x: .8, y: .85 }, { x: .1, y: .85 }],
+    }]));
+    mocks.verifyRoomCleanup.mockResolvedValue({
+      ...acceptedVerification,
+      sameArchitecture: false,
+      noVisiblePatchArtifacts: false,
+      confidence: .94,
+      reason: 'camera changed and visible seams',
+    });
+
+    const response = await emptyRoom(formRequest(form));
+
+    expect(response.status).toBe(422);
+    expect(await response.text()).toContain('mantenuto intatta la foto originale');
+    expect(mocks.editImage).toHaveBeenCalledTimes(2);
   });
 
   it('treats a tapped fitted residual as an explicit removal request', async () => {

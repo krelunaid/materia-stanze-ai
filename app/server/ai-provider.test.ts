@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { acceptsFurnitureRender, chooseSupportedImageAspectRatio, classifyProductPhoto, detectMovableObjectRegions, detectObjectRegion, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, knownRetailerProductImage, normalizeCleanupRegions, normalizeProductPhotoClassification, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
+import { acceptsFurnitureRender, acceptsRoomCleanup, chooseSupportedImageAspectRatio, classifyProductPhoto, detectMovableObjectRegions, detectObjectRegion, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, knownRetailerProductImage, normalizeCleanupRegions, normalizeProductPhotoClassification, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -349,15 +349,15 @@ describe('getAiProvider', () => {
     const payload = JSON.parse(String(request?.body));
     expect(payload).toMatchObject({
       model: 'grok-4.6',
-      max_output_tokens: 3000,
-      reasoning: { effort: 'low' },
+      max_output_tokens: 3600,
+      reasoning: { effort: 'medium' },
       text: { format: { type: 'json_schema', name: 'room_surface_geometry', strict: true } },
     });
     expect(payload.input[0].content[0]).toMatchObject({ type: 'input_image', detail: 'high' });
     expect(payload.text.format.schema.properties.surfaces.items.properties.points.maxItems).toBe(24);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const auditPayload = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
-    expect(auditPayload).toMatchObject({ max_output_tokens: 3000, reasoning: { effort: 'low' } });
+    expect(auditPayload).toMatchObject({ max_output_tokens: 3800, reasoning: { effort: 'high' } });
     expect(auditPayload.input[0].content[1].text).toContain('independent second architectural segmentation');
     expect(auditPayload.input[0].content[1].text).toContain('sunlit patch, reflection, shadow');
     expect(auditPayload.input[0].content[1].text).toContain('shared junction vertices');
@@ -701,7 +701,7 @@ describe('getAiProvider', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(result.some((surface) => surface.kind === 'window')).toBe(true);
     const thirdPayload = JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body));
-    expect(thirdPayload.reasoning).toEqual({ effort: 'medium' });
+    expect(thirdPayload.reasoning).toEqual({ effort: 'high' });
     expect(thirdPayload.input[0].content[1].text).toContain('Opening-first verification pass');
   });
 
@@ -763,5 +763,28 @@ describe('acceptsFurnitureRender', () => {
     expect(acceptsFurnitureRender({ ...good, realisticLighting: false }, true)).toBe(false);
     expect(acceptsFurnitureRender({ ...good, atRequestedOrientation: false }, true)).toBe(false);
     expect(acceptsFurnitureRender({ ...good, confidence: .79 }, true)).toBe(false);
+  });
+});
+
+describe('acceptsRoomCleanup', () => {
+  const good = {
+    sameCameraAndCrop: true,
+    sameArchitecture: true,
+    openingsPreserved: true,
+    removableTargetsRemoved: true,
+    noVisiblePatchArtifacts: true,
+    noNewObjects: true,
+    realisticContinuation: true,
+    confidence: .9,
+    reason: 'ok',
+  };
+
+  it('rejects framing, architecture, residual-object and patch failures', () => {
+    expect(acceptsRoomCleanup(good)).toBe(true);
+    expect(acceptsRoomCleanup({ ...good, sameCameraAndCrop: false })).toBe(false);
+    expect(acceptsRoomCleanup({ ...good, sameArchitecture: false })).toBe(false);
+    expect(acceptsRoomCleanup({ ...good, removableTargetsRemoved: false })).toBe(false);
+    expect(acceptsRoomCleanup({ ...good, noVisiblePatchArtifacts: false })).toBe(false);
+    expect(acceptsRoomCleanup({ ...good, confidence: .81 })).toBe(false);
   });
 });

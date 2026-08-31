@@ -2271,12 +2271,11 @@ export function RoomStudio() {
       form.append('mask', mask, 'furniture-mask.png');
       form.append('targetAreas', JSON.stringify(regions.map((region) => ({ label: region.label, points: region.points }))));
       form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
-      const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/empty-room'), { method: 'POST', body: form }, 180000);
+      const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/empty-room'), { method: 'POST', body: form }, 300000);
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Immagine non disponibile.');
       const architecturalAnchors = baselineSurfaces.filter((surface) => surface.frozen || surface.kind === 'door' || surface.kind === 'window');
       const protectedPreview = await protectAiResult(result.image, {
-        editableSurfaces: removalSurfaces,
-        protectedSurfaces: architecturalAnchors,
+        frozenSurfaces: architecturalAnchors,
         sourceUrl: room.previewUrl,
         stabilizeColor: true,
       });

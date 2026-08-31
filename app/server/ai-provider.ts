@@ -91,6 +91,29 @@ export type FurnitureRenderVerification = {
   referenceBottom: number;
 };
 
+export type RoomCleanupVerification = {
+  sameCameraAndCrop: boolean;
+  sameArchitecture: boolean;
+  openingsPreserved: boolean;
+  removableTargetsRemoved: boolean;
+  noVisiblePatchArtifacts: boolean;
+  noNewObjects: boolean;
+  realisticContinuation: boolean;
+  confidence: number;
+  reason: string;
+};
+
+export function acceptsRoomCleanup(verification: RoomCleanupVerification) {
+  return verification.sameCameraAndCrop
+    && verification.sameArchitecture
+    && verification.openingsPreserved
+    && verification.removableTargetsRemoved
+    && verification.noVisiblePatchArtifacts
+    && verification.noNewObjects
+    && verification.realisticContinuation
+    && verification.confidence >= .82;
+}
+
 export function acceptsFurnitureRender(verification: FurnitureRenderVerification, referenceRequired: boolean) {
   return verification.visible
     && verification.atRequestedAnchor
@@ -123,6 +146,23 @@ const furnitureVerificationSchema = {
     referenceBottom: { type: 'number', minimum: 0, maximum: 1 },
   },
   required: ['visible', 'atRequestedAnchor', 'atRequestedOrientation', 'resemblesReference', 'physicallyGrounded', 'contactShadow', 'structurallyComplete', 'realisticLighting', 'confidence', 'reason', 'referenceLeft', 'referenceTop', 'referenceRight', 'referenceBottom'],
+} as const;
+
+const roomCleanupVerificationSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    sameCameraAndCrop: { type: 'boolean' },
+    sameArchitecture: { type: 'boolean' },
+    openingsPreserved: { type: 'boolean' },
+    removableTargetsRemoved: { type: 'boolean' },
+    noVisiblePatchArtifacts: { type: 'boolean' },
+    noNewObjects: { type: 'boolean' },
+    realisticContinuation: { type: 'boolean' },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
+    reason: { type: 'string' },
+  },
+  required: ['sameCameraAndCrop', 'sameArchitecture', 'openingsPreserved', 'removableTargetsRemoved', 'noVisiblePatchArtifacts', 'noNewObjects', 'realisticContinuation', 'confidence', 'reason'],
 } as const;
 
 const productBoundsSchema = {
@@ -1317,11 +1357,11 @@ export async function detectRoomSurfaces(
     'After the opening count, return the complete floor and wall geometry as well so each opening can be attached to its real wall. Return the full surface list and no comments.',
   ].join('\n\n');
   const requests = [
-    requestGeometry(prompt, 'low', 3000, 50000),
-    requestGeometry(`${prompt}\n\n${auditPrompt}`, 'low', 3000, 50000),
+    requestGeometry(prompt, 'medium', 3600, 65000),
+    requestGeometry(`${prompt}\n\n${auditPrompt}`, 'high', 3800, 70000),
   ];
   if (options.openingAudit || options.source === 'floorplan-render') {
-    requests.push(requestGeometry(openingAuditPrompt, 'medium', 3400, 60000));
+    requests.push(requestGeometry(openingAuditPrompt, 'high', 3800, 70000));
   }
   const attempts = await Promise.allSettled(requests);
   const candidates = attempts
@@ -1714,6 +1754,48 @@ export async function verifyFurniturePlacement(provider: AiProvider, input: {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function verifyRoomCleanup(provider: AiProvider, input: {
+  source: File;
+  renderedImage: string;
+  targetDescription: string;
+}) {
+  const content = [
+    { type: 'input_image', image_url: await fileToDataUri(input.source), detail: 'high' },
+    { type: 'input_image', image_url: input.renderedImage, detail: 'high' },
+    {
+      type: 'input_text',
+      text: [
+        'You are a strict before/after quality gate for real-estate room emptying. Image 1 is the exact source photograph. Image 2 is the proposed empty-room result.',
+        `Authorized non-architectural removal targets: ${input.targetDescription}`,
+        'sameCameraAndCrop is true only when the camera, perspective, field of view, four image borders, horizon and every architectural landmark remain at the same normalized coordinates.',
+        'sameArchitecture is true only when walls, floor, ceiling, corners, columns, beams, stairs, skirting and room dimensions are unchanged. Replacing a wall with floor or straightening/rebuilding the room is false.',
+        'openingsPreserved is true only when every source door and window keeps the same frame, size, position and appearance.',
+        'removableTargetsRemoved is true only when the listed loose furniture, fitted cabinetry, appliances and bathroom furnishings are fully removed, including legs, shadows and fragments.',
+        'noVisiblePatchArtifacts is true only when there are no rectangles, bands, repeated textures, seams, abrupt color blocks, floating fragments, smears or inconsistent perspective patches.',
+        'noNewObjects is true only when nothing new was invented or substituted for a removed item.',
+        'realisticContinuation is true only when newly exposed wall and floor continue naturally with coherent light, perspective, skirting and surface texture.',
+        'Be conservative. Any visible defect makes the relevant field false. Return only the structured result.',
+      ].join('\n'),
+    },
+  ];
+  const response = await fetch(provider.id === 'grok' ? 'https://api.x.ai/v1/responses' : 'https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: provider.id === 'grok' ? 'grok-4.6' : 'gpt-5.4-mini',
+      input: [{ role: 'user', content }],
+      max_output_tokens: 600,
+      reasoning: { effort: 'medium' },
+      text: { format: { type: 'json_schema', name: 'room_cleanup_verification', schema: roomCleanupVerificationSchema, strict: true } },
+      store: false,
+    }),
+    signal: AbortSignal.timeout(60000),
+  });
+  const payload = await response.json() as ResponsesPayload;
+  if (!response.ok) throw new Error(payload.error?.message ?? 'Verifica della stanza svuotata non disponibile.');
+  return JSON.parse(responseText(payload)) as RoomCleanupVerification;
 }
 
 export async function locateProductReference(provider: AiProvider, imageUrl: string, productName: string) {
