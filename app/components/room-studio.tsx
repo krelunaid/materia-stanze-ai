@@ -2981,7 +2981,7 @@ export function RoomStudio() {
                   {selected.points.map((point, index) => {
                     const next = selected.points[(index + 1) % selected.points.length];
                     const edgeLength = Math.hypot((next.x - point.x) * canvasCssSize.width, (next.y - point.y) * canvasCssSize.height);
-                    if (edgeLength < 48) return null;
+                    if (edgeLength < 28) return null;
                     const midpointX = (point.x + next.x) * 500; const midpointY = (point.y + next.y) * 312.5;
                     return <circle key={`${selected.id}-midpoint-${index}`} cx={midpointX} cy={midpointY} r="10" className="surface-edge-grip" aria-hidden="true" />;
                   })}
@@ -2994,8 +2994,8 @@ export function RoomStudio() {
                 {selected.points.map((point, index) => {
                   const next = selected.points[(index + 1) % selected.points.length];
                   const edgeLength = Math.hypot((next.x - point.x) * canvasCssSize.width, (next.y - point.y) * canvasCssSize.height);
-                  if (edgeLength < 48) return null;
-                  const hitSize = Math.min(56, Math.max(32, edgeLength - 16));
+                  if (edgeLength < 28) return null;
+                  const hitSize = Math.min(56, Math.max(24, edgeLength - 2));
                   const hitInset = Math.max(0, hitSize / 2 - 2);
                   return <button
                     key={`${selected.id}-midpoint-hit-${index}`}
