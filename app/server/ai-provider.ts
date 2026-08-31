@@ -942,6 +942,33 @@ function wallBoundaryAtX(wall: DetectedRoomSurface, x: number) {
   return intersections.length ? Math.max(...intersections) : null;
 }
 
+function snapFloorToWallJunctions(surfaces: DetectedRoomSurface[]) {
+  const floor = surfaces.find((surface) => surface.kind === 'floor');
+  const walls = surfaces.filter((surface) => surface.kind === 'wall');
+  if (!floor || !walls.length) return surfaces;
+
+  const wallJunctions = walls.flatMap((wall) => wall.points.filter((point) => {
+    const boundary = wallBoundaryAtX(wall, point.x);
+    return boundary !== null && point.y >= .25 && Math.abs(point.y - boundary) <= .008;
+  }));
+  const floorUpper = floor.points.filter((point) => point.y < .985);
+  const xValues = [...wallJunctions, ...floorUpper]
+    .map((point) => point.x)
+    .sort((left, right) => left - right)
+    .filter((x, index, all) => index === 0 || Math.abs(x - all[index - 1]) >= .004)
+    .slice(0, 22);
+  if (xValues.length < 2) return surfaces;
+
+  const upperBoundary = xValues.map((x) => {
+    const wallYs = walls.map((wall) => wallBoundaryAtX(wall, x)).filter((value): value is number => value !== null);
+    const floorY = floorBoundaryAtX(floor, x);
+    return { x, y: wallYs.length ? Math.max(...wallYs) : floorY ?? .7 };
+  });
+  const snappedPoints = [...upperBoundary, { x: 1, y: 1 }, { x: 0, y: 1 }];
+  if (!isSimpleRoomPolygon(snappedPoints)) return surfaces;
+  return surfaces.map((surface) => surface === floor ? { ...surface, points: snappedPoints } : surface);
+}
+
 function wallFloorJunctionQuality(floor: DetectedRoomSurface, walls: DetectedRoomSurface[]) {
   let best = 0;
   for (const wall of walls) {
@@ -1125,6 +1152,7 @@ export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[]
   if (!normalized.length) return [];
   const ranked = [...normalized].sort((left, right) => geometryScore(right) - geometryScore(left));
   const base = [...ranked[0]];
+  const baseWalls = base.filter((surface) => surface.kind === 'wall');
 
   const floorCandidates = normalized.flatMap((candidate) => candidate
     .filter((surface) => surface.kind === 'floor')
@@ -1132,14 +1160,13 @@ export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[]
   const floors = floorCandidates.map((candidate) => candidate.surface);
   const floor = [...floorCandidates]
     .sort((left, right) => (
-      floorQuality(right.surface, floors, right.walls) - floorQuality(left.surface, floors, left.walls)
+      floorQuality(right.surface, floors, baseWalls) - floorQuality(left.surface, floors, baseWalls)
     ))[0]?.surface;
   if (floor) {
     const index = base.findIndex((surface) => surface.kind === 'floor');
     if (index >= 0) base[index] = floor;
     else base.push(floor);
   }
-
   const wallGroups: Array<Array<{ surface: DetectedRoomSurface; pass: number }>> = [];
   normalized.forEach((candidate, pass) => candidate
     .filter((surface) => surface.kind === 'wall')
@@ -1148,7 +1175,6 @@ export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[]
       if (group) group.push({ surface, pass });
       else wallGroups.push([{ surface, pass }]);
     }));
-  const baseWalls = base.filter((surface) => surface.kind === 'wall');
   wallGroups.forEach((group) => {
     const strongest = [...group].sort((left, right) => right.surface.confidence - left.surface.confidence)[0].surface;
     const bounds = surfaceBounds(strongest);
@@ -1186,10 +1212,10 @@ export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[]
     ))
     .map((group) => consensusOpening(group.map((item) => item.surface), floor));
 
-  return normalizeRoomSurfaces([
+  return normalizeRoomSurfaces(snapFloorToWallJunctions([
     ...base.filter((surface) => surface.kind !== 'door' && surface.kind !== 'window'),
     ...bestOpenings,
-  ]);
+  ]));
 }
 
 export async function detectRoomSurfaces(
@@ -1554,13 +1580,12 @@ export async function editImage(provider: AiProvider, input: {
     const images: Array<{ type: 'image_url'; url: string }> = [
       { type: 'image_url', url: await fileToDataUri(input.source) },
     ];
-    if (input.mask) images.push({ type: 'image_url', url: await fileToDataUri(input.mask) });
     if (input.referenceImageFile && images.length < 3) images.push({ type: 'image_url', url: await fileToDataUri(input.referenceImageFile) });
     const reference = input.referenceImageUrl ? validPublicUrl(input.referenceImageUrl) : null;
     if (reference && images.length < 3) images.push({ type: 'image_url', url: reference.toString() });
     const prompt = [
       input.prompt,
-      input.mask && input.maskExplanation ? `The second image is a technical guide, not part of the room: ${input.maskExplanation}` : '',
+      input.mask && input.maskExplanation ? `The client will enforce this protected-area rule after generation: ${input.maskExplanation}. Keep the source composition and normalized coordinates unchanged.` : '',
       input.referenceImageFile ? `One additional image is the exact ${input.referenceImageRole ?? 'furniture'} reference selected by the user.` : '',
       reference && images.some((image) => image.url === reference.toString()) ? 'One additional image is the exact material reference selected by the user.' : '',
     ].filter(Boolean).join(' ');

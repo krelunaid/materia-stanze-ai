@@ -439,6 +439,20 @@ describe('getAiProvider', () => {
     expect(result.find((surface) => surface.kind === 'floor')?.points).toEqual(physicalFloor.points);
   });
 
+  it('snaps every floor junction vertex to the selected wall planes', () => {
+    const left = { name: 'left', kind: 'wall' as const, confidence: .95, points: [{ x: 0, y: 0 }, { x: .25, y: .12 }, { x: .25, y: .62 }, { x: .12, y: .72 }, { x: 0, y: .78 }] };
+    const back = { name: 'back', kind: 'wall' as const, confidence: .96, points: [{ x: .25, y: .12 }, { x: .78, y: .13 }, { x: .78, y: .6 }, { x: .25, y: .62 }] };
+    const right = { name: 'right', kind: 'wall' as const, confidence: .95, points: [{ x: .78, y: .13 }, { x: 1, y: 0 }, { x: 1, y: .76 }, { x: .78, y: .6 }] };
+    const mismatchedFloor = { name: 'floor', kind: 'floor' as const, confidence: .99, points: [{ x: 0, y: .68 }, { x: .25, y: .66 }, { x: .78, y: .65 }, { x: 1, y: .7 }, { x: 1, y: 1 }, { x: 0, y: 1 }] };
+
+    const result = reconcileRoomSurfaceCandidates([[left, back, right, mismatchedFloor]]);
+    const floor = result.find((surface) => surface.kind === 'floor');
+
+    expect(floor?.points).toEqual(expect.arrayContaining([
+      { x: 0, y: .78 }, { x: .12, y: .72 }, { x: .25, y: .62 }, { x: .78, y: .6 }, { x: 1, y: .76 },
+    ]));
+  });
+
   it('prefers complete side-wall planes over narrow image-edge bands', () => {
     const floor = { name: 'floor', kind: 'floor' as const, confidence: .94, points: [{ x: 0, y: .72 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] };
     const back = { name: 'back', kind: 'wall' as const, confidence: .9, points: [{ x: .2, y: .2 }, { x: .8, y: .2 }, { x: .8, y: .72 }, { x: .2, y: .72 }] };
@@ -709,6 +723,28 @@ describe('getAiProvider', () => {
     expect(payload).toMatchObject({ model: 'grok-imagine-image-2.0' });
     expect(payload).not.toHaveProperty('aspect_ratio');
     expect(chooseSupportedImageAspectRatio(1080, 1920)).toBe('9:16');
+  });
+
+  it('does not send a technical mask to Grok as if it were a second room photograph', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      data: [{ b64_json: 'dGVzdA==', mime_type: 'image/jpeg' }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await editImage(
+      { id: 'grok', label: 'Grok', apiKey: 'xai-test' },
+      {
+        source: new File(['room'], 'room.jpg', { type: 'image/jpeg' }),
+        mask: new File(['mask'], 'mask.png', { type: 'image/png' }),
+        prompt: 'Remove the selected sofa',
+        maskExplanation: 'transparent pixels are editable',
+      },
+    );
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(payload).toHaveProperty('image');
+    expect(payload).not.toHaveProperty('images');
+    expect(payload.prompt).toContain('client will enforce this protected-area rule');
+    expect(payload.prompt).not.toContain('second image');
   });
 });
 
