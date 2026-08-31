@@ -72,6 +72,18 @@ describe('RoomStudio', () => {
     expect(surfacesMatch(kept, mergeDetectedSurfaces(detected, previous))).toBe(false);
   });
 
+  it('keeps room measurements tied to the approved original geometry after cleanup', () => {
+    const previous = [
+      { id: 'wall', name: 'Muro 1', kind: 'wall' as const, frozen: false, points: [{ x: .1, y: .1 }, { x: .9, y: .1 }, { x: .9, y: .62 }, { x: .1, y: .62 }] },
+      { id: 'floor', name: 'Pavimento', kind: 'floor' as const, frozen: false, points: [{ x: .1, y: .62 }, { x: .9, y: .62 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+    ];
+
+    const afterCleanup = geometryForDerivedImage(previous);
+
+    expect(afterCleanup).toEqual(previous);
+    expect(afterCleanup).not.toBe(previous);
+  });
+
   it('remaps an opening parent when a detected wall inherits the approved id', () => {
     const previous = [{
       id: 'approved-wall', name: 'Muro sinistro', kind: 'wall' as const, frozen: false,

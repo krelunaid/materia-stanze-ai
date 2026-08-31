@@ -2275,25 +2275,19 @@ export function RoomStudio() {
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Immagine non disponibile.');
       const architecturalAnchors = baselineSurfaces.filter((surface) => surface.frozen || surface.kind === 'door' || surface.kind === 'window');
       const protectedPreview = await protectAiResult(result.image, {
-        frozenSurfaces: architecturalAnchors, sourceUrl: room.previewUrl, stabilizeColor: true,
+        editableSurfaces: removalSurfaces,
+        protectedSurfaces: architecturalAnchors,
+        sourceUrl: room.previewUrl,
+        stabilizeColor: true,
       });
       setProcessedPreview(protectedPreview); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
-      setNotice('Stanza pulita. Ora verifico di nuovo pareti e pavimento sugli angoli finalmente visibili…');
-
-      let approved = geometryForDerivedImage(baselineSurfaces);
-      try {
-        const visibleGeometry = await detectSurfacesForPreview(protectedPreview, 'stanza-vuota.jpg');
-        approved = mergeDetectedSurfaces(visibleGeometry, baselineSurfaces);
-      } catch {
-        // The cleaned image remains useful even if the verification pass is
-        // temporarily unavailable; keep the last approved original geometry.
-      }
+      const approved = geometryForDerivedImage(baselineSurfaces);
       originalSurfacesRef.current = geometryForDerivedImage(baselineSurfaces);
       processedSurfacesRef.current = approved;
       setSurfaces(approved); setPastSurfaces([]); setFutureSurfaces([]);
       const preferred = approved.find((surface) => surface.kind === 'floor') ?? approved[0] ?? null;
       setSelectedId(preferred?.id ?? null); setRenameDraft(preferred?.name ?? '');
-      setNotice(`Stanza pulita in ${regions.length} zone. Formato della foto invariato; pareti e pavimento sono stati ricontrollati dopo la rimozione dei mobili.`);
+      setNotice(`Stanza pulita in ${regions.length} zone. Fuori dai contorni dei mobili i pixel, le linee e le misure sono rimasti identici.`);
     } catch (caught) {
       setError(friendlyRequestError(caught).message);
       setNotice(null);
