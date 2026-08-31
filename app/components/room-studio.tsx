@@ -284,6 +284,18 @@ function surfaceCenter(surface: Surface) {
   return surfaceLabelPoint(surface);
 }
 
+function pointInsidePolygon(point: Point, polygon: Point[]) {
+  let inside = false;
+  for (let current = 0, previous = polygon.length - 1; current < polygon.length; previous = current, current += 1) {
+    const a = polygon[current];
+    const b = polygon[previous];
+    const crosses = (a.y > point.y) !== (b.y > point.y)
+      && point.x < ((b.x - a.x) * (point.y - a.y)) / ((b.y - a.y) || Number.EPSILON) + a.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
 function openingSlot(points: Point[]): Surface['slot'] {
   const x = points.reduce((sum, point) => sum + point.x, 0) / points.length;
   return x < 1 / 3 ? 'left' : x > 2 / 3 ? 'right' : 'center';
@@ -1651,7 +1663,7 @@ export function RoomStudio() {
     return { inputImage, mask, maskReference };
   }
 
-  async function createCleanupTileInput(source: HTMLImageElement, plan: CleanupTilePlan) {
+  async function createCleanupTileInput(source: HTMLImageElement, plan: CleanupTilePlan, protectedSurfaces: Surface[]) {
     const bounds = snapCleanupTileBounds(plan.bounds, source.naturalWidth, source.naturalHeight);
     const normalizedRegions = plan.regions.map((region) => ({
       ...region, points: region.points.map((point) => pointInCleanupTile(point, bounds)),
@@ -1705,6 +1717,20 @@ export function RoomStudio() {
       maskReferenceContext.save(); maskReferenceContext.translate(0, shadowOffset); traceRegion(maskReferenceContext, region); maskReferenceContext.stroke(); maskReferenceContext.restore();
     }
     maskContext.globalCompositeOperation = 'source-over';
+    // Apertures and explicit Freeze regions are protected twice: they are
+    // excluded from the model's editable mask here and copied back from the
+    // original again after compositing.
+    const protectedRegions: CleanupRegion[] = protectedSurfaces.map((surface) => ({
+      label: surface.name,
+      confidence: 1,
+      points: surface.points.map((point) => pointInCleanupTile(point, bounds)),
+    }));
+    maskContext.fillStyle = '#ffffff';
+    maskReferenceContext.fillStyle = '#000000';
+    for (const region of protectedRegions) {
+      traceRegion(maskContext, region); maskContext.fill();
+      traceRegion(maskReferenceContext, region); maskReferenceContext.fill();
+    }
     const [inputImage, mask, maskReference] = await Promise.all([
       new Promise<Blob | null>((resolve) => imageCanvas.toBlob(resolve, 'image/jpeg', .94)),
       new Promise<Blob | null>((resolve) => maskCanvas.toBlob(resolve, 'image/png')),
@@ -1838,7 +1864,7 @@ export function RoomStudio() {
       setNotice(mode === 'local'
         ? 'Pulisco il ritaglio locale senza rigenerare il resto della fotografia…'
         : `Pulisco la zona ${index + 1} di ${plans.length} senza rigenerare il resto della fotografia…`);
-      const prepared = await createCleanupTileInput(source, plan);
+      const prepared = await createCleanupTileInput(source, plan, protectedSurfaces);
       const form = new FormData();
       form.append('image', prepared.inputImage, `room-tile-${index + 1}.jpg`);
       form.append('mask', prepared.mask, `room-tile-mask-${index + 1}.png`);
@@ -2660,6 +2686,15 @@ export function RoomStudio() {
         // not a recognizable piece of furniture.  The user's tap is still an
         // explicit authorization: create a small editable patch around it
         // instead of making “Pulisci un residuo” a no-op.
+        const protectedAtTap = surfaces.find((surface) => (
+          surface.frozen || surface.kind === 'door' || surface.kind === 'window'
+        ) && pointInsidePolygon(point, surface.points));
+        if (protectedAtTap) {
+          setIsPickingCleanup(false);
+          setCleanupRegion(null);
+          setNotice(`${protectedAtTap.name} è protetta e non verrà modificata. Tocca soltanto il residuo sulla parete o sul pavimento.`);
+          return;
+        }
         const halfWidth = .075;
         const halfHeight = .09;
         const left = Math.max(0, point.x - halfWidth);
