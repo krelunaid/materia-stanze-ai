@@ -29,6 +29,7 @@ vi.mock('../server/ai-provider.ts', () => ({
 
 import { POST as cleanRoomRegion } from './clean-room-region/route';
 import { POST as emptyRoom } from './empty-room/route';
+import { POST as verifyCleanup } from './verify-cleanup/route';
 
 function formRequest(form: FormData) {
   return { formData: async () => form } as unknown as Request;
@@ -38,6 +39,14 @@ function baseForm() {
   const form = new FormData();
   form.append('image', new File(['room'], 'room.jpg', { type: 'image/jpeg' }));
   form.append('mask', new File(['mask'], 'mask.png', { type: 'image/png' }));
+  return form;
+}
+
+function verificationForm() {
+  const form = new FormData();
+  form.append('source', new File(['room'], 'room.jpg', { type: 'image/jpeg' }));
+  form.append('rendered', new File(['cleaned'], 'cleaned.png', { type: 'image/png' }));
+  form.append('targetDescription', 'Divano');
   return form;
 }
 
@@ -69,7 +78,7 @@ describe('real-estate room cleanup prompts', () => {
     expect(prompt).not.toContain('Remove only the movable objects');
   });
 
-  it('returns an image only after the visual gate accepts it', async () => {
+  it('returns the generated image for protected local compositing in the client', async () => {
     const form = baseForm();
     form.append('targetAreas', JSON.stringify([{
       label: 'Divano',
@@ -84,14 +93,10 @@ describe('real-estate room cleanup prompts', () => {
     expect(response.ok).toBe(true);
     expect(result.image).toBe('data:image/png;base64,good');
     expect(mocks.editImage).toHaveBeenCalledTimes(1);
+    expect(mocks.verifyRoomCleanup).not.toHaveBeenCalled();
   });
 
-  it('keeps the original when the cleanup fails the visual gate', async () => {
-    const form = baseForm();
-    form.append('targetAreas', JSON.stringify([{
-      label: 'Letto',
-      points: [{ x: .1, y: .3 }, { x: .8, y: .3 }, { x: .8, y: .85 }, { x: .1, y: .85 }],
-    }]));
+  it('rejects the locally composited preview when it fails the visual gate', async () => {
     mocks.verifyRoomCleanup.mockResolvedValue({
       ...acceptedVerification,
       sameArchitecture: false,
@@ -100,25 +105,23 @@ describe('real-estate room cleanup prompts', () => {
       reason: 'camera changed and visible seams',
     });
 
-    const response = await emptyRoom(formRequest(form));
+    const response = await verifyCleanup(formRequest(verificationForm()));
 
     expect(response.status).toBe(422);
-    expect(await response.text()).toContain('mantenuto intatta la foto originale');
-    expect(mocks.editImage).toHaveBeenCalledTimes(1);
+    expect(await response.text()).toContain('lasciato intatta la foto originale');
+    expect(mocks.verifyRoomCleanup).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'grok' }),
+      expect.objectContaining({ renderedFile: expect.any(File), targetDescription: 'Divano' }),
+    );
   });
 
   it('returns a clear Italian message when the visual check times out', async () => {
-    const form = baseForm();
-    form.append('targetAreas', JSON.stringify([{
-      label: 'Divano',
-      points: [{ x: .1, y: .3 }, { x: .8, y: .3 }, { x: .8, y: .85 }, { x: .1, y: .85 }],
-    }]));
     mocks.verifyRoomCleanup.mockRejectedValueOnce(new DOMException('The operation was aborted due to timeout', 'AbortError'));
 
-    const response = await emptyRoom(formRequest(form));
+    const response = await verifyCleanup(formRequest(verificationForm()));
 
     expect(response.status).toBe(500);
-    expect(await response.text()).toContain('Il controllo IA ha impiegato troppo tempo');
+    expect(await response.text()).toContain('Il controllo fotografico ha impiegato troppo tempo');
   });
 
   it('treats a tapped fitted residual as an explicit removal request', async () => {

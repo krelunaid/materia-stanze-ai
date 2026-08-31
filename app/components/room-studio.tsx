@@ -1614,6 +1614,7 @@ export function RoomStudio() {
     frozenSurfaces?: Surface[];
     sourceUrl?: string;
     stabilizeColor?: boolean;
+    deferCommit?: boolean;
   }) {
     const sourceUrl = options.sourceUrl ?? room?.previewUrl;
     if (!sourceUrl) throw new Error('La fotografia originale non è disponibile.');
@@ -1646,14 +1647,45 @@ export function RoomStudio() {
       context.clip();
     };
     const clipTo = (surface: Surface) => clipPoints(surface.points);
+    const drawFeatheredGeneratedSurface = (surface: Surface) => {
+      const sharpMask = document.createElement('canvas');
+      const softMask = document.createElement('canvas');
+      const generatedPatch = document.createElement('canvas');
+      sharpMask.width = softMask.width = generatedPatch.width = width;
+      sharpMask.height = softMask.height = generatedPatch.height = height;
+      const sharpContext = sharpMask.getContext('2d');
+      const softContext = softMask.getContext('2d');
+      const patchContext = generatedPatch.getContext('2d');
+      if (!sharpContext || !softContext || !patchContext) {
+        context.save(); clipTo(surface); drawImageCover(context, generatedLayer, width, height); context.restore();
+        return;
+      }
+      const tracePolygon = (target: CanvasRenderingContext2D) => {
+        target.beginPath();
+        surface.points.forEach((point, index) => {
+          const x = point.x * width; const y = point.y * height;
+          if (index === 0) target.moveTo(x, y); else target.lineTo(x, y);
+        });
+        target.closePath();
+      };
+      const repairMargin = Math.max(5, Math.round(Math.min(width, height) * .012));
+      const feather = Math.max(3, Math.round(Math.min(width, height) * .007));
+      sharpContext.fillStyle = '#fff'; sharpContext.strokeStyle = '#fff';
+      sharpContext.lineJoin = 'round'; sharpContext.lineCap = 'round'; sharpContext.lineWidth = repairMargin * 2;
+      tracePolygon(sharpContext); sharpContext.fill(); sharpContext.stroke();
+      softContext.filter = `blur(${feather}px)`;
+      softContext.drawImage(sharpMask, 0, 0);
+      drawImageCover(patchContext, generatedLayer, width, height);
+      patchContext.globalCompositeOperation = 'destination-in';
+      patchContext.drawImage(softMask, 0, 0);
+      context.drawImage(generatedPatch, 0, 0);
+    };
 
     const editableSurfaces = options.editableSurfaces ?? (options.editableSurface ? [options.editableSurface] : []);
     const editableFurniture = options.editableFurniture ?? [];
     if (editableSurfaces.length || editableFurniture.length) {
       context.drawImage(original, 0, 0, width, height);
-      for (const surface of editableSurfaces) {
-        context.save(); clipTo(surface); drawImageCover(context, generatedLayer, width, height); context.restore();
-      }
+      for (const surface of editableSurfaces) drawFeatheredGeneratedSurface(surface);
       for (const surface of options.protectedSurfaces ?? []) {
         context.save(); clipTo(surface); context.drawImage(original, 0, 0, width, height); context.restore();
       }
@@ -1674,10 +1706,29 @@ export function RoomStudio() {
 
     const protectedImage = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
     if (!protectedImage) throw new Error('Non posso completare la protezione Freeze.');
-    if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
     const protectedUrl = URL.createObjectURL(protectedImage);
-    processedBlobRef.current = protectedUrl;
+    if (!options.deferCommit) {
+      if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
+      processedBlobRef.current = protectedUrl;
+    }
     return protectedUrl;
+  }
+
+  async function verifyCleanupPreview(sourceUrl: string, previewUrl: string, targetDescription: string) {
+    const [source, renderedResponse] = await Promise.all([
+      createGeometryInput(sourceUrl),
+      fetch(previewUrl),
+    ]);
+    if (!renderedResponse.ok) throw new Error('Non posso controllare la fotografia pulita.');
+    const rendered = await renderedResponse.blob();
+    const form = new FormData();
+    form.append('source', source, 'original-room.jpg');
+    form.append('rendered', rendered, 'cleaned-room.png');
+    form.append('targetDescription', targetDescription);
+    const { response, result } = await requestJson<{ accepted?: boolean; message?: string }>(
+      endpoint('/api/verify-cleanup'), { method: 'POST', body: form }, 90000,
+    );
+    if (!response.ok || !result.accepted) throw new Error(result.message ?? 'La pulizia non ha superato il controllo fotografico.');
   }
 
   async function createFurnitureCutout(
@@ -2275,10 +2326,21 @@ export function RoomStudio() {
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Immagine non disponibile.');
       const architecturalAnchors = baselineSurfaces.filter((surface) => surface.frozen || surface.kind === 'door' || surface.kind === 'window');
       const protectedPreview = await protectAiResult(result.image, {
-        frozenSurfaces: architecturalAnchors,
+        editableSurfaces: removalSurfaces,
+        protectedSurfaces: architecturalAnchors,
         sourceUrl: room.previewUrl,
         stabilizeColor: true,
+        deferCommit: true,
       });
+      try {
+        setNotice('Controllo che inquadratura, pareti, porte e finestre siano rimaste identiche…');
+        await verifyCleanupPreview(room.previewUrl, protectedPreview, regions.map((region) => region.label).join(', '));
+      } catch (caught) {
+        URL.revokeObjectURL(protectedPreview);
+        throw caught;
+      }
+      if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
+      processedBlobRef.current = protectedPreview;
       setProcessedPreview(protectedPreview); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
       const approved = geometryForDerivedImage(baselineSurfaces);
       originalSurfacesRef.current = geometryForDerivedImage(baselineSurfaces);
@@ -2336,7 +2398,23 @@ export function RoomStudio() {
       form.append('targetLabel', cleanupRegion.label); form.append('targetArea', JSON.stringify(cleanupRegion.points));
       const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/clean-room-region'), { method: 'POST', body: form }, 180000);
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Pulizia locale non disponibile.');
-      const protectedPreview = await protectAiResult(result.image, { editableSurface: localRegion, sourceUrl });
+      const architecturalAnchors = surfaces.filter((surface) => surface.frozen || surface.kind === 'door' || surface.kind === 'window');
+      const protectedPreview = await protectAiResult(result.image, {
+        editableSurface: localRegion,
+        protectedSurfaces: architecturalAnchors,
+        sourceUrl,
+        stabilizeColor: true,
+        deferCommit: true,
+      });
+      try {
+        setNotice('Controllo che la pulizia locale non abbia alterato la stanza…');
+        await verifyCleanupPreview(sourceUrl, protectedPreview, cleanupRegion.label);
+      } catch (caught) {
+        URL.revokeObjectURL(protectedPreview);
+        throw caught;
+      }
+      if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
+      processedBlobRef.current = protectedPreview;
       setProcessedPreview(protectedPreview); setProcessedLabel('Pulizia locale'); setShowProcessedPreview(true); setCleanupRegion(null);
       processedSurfacesRef.current = geometryForDerivedImage(surfaces);
       setNotice(`${cleanupRegion.label} rimosso. Fuori dal contorno selezionato la foto è rimasta identica.`);

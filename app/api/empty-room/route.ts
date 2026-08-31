@@ -1,4 +1,4 @@
-import { acceptsRoomCleanup, editImage, getAiProvider, getRenderProvider, verifyRoomCleanup } from '../../server/ai-provider';
+import { editImage, getRenderProvider } from '../../server/ai-provider';
 import { guardAiRequest, handleAiOptions } from '../../server/ai-api-guard';
 
 function json(body: unknown, headers: Headers, status = 200) {
@@ -60,25 +60,13 @@ export async function POST(request: Request) {
       'Keep unchanged pixels visually identical outside the authorized masks. Do not redesign, recolor, restyle, enlarge, straighten or add anything.',
       protectedAreas ? `These user-protected surfaces must remain unchanged: ${protectedAreas}.` : '',
     ].filter(Boolean).join(' ');
-    const verificationProvider = getAiProvider() ?? provider;
     const result = await editImage(provider, {
       source: image,
       mask,
       prompt,
       maskExplanation: 'transparent polygons are the only editable furniture-removal areas; every solid white pixel is protected and must stay visually identical',
     });
-    const verification = await verifyRoomCleanup(verificationProvider, {
-      source: image,
-      renderedImage: result,
-      targetDescription: targetAreas,
-    });
-    if (!acceptsRoomCleanup(verification)) {
-      return json({
-        code: 'cleanup_quality_rejected',
-        message: `Il risultato non ha superato il controllo fotografico (${verification.reason}). Ho mantenuto intatta la foto originale: riprova oppure indica un mobile alla volta.`,
-      }, headers, 422);
-    }
-    return json({ image: result, provider: provider.id, verification }, headers);
+    return json({ image: result, provider: provider.id }, headers);
   } catch (caught) {
     const caughtRecord = caught && typeof caught === 'object' ? caught as { message?: unknown; name?: unknown } : null;
     const message = caughtRecord?.message ? String(caughtRecord.message) : caught instanceof Error ? caught.message : '';

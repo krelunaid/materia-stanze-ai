@@ -1346,6 +1346,8 @@ export async function detectRoomSurfaces(
   const structuralPassPrompt = [
     'Architectural structural-only pass for one complete interior photograph. Return only the visible wall planes, the complete floor plane and the ceiling plane when it is visible; omit doors, windows, furniture and objects in this pass.',
     'First count the distinct wall planes created by perspective: left receding wall, far/back wall, right receding wall and any additional real wall plane. A far wall between two side walls is mandatory even when partly covered or the same color.',
+    'Inspect every structural vertical edge for columns, projections, returns and alcoves. When a front wall changes depth at a column or recess, return each visible face as its own wall plane even if a sofa, plant or cabinet hides the lower junction. Continue the architectural edge through the occlusion.',
+    'Compare vanishing directions: wall faces whose upper or lower edges recede toward different vanishing points are distinct planes and must not be merged into one large rectangle.',
     'Trace every plane continuously behind furniture. Use the true wall-wall, wall-floor and wall-ceiling junctions, never furniture edges, shadows, sunlight, rugs, tile seams or color changes.',
     'The floor upper boundary and every wall lower boundary must use exactly the same normalized vertices. The ceiling lower boundary and wall upper boundaries must also share exact vertices. Leave no gaps and no overlaps.',
     'A side wall must extend from the image edge to the far-wall corner; never return only a narrow strip. The floor must reach the lower image border and both side borders wherever it leaves the crop.',
@@ -1361,6 +1363,7 @@ export async function detectRoomSurfaces(
     'Never use the complete side-wall outline as a door or window. The four opening corners must follow its own frame; compare its lower edge with the local wall-floor junction. If the lower edge is visibly above that junction, return window. Only a real passable threshold touching the floor is a door.',
     'After counting, verify that every distinct glazed rectangle still has one result. In a room with a large side window plus smaller frontal windows, preserve all of them separately even when their apparent sizes differ greatly.',
     'Repeated windows receding in perspective remain separate physical openings even when only the nearest frame is large. Count the distant frames one by one. For an arched window, trace the tight four-corner outer bounding quadrilateral around the complete architectural frame, including the arch, without merging it with the wall.',
+    'Depth audit: inspect all structural vertical edges, columns, projections, wall returns and alcoves before returning the wall list. A front wall and a recessed or projecting right-hand face are separate wall planes even when furniture hides their floor junction; infer the junction behind the furniture.',
     'Return one separate four-corner polygon for every complete or partially cropped architectural frame. Keep several similar windows as several windows; never merge distant openings.',
     'After the opening count, return the complete floor and wall geometry as well so each opening can be attached to its real wall. Return the full surface list and no comments.',
   ].join('\n\n');
@@ -1766,12 +1769,17 @@ export async function verifyFurniturePlacement(provider: AiProvider, input: {
 
 export async function verifyRoomCleanup(provider: AiProvider, input: {
   source: File;
-  renderedImage: string;
+  renderedImage?: string;
+  renderedFile?: File;
   targetDescription: string;
 }) {
+  const renderedImage = input.renderedFile
+    ? await fileToDataUri(input.renderedFile)
+    : input.renderedImage;
+  if (!renderedImage) throw new Error('La fotografia pulita non è disponibile per il controllo.');
   const content = [
     { type: 'input_image', image_url: await fileToDataUri(input.source), detail: 'high' },
-    { type: 'input_image', image_url: input.renderedImage, detail: 'high' },
+    { type: 'input_image', image_url: renderedImage, detail: 'high' },
     {
       type: 'input_text',
       text: [
