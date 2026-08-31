@@ -803,6 +803,7 @@ export function RoomStudio() {
   const [dragVertex, setDragVertex] = useState<DragVertex | null>(null);
   const [dragEdge, setDragEdge] = useState<DragEdge | null>(null);
   const [isCorrectingEdges, setIsCorrectingEdges] = useState(false);
+  const [edgeGripRadius, setEdgeGripRadius] = useState({ x: 68, y: 46 });
   const [geometryDetectionStatus, setGeometryDetectionStatus] = useState<GeometryDetectionStatus>(null);
   const [showSurfaceGuides, setShowSurfaceGuides] = useState(true);
   const [manualRoomWidth, setManualRoomWidth] = useState<number | null>(null);
@@ -1016,6 +1017,31 @@ export function RoomStudio() {
     originalSurfacesRef.current = snapshots.original;
     if (snapshots.processed) processedSurfacesRef.current = snapshots.processed;
   }, [processedPreview, room]);
+
+  useEffect(() => {
+    if (!isCorrectingEdges) return;
+    const overlay = surfaceOverlayRef.current;
+    if (!overlay) return;
+    const updateGripRadius = () => {
+      const rect = overlay.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const targetRadiusCssPx = 28;
+      setEdgeGripRadius({
+        x: targetRadiusCssPx * 1000 / rect.width,
+        y: targetRadiusCssPx * 625 / rect.height,
+      });
+    };
+    updateGripRadius();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateGripRadius);
+    observer?.observe(overlay);
+    window.addEventListener('resize', updateGripRadius);
+    window.visualViewport?.addEventListener('resize', updateGripRadius);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', updateGripRadius);
+      window.visualViewport?.removeEventListener('resize', updateGripRadius);
+    };
+  }, [isCorrectingEdges]);
 
   const moveGeometryAt = useCallback((clientX: number, clientY: number) => {
     const activeDrag = geometryDragRef.current;
@@ -1318,6 +1344,8 @@ export function RoomStudio() {
   }
 
   function beginVertexDrag(event: ReactPointerEvent<SVGCircleElement>, surfaceId: string, vertexIndex: number) {
+    if (geometryDragRef.current) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
     const surface = surfaces.find((item) => item.id === surfaceId);
     if (!surface || surface.frozen || !isCorrectingEdges) return;
     const origin = surface.points[vertexIndex];
@@ -1338,6 +1366,8 @@ export function RoomStudio() {
   }
 
   function beginEdgeDrag(event: ReactPointerEvent<SVGElement>, surfaceId: string, edgeIndex: number) {
+    if (geometryDragRef.current) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
     const surface = surfaces.find((item) => item.id === surfaceId);
     if (!surface || surface.frozen || !isCorrectingEdges || !surfaceOverlayRef.current) return;
     const first = surface.points[edgeIndex];
@@ -2779,7 +2809,7 @@ export function RoomStudio() {
                 })}
                 {isCorrectingEdges && selected && !selected.frozen && <g className="surface-correction-controls" data-surface-id={selected.id}>
                   {selected.points.map((point, index) => { const next = selected.points[(index + 1) % selected.points.length]; return <g className="surface-edge-control" key={`${selected.id}-edge-${index}`}><line x1={point.x * 1000} y1={point.y * 625} x2={next.x * 1000} y2={next.y * 625} className="surface-edge" vectorEffect="non-scaling-stroke" aria-hidden="true" /><line x1={point.x * 1000} y1={point.y * 625} x2={next.x * 1000} y2={next.y * 625} className="surface-edge-hit" vectorEffect="non-scaling-stroke" aria-label={`Sposta linea ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginEdgeDrag(event, selected.id, index)} /></g>; })}
-                  {selected.points.map((point, index) => { const next = selected.points[(index + 1) % selected.points.length]; const midpointX = (point.x + next.x) * 500; const midpointY = (point.y + next.y) * 312.5; return <g key={`${selected.id}-midpoint-${index}`}><circle cx={midpointX} cy={midpointY} r="10" className="surface-edge-grip" aria-hidden="true" /><circle cx={midpointX} cy={midpointY} r="10" className="surface-edge-grip-hit" vectorEffect="non-scaling-stroke" style={{ cursor: 'move', pointerEvents: 'all', touchAction: 'none' }} aria-label={`Sposta punto centrale linea ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginEdgeDrag(event, selected.id, index)} /></g>; })}
+                  {selected.points.map((point, index) => { const next = selected.points[(index + 1) % selected.points.length]; const midpointX = (point.x + next.x) * 500; const midpointY = (point.y + next.y) * 312.5; return <g key={`${selected.id}-midpoint-${index}`}><circle cx={midpointX} cy={midpointY} r="10" className="surface-edge-grip" aria-hidden="true" /><ellipse cx={midpointX} cy={midpointY} rx={edgeGripRadius.x} ry={edgeGripRadius.y} className="surface-edge-grip-hit" data-testid={`edge-grip-hit-${index}`} style={{ cursor: 'move', pointerEvents: 'all', touchAction: 'none' }} aria-label={`Sposta punto centrale linea ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginEdgeDrag(event, selected.id, index)} /></g>; })}
                   {selected.points.map((point, index) => <g key={`${selected.id}-vertex-${index}`}><circle cx={point.x * 1000} cy={point.y * 625} r="34" className="surface-vertex-hit" aria-label={`Sposta punto ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginVertexDrag(event, selected.id, index)} /><circle cx={point.x * 1000} cy={point.y * 625} r="16" className="surface-vertex" aria-hidden="true" /></g>)}
                 </g>}
                 {draft.length > 0 && <><polyline points={pointsToSvg(draft)} fill="none" stroke="#d7f05c" strokeWidth="5" vectorEffect="non-scaling-stroke" />{draft.map((point, index) => <circle key={index} cx={point.x * 1000} cy={point.y * 625} r="9" className="draft-vertex" />)}</>}

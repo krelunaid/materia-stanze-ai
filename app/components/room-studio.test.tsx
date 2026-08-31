@@ -760,9 +760,12 @@ describe('RoomStudio', () => {
 
     const guideActions = document.querySelector('.surface-guide-actions') as HTMLDivElement;
     fireEvent.click(within(guideActions).getByRole('button', { name: '↔ Sposta linee' }));
-    const midpoint = screen.getByLabelText('Sposta punto centrale linea 1 di Pavimento') as unknown as SVGCircleElement;
+    const midpoint = screen.getByLabelText('Sposta punto centrale linea 1 di Pavimento') as unknown as SVGEllipseElement;
     expect(midpoint).toHaveClass('surface-edge-grip-hit');
     expect(midpoint).toHaveStyle({ pointerEvents: 'all', touchAction: 'none' });
+    expect(Number(midpoint.getAttribute('rx'))).toBeGreaterThanOrEqual(28);
+    expect(Number(midpoint.getAttribute('ry'))).toBeGreaterThanOrEqual(28);
+    expect(midpoint).toHaveAttribute('data-testid', 'edge-grip-hit-0');
 
     const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
     vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
