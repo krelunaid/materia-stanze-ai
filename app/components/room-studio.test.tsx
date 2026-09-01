@@ -103,6 +103,23 @@ describe('RoomStudio', () => {
     expect(screen.getByLabelText('Superfici della stanza')).toBeInTheDocument();
   });
 
+  it('uses the lower skirting-floor contact in the example room', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+
+    const floor = document.querySelector('.surface-kind-floor polygon') as SVGPolygonElement;
+    const points = String(floor.getAttribute('points')).split(' ').map((point) => point.split(',').map(Number));
+    expect(points.slice(0, 4)).toEqual([
+      [218, 448.75], [785, 448.75], [1000, 553.125], [1000, 625],
+    ]);
+    const sharedWallPoints = Array.from(document.querySelectorAll('.surface-kind-wall polygon'))
+      .flatMap((polygon) => String(polygon.getAttribute('points')).split(' ').map((point) => point.split(',').map(Number)));
+    expect(sharedWallPoints).toContainEqual([218, 448.75]);
+    expect(sharedWallPoints).toContainEqual([785, 448.75]);
+    expect(sharedWallPoints).toContainEqual([0, 553.125]);
+    expect(sharedWallPoints).toContainEqual([1000, 553.125]);
+  });
+
   it('translates the iOS network error without losing the project', () => {
     expect(friendlyRequestError(new Error('The network connection was lost.')).message)
       .toBe('Connessione interrotta. La stanza resta aperta: controlla la rete e riprova l’operazione.');

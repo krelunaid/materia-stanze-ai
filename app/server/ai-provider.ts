@@ -1128,11 +1128,50 @@ function snapFloorToWallJunctions(surfaces: DetectedRoomSurface[]) {
   const upperBoundary = xValues.map((x) => {
     const wallYs = walls.map((wall) => wallBoundaryAtX(wall, x)).filter((value): value is number => value !== null);
     const floorY = floorBoundaryAtX(floor, x);
-    return { x, y: wallYs.length ? Math.max(...wallYs) : floorY ?? .7 };
+    const lowestWallY = wallYs.length ? Math.max(...wallYs) : null;
+    // A baseboard produces two strong, close parallel edges.  Vision models
+    // often use its upper edge for wall polygons but its lower physical
+    // contact for the floor.  Prefer that lower floor trace when it is within
+    // a plausible 200 mm image band; large gaps are more likely shadows,
+    // reflections or an unrelated floor seam and keep the wall junction.
+    const y = floorY !== null
+      && lowestWallY !== null
+      && floorY >= lowestWallY
+      && floorY - lowestWallY <= .085
+      ? floorY
+      : lowestWallY ?? floorY ?? .7;
+    return { x, y };
   });
   const snappedPoints = [...upperBoundary, { x: 1, y: 1 }, { x: 0, y: 1 }];
   if (!isSimpleRoomPolygon(snappedPoints)) return surfaces;
-  return surfaces.map((surface) => surface === floor ? { ...surface, points: snappedPoints } : surface);
+
+  const junctionYAtX = (x: number) => {
+    const exact = upperBoundary.find((point) => Math.abs(point.x - x) < .0001);
+    if (exact) return exact.y;
+    for (let index = 0; index < upperBoundary.length - 1; index += 1) {
+      const left = upperBoundary[index]; const right = upperBoundary[index + 1];
+      if (x < left.x || x > right.x || Math.abs(right.x - left.x) < .0001) continue;
+      const ratio = (x - left.x) / (right.x - left.x);
+      return left.y + (right.y - left.y) * ratio;
+    }
+    return null;
+  };
+
+  return surfaces.map((surface) => {
+    if (surface === floor) return { ...surface, points: snappedPoints };
+    if (surface.kind !== 'wall') return surface;
+    return {
+      ...surface,
+      points: surface.points.map((point) => {
+        const originalBoundary = wallBoundaryAtX(surface, point.x);
+        const junctionY = junctionYAtX(point.x);
+        const isBottomVertex = originalBoundary !== null && Math.abs(point.y - originalBoundary) <= .008;
+        return isBottomVertex && junctionY !== null && junctionY >= point.y && junctionY - point.y <= .085
+          ? { ...point, y: junctionY }
+          : point;
+      }),
+    };
+  });
 }
 
 function wallFloorJunctionQuality(floor: DetectedRoomSurface, walls: DetectedRoomSurface[]) {
@@ -1554,6 +1593,7 @@ export async function detectRoomSurfaces(
     'A window polygon must reach the outside edge of the head, both jambs and the complete sill. Never stop at an internal mullion, transom, glazing edge or only the bright glass area.',
     'When the frame is white on a white wall, use the frame shadow and sill boundary; include a small amount of outer trim rather than cutting off part of the opening.',
     'If any floor area is visible, a complete floor polygon is mandatory even when the floor is white, glossy or low contrast.',
+    'A skirting board or baseboard is part of the vertical wall plane, not part of the walkable floor. Distinguish its upper trim edge from its lower physical contact edge. The wall polygon must extend through the complete skirting board to its LOWER edge, and the floor polygon must begin at that same lower skirting-floor contact. Never use the upper baseboard edge as either shared boundary.',
     'For the floor, trace the wall-floor junction, skirting-board lower edge and every door threshold point by point. Add a vertex at every change of direction instead of replacing the boundary with one approximate straight line. Use up to 24 vertices when needed.',
     'The floor begins only at the true physical wall-floor or skirting-floor junction. Ignore sunlight patches, reflections, cast shadows, changes of material color, plank seams, tile grout, rugs and glossy highlights: none of these may become the upper floor boundary.',
     'Return polygon vertices as normalized image coordinates where x=0 is the left edge, x=1 the right edge, y=0 the top edge and y=1 the bottom edge.',
@@ -1606,6 +1646,7 @@ export async function detectRoomSurfaces(
     'Perform an independent second architectural segmentation of the complete image. Work at pixel accuracy and return the full geometry.',
     'Reject false walls, doors and windows caused by furniture, wall pictures, cabinets, reflections or shadows. Include every real architectural opening.',
     'Check every floor-boundary vertex against the visible skirting-board lower edge, wall-floor junction and door thresholds. Add vertices wherever that boundary changes direction; do not simplify several planes into one diagonal line.',
+    'At several points immediately below the proposed floor boundary, verify that the visible material is flooring rather than skirting or wall. If skirting remains below the boundary, the boundary is too high: move it to the lower skirting-floor contact and extend the wall polygons to exactly the same vertices.',
     'Reject any proposed floor boundary that follows a sunlit patch, reflection, shadow, timber-board seam, tile-grout line, rug or color transition. Compare it against the bottom boundary of every visible wall and keep only the physical shared junction.',
     'Verify that each side wall covers its full receding plane between the image edge and the far-wall corner. A thin edge band or a polygon that merely surrounds windows is not a wall.',
     'Audit topology numerically before returning: adjoining floor and wall polygons must repeat identical coordinates for their shared junction vertices, as must adjoining side and far walls.',
@@ -1619,6 +1660,7 @@ export async function detectRoomSurfaces(
     'Inspect every structural vertical edge for columns, projections, returns and alcoves. When a front wall changes depth at a column or recess, return each visible face as its own wall plane even if a sofa, plant or cabinet hides the lower junction. Continue the architectural edge through the occlusion.',
     'Compare vanishing directions: wall faces whose upper or lower edges recede toward different vanishing points are distinct planes and must not be merged into one large rectangle.',
     'Trace every plane continuously behind furniture. Use the true wall-wall, wall-floor and wall-ceiling junctions, never furniture edges, shadows, sunlight, rugs, tile seams or color changes.',
+    'Include the complete skirting/baseboard inside each wall plane. Its upper trim edge is not the floor junction. Wall bottoms and the floor top must share the LOWER edge where skirting physically meets the walkable floor.',
     'The floor upper boundary and every wall lower boundary must use exactly the same normalized vertices. The ceiling lower boundary and wall upper boundaries must also share exact vertices. Leave no gaps and no overlaps.',
     'A side wall must extend from the image edge to the far-wall corner; never return only a narrow strip. The floor must reach the lower image border and both side borders wherever it leaves the crop.',
     'Return normalized x/y coordinates on the complete uncropped source image, clockwise, using up to 24 points. Return the full structural surface list and no comments.',

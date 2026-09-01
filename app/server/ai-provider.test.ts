@@ -548,7 +548,7 @@ describe('getAiProvider', () => {
     expect(result.find((surface) => surface.kind === 'floor')?.points).toEqual(physicalFloor.points);
   });
 
-  it('snaps every floor junction vertex to the selected wall planes', () => {
+  it('keeps every floor junction shared and prefers a nearby lower contact edge', () => {
     const left = { name: 'left', kind: 'wall' as const, confidence: .95, points: [{ x: 0, y: 0 }, { x: .25, y: .12 }, { x: .25, y: .62 }, { x: .12, y: .72 }, { x: 0, y: .78 }] };
     const back = { name: 'back', kind: 'wall' as const, confidence: .96, points: [{ x: .25, y: .12 }, { x: .78, y: .13 }, { x: .78, y: .6 }, { x: .25, y: .62 }] };
     const right = { name: 'right', kind: 'wall' as const, confidence: .95, points: [{ x: .78, y: .13 }, { x: 1, y: 0 }, { x: 1, y: .76 }, { x: .78, y: .6 }] };
@@ -558,8 +558,22 @@ describe('getAiProvider', () => {
     const floor = result.find((surface) => surface.kind === 'floor');
 
     expect(floor?.points).toEqual(expect.arrayContaining([
-      { x: 0, y: .78 }, { x: .12, y: .72 }, { x: .25, y: .62 }, { x: .78, y: .6 }, { x: 1, y: .76 },
+      { x: 0, y: .78 }, { x: .12, y: .72 }, { x: .25, y: .66 }, { x: .78, y: .65 }, { x: 1, y: .76 },
     ]));
+    const wallPoints = result.filter((surface) => surface.kind === 'wall').flatMap((surface) => surface.points);
+    expect(wallPoints).toEqual(expect.arrayContaining([{ x: .25, y: .66 }, { x: .78, y: .65 }]));
+  });
+
+  it('does not snap a floor from the lower skirting contact back to the upper trim edge', () => {
+    const backWall = { name: 'back wall', kind: 'wall' as const, confidence: .97, points: [{ x: .2, y: .12 }, { x: .8, y: .12 }, { x: .8, y: .695 }, { x: .2, y: .695 }] };
+    const floorAtLowerContact = { name: 'floor', kind: 'floor' as const, confidence: .96, points: [{ x: .2, y: .718 }, { x: .8, y: .718 }, { x: 1, y: .89 }, { x: 1, y: 1 }, { x: 0, y: 1 }, { x: 0, y: .89 }] };
+
+    const result = reconcileRoomSurfaceCandidates([[backWall, floorAtLowerContact]]);
+    const floor = result.find((surface) => surface.kind === 'floor');
+    const wall = result.find((surface) => surface.kind === 'wall');
+
+    expect(floor?.points).toEqual(expect.arrayContaining([{ x: .2, y: .718 }, { x: .8, y: .718 }]));
+    expect(wall?.points).toEqual(expect.arrayContaining([{ x: .2, y: .718 }, { x: .8, y: .718 }]));
   });
 
   it('prefers complete side-wall planes over narrow image-edge bands', () => {
