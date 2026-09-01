@@ -2019,7 +2019,8 @@ export function RoomStudio() {
         image: result.image,
       });
     }
-    return composeCleanupTiles(sourceUrl, results, protectedSurfaces);
+    const composed = await composeCleanupTiles(sourceUrl, results, protectedSurfaces);
+    return { ...composed, planCount: plans.length, sourceSize };
   }
 
   async function protectAiResult(resultSource: string, options: {
@@ -2920,19 +2921,61 @@ export function RoomStudio() {
 
       setNotice(`${roomAudit?.needsEmptying ? 'Terra ha confermato che la stanza va svuotata. ' : ''}Grok ha delimitato ${regions.length} zone da pulire${categories ? `: ${categories}` : ''}. Le elaboro in ritagli locali e proteggo ogni altro pixel.`);
       const architecturalAnchors = baselineSurfaces.filter((surface) => surface.frozen || surface.kind === 'door' || surface.kind === 'window');
-      const cleanupResult = await generateCleanupTiles(room.previewUrl, regions, architecturalAnchors, 'automatic');
-      const protectedPreview = cleanupResult.previewUrl;
+      let finalRegions = regions;
+      let cleanupResult = await generateCleanupTiles(room.previewUrl, finalRegions, architecturalAnchors, 'automatic');
+      let protectedPreview = cleanupResult.previewUrl;
+
+      // A first image edit can remove the large fitted units yet leave fruit,
+      // coffee machines, chairs or fragments behind.  Before accepting it,
+      // inspect the actual result once more.  When the remaining request fits
+      // inside the same hourly image-edit budget, rebuild the complete edit
+      // from the untouched original with one cumulative mask.  Never inpaint
+      // an already-generated patch.
+      if (cleanupResult.planCount <= 6) {
+        try {
+          setNotice('Controllo se dopo il primo passaggio sono rimasti mobili, elettrodomestici o oggetti…');
+          const residualImage = await createGeometryInput(protectedPreview);
+          const residualForm = new FormData();
+          residualForm.append('image', residualImage, 'room-residuals.jpg');
+          residualForm.append('mode', 'all');
+          const residualDetection = await requestJson<{
+            regions?: CleanupRegion[];
+            roomAudit?: RoomEmptyingAudit | null;
+          }>(endpoint('/api/detect-object'), { method: 'POST', body: residualForm }, 90000);
+          const residualRegions = residualDetection.response.ok
+            ? (residualDetection.result.regions ?? []).filter((region) => isValidPolygon(region.points))
+            : [];
+          const residualAudit = residualDetection.result.roomAudit;
+          if (residualRegions.length && (!residualAudit || residualAudit.needsEmptying || residualAudit.confidence < .7)) {
+            const cumulativeRegions = [...finalRegions, ...residualRegions];
+            const cumulativePlanCount = planCleanupTiles(cumulativeRegions, 12, cleanupResult.sourceSize).length;
+            if (cleanupResult.planCount + cumulativePlanCount <= 12) {
+              setNotice(`Sono rimaste ${residualRegions.length} zone. Ricostruisco la pulizia dall’originale con una maschera completa, senza sovrapporre toppe…`);
+              const rebuilt = await generateCleanupTiles(room.previewUrl, cumulativeRegions, architecturalAnchors, 'automatic');
+              URL.revokeObjectURL(protectedPreview);
+              cleanupResult = rebuilt;
+              protectedPreview = rebuilt.previewUrl;
+              finalRegions = cumulativeRegions;
+            }
+          }
+        } catch {
+          // The final verifier still decides whether the first pass is safe.
+          // A failed optional residual inventory must never discard a valid
+          // cleanup or make the original unavailable.
+        }
+      }
       try {
         setNotice('Controllo che inquadratura, pareti, porte e finestre siano rimaste identiche…');
         await verifyCleanupPreview(
           room.previewUrl,
           protectedPreview,
-          regions.map((region) => region.label).join(', '),
-          regions,
+          finalRegions.map((region) => region.label).join(', '),
+          finalRegions,
           cleanupResult.authorizationReference,
         );
       } catch (caught) {
         if (new URLSearchParams(window.location.search).has('qa')) {
+          cleanupHistoryRef.current = finalRegions.map((region) => ({ ...region, points: region.points.map((point) => ({ ...point })) }));
           if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
           processedBlobRef.current = protectedPreview;
           setProcessedPreview(protectedPreview);
@@ -2946,14 +2989,14 @@ export function RoomStudio() {
       if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
       processedBlobRef.current = protectedPreview;
       setProcessedPreview(protectedPreview); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
-      cleanupHistoryRef.current = regions.map((region) => ({ ...region, points: region.points.map((point) => ({ ...point })) }));
+      cleanupHistoryRef.current = finalRegions.map((region) => ({ ...region, points: region.points.map((point) => ({ ...point })) }));
       const approved = geometryForDerivedImage(baselineSurfaces);
       originalSurfacesRef.current = geometryForDerivedImage(baselineSurfaces);
       processedSurfacesRef.current = approved;
       setSurfaces(approved); setPastSurfaces([]); setFutureSurfaces([]);
       const preferred = approved.find((surface) => surface.kind === 'floor') ?? approved[0] ?? null;
       setSelectedId(preferred?.id ?? null); setRenameDraft(preferred?.name ?? '');
-      setNotice(`Stanza pulita in ${regions.length} zone. Fuori dai contorni dei mobili i pixel, le linee e le misure sono rimasti identici.`);
+      setNotice(`Stanza pulita in ${finalRegions.length} zone. Fuori dai contorni dei mobili i pixel, le linee e le misure sono rimasti identici.`);
     } catch (caught) {
       setError(friendlyRequestError(caught).message);
       setNotice(null);

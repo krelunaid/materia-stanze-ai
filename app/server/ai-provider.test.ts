@@ -722,6 +722,9 @@ describe('getAiProvider', () => {
     expect(prompts.join('\n')).toContain('extractor hoods');
     expect(prompts.join('\n')).toContain('bathroom vanities');
     expect(prompts.join('\n')).toContain('attachment is not architecture');
+    expect(prompts.join('\n')).toContain('fruit bowls');
+    expect(prompts.join('\n')).toContain('coffee machines');
+    expect(prompts.join('\n')).toContain('must not remain floating');
   });
 
   it('rechecks the full room when the first furniture pass returns empty', async () => {

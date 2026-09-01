@@ -1888,6 +1888,7 @@ export async function detectMovableObjectRegions(
   const primaryPrompt = [
     `Intent: ${intent}. Find every visible non-architectural object or installed furnishing that must be removed to make this exact room empty for a real-estate photograph.`,
     'Include beds, sofas, chairs, tables, cabinets, lamps, rugs, curtains, pictures, loose objects, fitted wardrobes, fitted kitchen cabinets and appliances, bathroom vanities, mirrors and storage. Group touching parts of one physical item or continuous fitted installation into one region.',
+    'When a removable table, worktop, cabinet, shelf or kitchen run is removed, include every removable item resting on it, hanging from it or stored visibly inside it in that same envelope: fruit bowls, dishes, bottles, coffee machines, kettles, cookware, utensils, books, baskets and decor must not remain floating after the supporting furniture disappears.',
     'Classify each region as exactly one removalKind: loose-object, installed-furnishing, fixed-appliance, bathroom-furnishing, architecture.',
     'Attachment is not architecture: fitted, built-in, attached, wired or plumbed units are still removable. Use architecture only for walls, floor, ceiling, structural columns or beams, stairs, doors, windows, openings and skirting.',
     'Return a tight clockwise polygon with 4 to 16 normalized points around the complete visible silhouette of each removable object. Add only a small 1-2% inpainting margin.',
@@ -1897,6 +1898,7 @@ export async function detectMovableObjectRegions(
   const fittedAuditPrompt = [
     `Intent: ${intent}. Audit this complete interior specifically for fitted installations that a generic furniture pass often misses.`,
     'Inventory kitchen base cabinets, wall cabinets, tall cabinets, islands, worktops, integrated ovens, hobs, extractor hoods, fridges, dishwashers, fitted wardrobes, made-to-measure storage, bathroom vanities, mirrors and bathroom cabinets. Preserve wall finishes and splashbacks as surfaces unless they are part of a removable freestanding unit.',
+    'Expand each fitted-installation silhouette just enough to contain every removable item physically supported by or attached to that installation, including countertop appliances, fruit bowls, bottles, cookware, utensils, baskets and decor. These objects must not be left behind without their cabinet, shelf or table.',
     'A unit remains removable when fitted, built-in, attached, wired or plumbed: attachment is not architecture. Group one continuous kitchen or bathroom composition into a single complete functional region, not one region per door or drawer.',
     'Classify each result as installed-furnishing, fixed-appliance or bathroom-furnishing. True architecture is only walls, floor, ceiling, structural columns or beams, stairs, doors, windows, openings and skirting, and must not be returned.',
     'Trace each complete visible group as one tight clockwise polygon with 4 to 16 normalized points. Do not return a room-wide polygon. Return only the structured result.',
@@ -1913,7 +1915,7 @@ export async function detectMovableObjectRegions(
   const focusedPrompt = [
     `Focused recovery for ${intent}. An independent room inventory says these removable categories are present: ${requiredCategories.join(', ')}.`,
     'Locate every large or dominant item in that inventory before small decor. Beds, sofas, wardrobes, chests of drawers, tables, continuous kitchen runs, bathroom vanities and curtains must never be skipped merely because they cover a large part of the image or touch an image edge.',
-    'Return one complete tight polygon per physical item or continuous fitted group. Infer the full visible silhouette behind bedding, cushions and small clutter, but never include walls, floor, ceiling, doors or windows.',
+    'Return one complete tight polygon per physical item or continuous fitted group. Infer the full visible silhouette behind bedding, cushions and small clutter, and include loose items resting on furniture that will be removed, but never include walls, floor, ceiling, doors or windows.',
     'Use removalKind=loose-object for movable furniture and textiles, installed-furnishing for fitted cabinetry, fixed-appliance for appliances and bathroom-furnishing for sanitary or vanity groups. Return only the structured result.',
   ].join('\n');
 
