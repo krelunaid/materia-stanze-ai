@@ -768,6 +768,7 @@ export async function searchMaterials(provider: AiProvider, query: string) {
       tools: [{ type: 'web_search_preview' }],
       input: `${prompt}\nReturn JSON only matching this shape: ${JSON.stringify(productSchema)}`,
     }),
+    signal: AbortSignal.timeout(48000),
   });
   const payload = await response.json() as ResponsesPayload;
   if (!response.ok) throw new Error(payload.error?.message ?? 'Ricerca non disponibile.');
