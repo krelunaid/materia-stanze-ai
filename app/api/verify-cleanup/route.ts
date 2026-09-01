@@ -1,4 +1,4 @@
-import { acceptsRoomCleanup, getAiProvider, getRenderProvider, verifyRoomCleanup } from '../../server/ai-provider';
+import { acceptsRoomCleanup, getAiProvider, getRenderProvider, getVisionAuditor, verifyRoomCleanup } from '../../server/ai-provider';
 import { guardAiRequest, handleAiOptions } from '../../server/ai-api-guard';
 
 function json(body: unknown, headers: Headers, status = 200) {
@@ -13,7 +13,8 @@ export async function POST(request: Request) {
   const access = await guardAiRequest(request, 'verify-cleanup');
   if (!access.ok) return access.response;
   const { headers } = access;
-  const provider = getAiProvider() ?? getRenderProvider();
+  const primary = getAiProvider();
+  const provider = getVisionAuditor(process.env, primary) ?? primary ?? getRenderProvider();
   if (!provider) return json({ message: 'Il controllo fotografico non è momentaneamente disponibile.' }, headers, 503);
 
   try {

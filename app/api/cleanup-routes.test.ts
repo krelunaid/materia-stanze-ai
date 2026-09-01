@@ -24,6 +24,7 @@ vi.mock('../server/ai-provider.ts', () => ({
   editImage: mocks.editImage,
   getAiProvider: vi.fn(() => ({ id: 'grok', label: 'Grok', apiKey: 'test' })),
   getRenderProvider: vi.fn(() => ({ id: 'grok', label: 'Grok', apiKey: 'test' })),
+  getVisionAuditor: vi.fn(() => null),
   verifyRoomCleanup: mocks.verifyRoomCleanup,
 }));
 
@@ -161,5 +162,18 @@ describe('real-estate room cleanup prompts', () => {
     const invalidResponse = await cleanRoomRegion(formRequest(invalidForm));
     expect(invalidResponse.status).toBe(409);
     expect(mocks.editImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a triangular split as a valid local cleanup polygon', async () => {
+    const form = baseForm();
+    form.append('targetLabel', 'Parte di un mobile grande');
+    form.append('targetArea', JSON.stringify([
+      { x: .1, y: .8 }, { x: .5, y: .1 }, { x: .9, y: .8 },
+    ]));
+
+    const response = await cleanRoomRegion(formRequest(form));
+
+    expect(response.ok, await response.clone().text()).toBe(true);
+    expect(mocks.editImage).toHaveBeenCalledOnce();
   });
 });

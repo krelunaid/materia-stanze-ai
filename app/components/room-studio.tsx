@@ -16,12 +16,19 @@ import {
 } from 'react';
 import { drawImageCover } from '../lib/canvas-draw';
 import {
+  cleanupTileBoundsFromRect,
+  cleanupTileEdgeIsInternal,
+  cleanupTileMaskEnvelope,
   cleanupTileRatioMatches,
   CleanupTileBounds,
+  CleanupTileImageSize,
+  CleanupTileMaskEnvelope,
+  CleanupTilePixelRect,
   CleanupTilePlan,
+  CleanupTileSplitEdge,
   planCleanupTiles,
   pointInCleanupTile,
-  snapCleanupTileBounds,
+  snapCleanupTileRect,
 } from '../lib/cleanup-tiles';
 import { AcceptedRoomFile, formatBytes, validateRoomFile } from '../lib/file-validation';
 import { furnitureEditRect, hasCompatibleImageGeometry, rectPoints } from '../lib/render-geometry';
@@ -83,7 +90,15 @@ type PlacedFurniture = {
 };
 type PendingFurniture = { name: string; previewUrl?: string; sidePreviewUrl?: string; cutoutUrl?: string; description?: string; file?: File };
 type DragFurniture = { id: string; pointerId: number; offsetX: number; offsetY: number };
-type CleanupRegion = { label: string; points: Point[]; confidence: number };
+type CleanupRegion = { label: string; points: Point[]; confidence: number; internalEdges?: CleanupTileSplitEdge[] };
+type CleanupTileResult = {
+  bounds: CleanupTileBounds;
+  pixelRect: CleanupTilePixelRect;
+  sourceSize: CleanupTileImageSize;
+  envelope: CleanupTileMaskEnvelope;
+  regions: CleanupRegion[];
+  image: string;
+};
 type AiStatus = 'checking' | 'ready' | 'missing' | 'unreachable';
 type GeometryDetectionStatus = 'ai' | 'fallback' | null;
 type DetectedSurface = {
@@ -94,6 +109,7 @@ type DetectedSurface = {
   confidence: number;
   slot?: Surface['slot'];
   parentId?: string;
+  audited?: boolean;
 };
 type ProductSearchCategory = '' | StudioMaterial['category'];
 type ProductPhotoClassification = {
@@ -1664,14 +1680,20 @@ export function RoomStudio() {
   }
 
   async function createCleanupTileInput(source: HTMLImageElement, plan: CleanupTilePlan, protectedSurfaces: Surface[]) {
-    const bounds = snapCleanupTileBounds(plan.bounds, source.naturalWidth, source.naturalHeight);
+    const sourceSize = { width: source.naturalWidth, height: source.naturalHeight };
+    const pixelRect = snapCleanupTileRect(plan.bounds, sourceSize);
+    const bounds = cleanupTileBoundsFromRect(pixelRect, sourceSize);
+    const envelope = cleanupTileMaskEnvelope(plan.regions, sourceSize);
     const normalizedRegions = plan.regions.map((region) => ({
       ...region, points: region.points.map((point) => pointInCleanupTile(point, bounds)),
+      internalEdges: region.internalEdges?.map((edge) => ({
+        axis: edge.axis,
+        value: edge.axis === 'x'
+          ? (edge.value - bounds.left) / Math.max(.0001, bounds.right - bounds.left)
+          : (edge.value - bounds.top) / Math.max(.0001, bounds.bottom - bounds.top),
+      })),
     }));
-    const sourceLeft = Math.round(bounds.left * source.naturalWidth);
-    const sourceTop = Math.round(bounds.top * source.naturalHeight);
-    const sourceWidth = Math.max(1, Math.round((bounds.right - bounds.left) * source.naturalWidth));
-    const sourceHeight = Math.max(1, Math.round((bounds.bottom - bounds.top) * source.naturalHeight));
+    const { left: sourceLeft, top: sourceTop, width: sourceWidth, height: sourceHeight } = pixelRect;
     const maximumSide = isAppleTouchDevice() ? 1024 : 1280;
     const scale = Math.min(1, maximumSide / Math.max(sourceWidth, sourceHeight));
     const width = Math.max(1, Math.round(sourceWidth * scale));
@@ -1695,26 +1717,40 @@ export function RoomStudio() {
       });
       context.closePath();
     };
+    const strokeRegionBoundary = (context: CanvasRenderingContext2D, region: CleanupRegion) => {
+      if (!region.internalEdges?.length) {
+        traceRegion(context, region);
+        context.stroke();
+        return;
+      }
+      for (let index = 0; index < region.points.length; index += 1) {
+        const first = region.points[index];
+        const second = region.points[(index + 1) % region.points.length];
+        if (cleanupTileEdgeIsInternal(region, first, second)) continue;
+        context.beginPath();
+        context.moveTo(first.x * width, first.y * height);
+        context.lineTo(second.x * width, second.y * height);
+        context.stroke();
+      }
+    };
     // Object detectors usually stop at the visible body.  Include contact
     // shadows and tiny attachment fringes as well, otherwise the room can be
     // left with a table-shaped shadow after the table itself is removed.
-    const targetPoints = normalizedRegions.flatMap((region) => region.points);
-    const targetWidth = (Math.max(...targetPoints.map((point) => point.x)) - Math.min(...targetPoints.map((point) => point.x))) * width;
-    const targetHeight = (Math.max(...targetPoints.map((point) => point.y)) - Math.min(...targetPoints.map((point) => point.y))) * height;
-    const expansion = Math.min(40, Math.max(8, Math.round(Math.min(targetWidth, targetHeight) * .10)));
-    const shadowOffset = Math.round(expansion * .9);
+    const tileScale = Math.min(width / sourceWidth, height / sourceHeight);
+    const expansion = envelope.outsetSourcePx * tileScale;
+    const shadowOffset = envelope.shadowOffsetSourcePx * tileScale;
     maskContext.fillStyle = '#ffffff'; maskContext.fillRect(0, 0, width, height);
     maskContext.globalCompositeOperation = 'destination-out';
     maskContext.fillStyle = '#000000'; maskContext.strokeStyle = '#000000';
-    maskContext.lineWidth = expansion * 2; maskContext.lineJoin = 'round'; maskContext.lineCap = 'round';
+    maskContext.lineWidth = expansion * 2; maskContext.lineJoin = 'round'; maskContext.lineCap = 'butt';
     maskReferenceContext.fillStyle = '#000000'; maskReferenceContext.fillRect(0, 0, width, height);
     maskReferenceContext.fillStyle = '#ff00ff'; maskReferenceContext.strokeStyle = '#ff00ff';
-    maskReferenceContext.lineWidth = expansion * 2; maskReferenceContext.lineJoin = 'round'; maskReferenceContext.lineCap = 'round';
+    maskReferenceContext.lineWidth = expansion * 2; maskReferenceContext.lineJoin = 'round'; maskReferenceContext.lineCap = 'butt';
     for (const region of normalizedRegions) {
-      traceRegion(maskContext, region); maskContext.fill(); maskContext.stroke();
-      maskContext.save(); maskContext.translate(0, shadowOffset); traceRegion(maskContext, region); maskContext.stroke(); maskContext.restore();
-      traceRegion(maskReferenceContext, region); maskReferenceContext.fill(); maskReferenceContext.stroke();
-      maskReferenceContext.save(); maskReferenceContext.translate(0, shadowOffset); traceRegion(maskReferenceContext, region); maskReferenceContext.stroke(); maskReferenceContext.restore();
+      traceRegion(maskContext, region); maskContext.fill(); strokeRegionBoundary(maskContext, region);
+      maskContext.save(); maskContext.translate(0, shadowOffset); strokeRegionBoundary(maskContext, region); maskContext.restore();
+      traceRegion(maskReferenceContext, region); maskReferenceContext.fill(); strokeRegionBoundary(maskReferenceContext, region);
+      maskReferenceContext.save(); maskReferenceContext.translate(0, shadowOffset); strokeRegionBoundary(maskReferenceContext, region); maskReferenceContext.restore();
     }
     maskContext.globalCompositeOperation = 'source-over';
     // Apertures and explicit Freeze regions are protected twice: they are
@@ -1737,16 +1773,29 @@ export function RoomStudio() {
       new Promise<Blob | null>((resolve) => maskReferenceCanvas.toBlob(resolve, 'image/png')),
     ]);
     if (!inputImage || !mask || !maskReference) throw new Error('Non posso preparare foto e maschera del ritaglio locale.');
-    return { ...plan, bounds, normalizedRegions, inputImage, mask, maskReference };
+    return { ...plan, bounds, pixelRect, sourceSize, envelope, normalizedRegions, inputImage, mask, maskReference };
   }
 
   async function composeCleanupTiles(
     sourceUrl: string,
-    results: Array<{ bounds: CleanupTileBounds; regions: CleanupRegion[]; image: string }>,
+    results: CleanupTileResult[],
     protectedSurfaces: Surface[],
   ) {
     const original = await loadImageSource(sourceUrl);
     const generated = await Promise.all(results.map((result) => loadImageSource(result.image)));
+    for (let index = 0; index < results.length; index += 1) {
+      const result = results[index];
+      if (result.sourceSize.width !== original.naturalWidth
+        || result.sourceSize.height !== original.naturalHeight
+        || !cleanupTileRatioMatches(
+          generated[index].naturalWidth,
+          generated[index].naturalHeight,
+          result.pixelRect.width,
+          result.pixelRect.height,
+        )) {
+        throw new Error('Il ritaglio IA ha cambiato proporzioni o geometria: è stato scartato e la fotografia è rimasta intatta.');
+      }
+    }
     const maximumSide = isAppleTouchDevice() ? 1280 : 1536;
     const scale = Math.min(1, maximumSide / Math.max(original.naturalWidth, original.naturalHeight));
     const width = Math.max(1, Math.round(original.naturalWidth * scale));
@@ -1770,22 +1819,47 @@ export function RoomStudio() {
       });
       target.closePath();
     };
+    const strokeNormalizedBoundary = (target: CanvasRenderingContext2D, region: CleanupRegion) => {
+      if (!region.internalEdges?.length) {
+        traceNormalized(target, region.points);
+        target.stroke();
+        return;
+      }
+      for (let index = 0; index < region.points.length; index += 1) {
+        const first = region.points[index];
+        const second = region.points[(index + 1) % region.points.length];
+        if (cleanupTileEdgeIsInternal(region, first, second)) continue;
+        target.beginPath();
+        target.moveTo(first.x * width, first.y * height);
+        target.lineTo(second.x * width, second.y * height);
+        target.stroke();
+      }
+    };
     for (let resultIndex = 0; resultIndex < results.length; resultIndex += 1) {
       const result = results[resultIndex];
-      const tileLeft = Math.round(result.bounds.left * width);
-      const tileTop = Math.round(result.bounds.top * height);
-      const tileWidth = Math.max(1, Math.round((result.bounds.right - result.bounds.left) * width));
-      const tileHeight = Math.max(1, Math.round((result.bounds.bottom - result.bounds.top) * height));
-      if (!cleanupTileRatioMatches(generated[resultIndex].naturalWidth, generated[resultIndex].naturalHeight, tileWidth, tileHeight)) {
-        throw new Error('Il ritaglio IA ha cambiato proporzioni: è stato scartato e la fotografia è rimasta intatta.');
-      }
+      const scaleX = width / result.sourceSize.width;
+      const scaleY = height / result.sourceSize.height;
+      const tileLeft = Math.round(result.pixelRect.left * scaleX);
+      const tileTop = Math.round(result.pixelRect.top * scaleY);
+      const tileRight = Math.round(result.pixelRect.right * scaleX);
+      const tileBottom = Math.round(result.pixelRect.bottom * scaleY);
+      const tileWidth = Math.max(1, tileRight - tileLeft);
+      const tileHeight = Math.max(1, tileBottom - tileTop);
       const originalTile = document.createElement('canvas');
       originalTile.width = tileWidth; originalTile.height = tileHeight;
       const originalTileContext = originalTile.getContext('2d');
       if (!originalTileContext) throw new Error('Non posso controllare il colore del ritaglio.');
-      originalTileContext.drawImage(original, result.bounds.left * original.naturalWidth, result.bounds.top * original.naturalHeight,
-        (result.bounds.right - result.bounds.left) * original.naturalWidth,
-        (result.bounds.bottom - result.bounds.top) * original.naturalHeight, 0, 0, tileWidth, tileHeight);
+      originalTileContext.drawImage(
+        original,
+        result.pixelRect.left,
+        result.pixelRect.top,
+        result.pixelRect.width,
+        result.pixelRect.height,
+        0,
+        0,
+        tileWidth,
+        tileHeight,
+      );
       const stabilized = colorStabilizedRoomLayer(originalTile, generated[resultIndex], tileWidth, tileHeight);
       const fullPatch = document.createElement('canvas');
       const sharpMask = document.createElement('canvas');
@@ -1797,19 +1871,19 @@ export function RoomStudio() {
       const softContext = softMask.getContext('2d');
       if (!patchContext || !sharpContext || !softContext) throw new Error('Non posso fondere il ritaglio pulito.');
       patchContext.drawImage(stabilized, tileLeft, tileTop, tileWidth, tileHeight);
-      const resultPoints = result.regions.flatMap((region) => region.points);
-      const resultWidth = (Math.max(...resultPoints.map((point) => point.x)) - Math.min(...resultPoints.map((point) => point.x))) * width;
-      const resultHeight = (Math.max(...resultPoints.map((point) => point.y)) - Math.min(...resultPoints.map((point) => point.y))) * height;
-      const repairMargin = Math.min(40, Math.max(8, Math.round(Math.min(resultWidth, resultHeight) * .10)));
-      const shadowOffset = Math.round(repairMargin * .9);
+      const repairMargin = result.envelope.outsetSourcePx * Math.min(scaleX, scaleY);
+      const shadowOffset = result.envelope.shadowOffsetSourcePx * scaleY;
       sharpContext.fillStyle = '#ffffff'; sharpContext.strokeStyle = '#ffffff';
-      sharpContext.lineWidth = repairMargin * 2; sharpContext.lineJoin = 'round'; sharpContext.lineCap = 'round';
+      sharpContext.lineWidth = repairMargin * 2; sharpContext.lineJoin = 'round'; sharpContext.lineCap = 'butt';
       for (const region of result.regions) {
-        traceNormalized(sharpContext, region.points); sharpContext.fill(); sharpContext.stroke();
-        sharpContext.save(); sharpContext.translate(0, shadowOffset); traceNormalized(sharpContext, region.points); sharpContext.stroke(); sharpContext.restore();
+        traceNormalized(sharpContext, region.points); sharpContext.fill(); strokeNormalizedBoundary(sharpContext, region);
+        sharpContext.save(); sharpContext.translate(0, shadowOffset); strokeNormalizedBoundary(sharpContext, region); sharpContext.restore();
       }
       const feather = Math.min(6, Math.max(3, Math.round(Math.min(width, height) * .004)));
       softContext.filter = `blur(${feather}px)`;
+      softContext.drawImage(sharpMask, 0, 0);
+      softContext.filter = 'none';
+      softContext.globalCompositeOperation = 'destination-in';
       softContext.drawImage(sharpMask, 0, 0);
       patchContext.globalCompositeOperation = 'destination-in';
       patchContext.drawImage(softMask, 0, 0);
@@ -1818,20 +1892,19 @@ export function RoomStudio() {
       // The quality gate must receive the *actual* compositing envelope, not
       // the detector's tighter polygon.  The previous raw-polygon guide made
       // legitimate feather/shadow repairs look like unauthorized changes.
-      const authorizationMargin = repairMargin + feather * 3;
+      const authorizationMargin = repairMargin;
       authorizationContext.fillStyle = '#ff00ff';
       authorizationContext.strokeStyle = '#ff00ff';
       authorizationContext.lineWidth = authorizationMargin * 2;
       authorizationContext.lineJoin = 'round';
-      authorizationContext.lineCap = 'round';
+      authorizationContext.lineCap = 'butt';
       for (const region of result.regions) {
         traceNormalized(authorizationContext, region.points);
         authorizationContext.fill();
-        authorizationContext.stroke();
+        strokeNormalizedBoundary(authorizationContext, region);
         authorizationContext.save();
         authorizationContext.translate(0, shadowOffset);
-        traceNormalized(authorizationContext, region.points);
-        authorizationContext.stroke();
+        strokeNormalizedBoundary(authorizationContext, region);
         authorizationContext.restore();
       }
     }
@@ -1857,8 +1930,9 @@ export function RoomStudio() {
     mode: 'automatic' | 'local',
   ) {
     const source = await loadImageSource(sourceUrl);
-    const plans = planCleanupTiles(regions, mode === 'local' ? 1 : 3);
-    const results: Array<{ bounds: CleanupTileBounds; regions: CleanupRegion[]; image: string }> = [];
+    const sourceSize = { width: source.naturalWidth, height: source.naturalHeight };
+    const plans = planCleanupTiles(regions, mode === 'local' ? 4 : 5, sourceSize);
+    const results: CleanupTileResult[] = [];
     for (let index = 0; index < plans.length; index += 1) {
       const plan = plans[index];
       setNotice(mode === 'local'
@@ -1870,8 +1944,9 @@ export function RoomStudio() {
       form.append('mask', prepared.mask, `room-tile-mask-${index + 1}.png`);
       form.append('maskReference', prepared.maskReference, `room-tile-guide-${index + 1}.png`);
       form.append('localCrop', 'true');
+      const hasMultipleTargets = prepared.normalizedRegions.length > 1;
       let route = endpoint('/api/empty-room');
-      if (mode === 'local') {
+      if (mode === 'local' && !hasMultipleTargets) {
         route = endpoint('/api/clean-room-region');
         form.append('targetLabel', prepared.normalizedRegions[0].label);
         form.append('targetArea', JSON.stringify(prepared.normalizedRegions[0].points));
@@ -1885,7 +1960,14 @@ export function RoomStudio() {
         route, { method: 'POST', body: form }, 210000,
       );
       if (!response.ok || !result.image) throw new Error(result.message ?? 'Pulizia locale non disponibile.');
-      results.push({ bounds: prepared.bounds, regions: prepared.regions, image: result.image });
+      results.push({
+        bounds: prepared.bounds,
+        pixelRect: prepared.pixelRect,
+        sourceSize: prepared.sourceSize,
+        envelope: prepared.envelope,
+        regions: prepared.regions,
+        image: result.image,
+      });
     }
     return composeCleanupTiles(sourceUrl, results, protectedSurfaces);
   }
@@ -2597,15 +2679,30 @@ export function RoomStudio() {
     setIsEmptyingRoom(true); setError(null);
     setShowProcessedPreview(false);
     setSurfaces(baselineSurfaces);
-    setNotice('Grok sta delimitando automaticamente tutti i mobili. Pareti, pavimento e aperture resteranno pixel per pixel uguali.');
+    setNotice('Terra controlla se la stanza va svuotata; Grok delimita soltanto gli oggetti da rimuovere. Pareti, pavimento e aperture resteranno protetti.');
     try {
       const detectionImage = await createGeometryInput(room.previewUrl);
       const detectionForm = new FormData();
       detectionForm.append('image', detectionImage, 'room-objects.jpg');
       detectionForm.append('mode', 'all');
-      let detected: Awaited<ReturnType<typeof requestJson<{ regions?: CleanupRegion[]; message?: string }>>>;
+      type RoomEmptyingAudit = {
+        needsEmptying: boolean;
+        removableObjectCount: number;
+        majorCategories: string[];
+        confidence: number;
+        reason: string;
+      };
+      let detected: Awaited<ReturnType<typeof requestJson<{
+        regions?: CleanupRegion[];
+        roomAudit?: RoomEmptyingAudit | null;
+        message?: string;
+      }>>>;
       try {
-        detected = await requestJson<{ regions?: CleanupRegion[]; message?: string }>(
+        detected = await requestJson<{
+          regions?: CleanupRegion[];
+          roomAudit?: RoomEmptyingAudit | null;
+          message?: string;
+        }>(
           endpoint('/api/detect-object'), { method: 'POST', body: detectionForm }, 90000,
         );
         if (!detected.response.ok) throw new Error(detected.result.message ?? 'Non riesco a delimitare i mobili.');
@@ -2616,13 +2713,21 @@ export function RoomStudio() {
         return;
       }
       const regions = (detected.result.regions ?? []).filter((region) => isValidPolygon(region.points));
+      const roomAudit = detected.result.roomAudit;
+      const categories = roomAudit?.majorCategories.filter(Boolean).slice(0, 5).join(', ') ?? '';
+      if (roomAudit && roomAudit.confidence >= .7 && !roomAudit.needsEmptying) {
+        setNotice(`Terra conferma che la stanza è già vuota${roomAudit.reason ? `: ${roomAudit.reason}` : '.'} Nessuna parte della foto è stata modificata.`);
+        return;
+      }
       if (!regions.length) {
         setIsPickingCleanup(true);
-        setNotice('Non vedo mobili da rimuovere: se la stanza è già vuota puoi continuare. Se ne è rimasto uno, tocca il suo centro per indicarlo.');
+        setNotice(roomAudit?.needsEmptying
+          ? `Terra vede elementi da rimuovere${categories ? ` (${categories})` : ''}, ma Grok non è riuscito a delimitarli con precisione. Tocca il centro di un mobile per indicarlo; la stanza non verrà modificata automaticamente.`
+          : 'Il controllo non ha individuato con sufficiente certezza zone da rimuovere. Se la stanza è già vuota puoi continuare; altrimenti tocca il centro di un mobile per indicarlo.');
         return;
       }
 
-      setNotice(`${regions.length} zone da pulire riconosciute. Le elaboro in ritagli locali e proteggo ogni altro pixel.`);
+      setNotice(`${roomAudit?.needsEmptying ? 'Terra ha confermato che la stanza va svuotata. ' : ''}Grok ha delimitato ${regions.length} zone da pulire${categories ? `: ${categories}` : ''}. Le elaboro in ritagli locali e proteggo ogni altro pixel.`);
       const architecturalAnchors = baselineSurfaces.filter((surface) => surface.frozen || surface.kind === 'door' || surface.kind === 'window');
       const cleanupResult = await generateCleanupTiles(room.previewUrl, regions, architecturalAnchors, 'automatic');
       const protectedPreview = cleanupResult.previewUrl;

@@ -175,7 +175,69 @@ describe('RoomStudio', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
     fireEvent.click(screen.getByRole('button', { name: '⌂ Svuota la stanza' }));
 
-    expect(await screen.findByText(/Non vedo mobili da rimuovere/)).toBeInTheDocument();
+    expect(await screen.findByText(/non ha individuato con sufficiente certezza zone da rimuovere/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Annulla selezione' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the original untouched when Terra confirms that the room is already empty', async () => {
+    mockMaterialPhotoCrop();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/capabilities')) {
+        return new Response(JSON.stringify({ aiReady: true, providerLabel: 'Grok', auditorReady: true }), { status: 200 });
+      }
+      if (url.includes('/api/detect-object')) {
+        return new Response(JSON.stringify({
+          regions: [{ label: 'Ombra', points: [{ x: .2, y: .2 }, { x: .3, y: .2 }, { x: .3, y: .3 }, { x: .2, y: .3 }] }],
+          roomAudit: {
+            needsEmptying: false,
+            removableObjectCount: 0,
+            majorCategories: [],
+            confidence: .94,
+            reason: 'sono visibili soltanto superfici architettoniche',
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: '⌂ Svuota la stanza' }));
+
+    expect(await screen.findByText(/Terra conferma che la stanza è già vuota/)).toBeInTheDocument();
+    expect(screen.getByText('Originale intatto')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('asks for a manual target when Terra sees furniture but Grok has no safe polygon', async () => {
+    mockMaterialPhotoCrop();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/capabilities')) {
+        return new Response(JSON.stringify({ aiReady: true, providerLabel: 'Grok', auditorReady: true }), { status: 200 });
+      }
+      if (url.includes('/api/detect-object')) {
+        return new Response(JSON.stringify({
+          regions: [],
+          roomAudit: {
+            needsEmptying: true,
+            removableObjectCount: 5,
+            majorCategories: ['letto', 'armadio'],
+            confidence: .96,
+            reason: 'sono presenti arredi',
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: '⌂ Svuota la stanza' }));
+
+    expect(await screen.findByText(/Terra vede elementi da rimuovere \(letto, armadio\)/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Annulla selezione' })).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });

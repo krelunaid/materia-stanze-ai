@@ -38,7 +38,7 @@ export async function POST(request: Request) {
         points: Array.isArray(region.points) ? region.points.slice(0, 16).map((point) => ({
           x: Math.min(1, Math.max(0, Number(point.x))), y: Math.min(1, Math.max(0, Number(point.y))),
         })).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)) : [],
-      })).filter((region) => region.points.length >= 4) : [];
+      })).filter((region) => region.points.length >= 3) : [];
       if (safe.length) targetAreas = JSON.stringify(safe);
     } catch {
       targetAreas = '';

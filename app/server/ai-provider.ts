@@ -8,6 +8,11 @@ export type AiProvider = {
   apiKey: string;
 };
 
+export type VisionAuditor = AiProvider & {
+  id: 'openai';
+  model: string;
+};
+
 export type ProductCleaner = {
   id: 'bria' | 'grok';
   label: 'BRIA RMBG 2.0' | 'Grok Imagine 2.0';
@@ -41,6 +46,7 @@ export type DetectedRoomSurface = {
   confidence: number;
   slot?: GeometrySlot;
   parentId?: string;
+  audited?: boolean;
 };
 
 export type DetectedObjectRegion = {
@@ -99,6 +105,14 @@ export type RoomCleanupVerification = {
   noVisiblePatchArtifacts: boolean;
   noNewObjects: boolean;
   realisticContinuation: boolean;
+  confidence: number;
+  reason: string;
+};
+
+export type RoomEmptyingAudit = {
+  needsEmptying: boolean;
+  removableObjectCount: number;
+  majorCategories: string[];
   confidence: number;
   reason: string;
 };
@@ -163,6 +177,19 @@ const roomCleanupVerificationSchema = {
     reason: { type: 'string' },
   },
   required: ['sameCameraAndCrop', 'sameArchitecture', 'openingsPreserved', 'removableTargetsRemoved', 'noVisiblePatchArtifacts', 'noNewObjects', 'realisticContinuation', 'confidence', 'reason'],
+} as const;
+
+const roomEmptyingAuditSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    needsEmptying: { type: 'boolean' },
+    removableObjectCount: { type: 'integer', minimum: 0, maximum: 50 },
+    majorCategories: { type: 'array', maxItems: 12, items: { type: 'string' } },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
+    reason: { type: 'string' },
+  },
+  required: ['needsEmptying', 'removableObjectCount', 'majorCategories', 'confidence', 'reason'],
 } as const;
 
 const productBoundsSchema = {
@@ -324,6 +351,43 @@ const roomGeometrySchema = {
   required: ['surfaces'],
 } as const;
 
+const architecturalOpeningAuditSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    openings: {
+      type: 'array',
+      minItems: 0,
+      maxItems: 16,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          type: { type: 'string', enum: ['door', 'window'] },
+          points: {
+            type: 'array',
+            minItems: 4,
+            maxItems: 4,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                x: { type: 'number', minimum: 0, maximum: 1 },
+                y: { type: 'number', minimum: 0, maximum: 1 },
+              },
+              required: ['x', 'y'],
+            },
+          },
+          confidence: { type: 'number', minimum: 0, maximum: 1 },
+          evidence: { type: 'string' },
+        },
+        required: ['type', 'points', 'confidence', 'evidence'],
+      },
+    },
+  },
+  required: ['openings'],
+} as const;
+
 export function getAiProvider(environment: Record<string, string | undefined> = process.env): AiProvider | null {
   const requested = environment.AI_PROVIDER?.trim().toLowerCase();
   if (requested === 'grok' || requested === 'xai') {
@@ -335,6 +399,21 @@ export function getAiProvider(environment: Record<string, string | undefined> = 
   if (environment.XAI_API_KEY) return { id: 'grok', label: 'Grok', apiKey: environment.XAI_API_KEY };
   if (environment.OPENAI_API_KEY) return { id: 'openai', label: 'OpenAI', apiKey: environment.OPENAI_API_KEY };
   return null;
+}
+
+export function getVisionAuditor(
+  environment: Record<string, string | undefined> = process.env,
+  primaryProvider?: AiProvider | null,
+): VisionAuditor | null {
+  const requested = (environment.VISION_AUDITOR_PROVIDER ?? 'openai').trim().toLowerCase();
+  if (['off', 'disabled', 'none'].includes(requested)) return null;
+  if (requested !== 'openai' || !environment.OPENAI_API_KEY || primaryProvider?.id === 'openai') return null;
+  return {
+    id: 'openai',
+    label: 'OpenAI',
+    apiKey: environment.OPENAI_API_KEY,
+    model: environment.OPENAI_VISION_MODEL?.trim() || 'gpt-5.6-terra',
+  };
 }
 
 export function getRenderProvider(environment: Record<string, string | undefined> = process.env): AiProvider | null {
@@ -1195,7 +1274,8 @@ function consensusOpening(group: DetectedRoomSurface[], floor: DetectedRoomSurfa
   // real side window toward the centre. Keep the strongest edge-aligned
   // candidate and let the geometry validator reject impossible placement.
   const best = ranked[0];
-  return normalizeOpeningKind({ ...best, points: orderQuadClockwise(best.points) }, floor);
+  const consensus = normalizeOpeningKind({ ...best, points: orderQuadClockwise(best.points) }, floor);
+  return group.some((candidate) => candidate.audited) ? { ...consensus, audited: true } : consensus;
 }
 
 function hasStrongRepeatedOpeningEvidence(
@@ -1307,6 +1387,134 @@ export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[]
     ...base.filter((surface) => surface.kind !== 'door' && surface.kind !== 'window'),
     ...bestOpenings,
   ]));
+}
+
+export function mergeArchitecturalOpeningAudit(
+  primarySurfaces: DetectedRoomSurface[],
+  auditedOpenings: DetectedRoomSurface[],
+) {
+  const primary = normalizeRoomSurfaces(primarySurfaces);
+  const floor = primary.find((surface) => surface.kind === 'floor');
+  const structural = primary.filter((surface) => surface.kind !== 'door' && surface.kind !== 'window');
+  const openings = [
+    ...primary.filter((surface) => surface.kind === 'door' || surface.kind === 'window'),
+    ...auditedOpenings.filter((surface) => (
+      (surface.kind === 'door' || surface.kind === 'window')
+      && surface.confidence >= .72
+      && surface.points.length === 4
+      && isSimpleRoomPolygon(surface.points)
+    )).map((surface) => ({
+      ...surface,
+      points: orderQuadClockwise(surface.points.map((point) => ({
+        x: finiteUnit(point.x),
+        y: finiteUnit(point.y),
+      }))),
+    })),
+  ];
+
+  const groups: DetectedRoomSurface[][] = [];
+  for (const opening of openings) {
+    const group = groups.find((items) => items.some((item) => openingOverlap(item, opening) >= .18));
+    if (group) group.push(opening);
+    else groups.push([opening]);
+  }
+  const audited = groups
+    .map((group) => consensusOpening(group, floor))
+    .sort((left, right) => right.confidence - left.confidence)
+    .slice(0, Math.max(0, 16 - structural.length));
+  return normalizeRoomSurfaces([...structural, ...audited]);
+}
+
+export async function detectArchitecturalOpenings(auditor: VisionAuditor, image: File) {
+  const imageUrl = await fileToDataUri(image);
+  const prompt = [
+    'You are an independent architectural-opening auditor. Inspect the complete uncropped interior photograph before answering.',
+    'List every visible fixed window, French window, glazed wall, skylight, door and doorway, including partially cropped openings at image edges and openings partly hidden by furniture or curtains.',
+    'Return one item per physical opening. A multi-pane or full-height glazed assembly is one opening bounded by its complete outer architectural frame.',
+    'Use exactly four perspective-correct outer corners in clockwise order. Coordinates are normalized to the complete source image: x=0 left, x=1 right, y=0 top, y=1 bottom.',
+    'Use type=door only when the opening reaches a passable floor threshold. Use type=window when a sill or wall remains below it. A full-height glazed wall or French window that reaches the floor is a door.',
+    'Do not classify mirrors, pictures, televisions, air conditioners, cabinets, niches, shadows, reflections or bright wall patches as openings.',
+    'Inspect left wall, back wall, right wall, ceiling and every image edge separately. Low contrast, overexposure, curtains and perspective foreshortening are not reasons to omit a real frame.',
+    'confidence measures the accuracy of the four outer-frame corners. evidence is one short factual Italian phrase describing the visible frame, glass, sill or threshold.',
+    'Return only the structured result. You are an auditor: never invent, edit or repair pixels.',
+  ].join('\n');
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${auditor.apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: auditor.model,
+      input: [{
+        role: 'user',
+        content: [
+          { type: 'input_image', image_url: imageUrl, detail: 'original' },
+          { type: 'input_text', text: prompt },
+        ],
+      }],
+      max_output_tokens: 2400,
+      reasoning: { effort: 'medium' },
+      text: { format: { type: 'json_schema', name: 'architectural_opening_audit', schema: architecturalOpeningAuditSchema, strict: true } },
+      store: false,
+    }),
+    signal: AbortSignal.timeout(65000),
+  });
+  const payload = await response.json() as ResponsesPayload;
+  if (!response.ok) throw new Error(payload.error?.message ?? 'Controllo indipendente delle aperture non disponibile.');
+  const parsed = JSON.parse(responseText(payload).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) as {
+    openings?: Array<{ type?: 'door' | 'window'; points?: Array<{ x: number; y: number }>; confidence?: number }>;
+  };
+  return (parsed.openings ?? []).slice(0, 16).map((opening, index) => ({
+    name: opening.type === 'door' ? `Porta verificata ${index + 1}` : `Finestra verificata ${index + 1}`,
+    kind: opening.type === 'door' ? 'door' as const : 'window' as const,
+    points: orderQuadClockwise((opening.points ?? []).slice(0, 4).map((point) => ({
+      x: finiteUnit(point.x),
+      y: finiteUnit(point.y),
+    }))),
+    confidence: finiteUnit(opening.confidence),
+    audited: true,
+  })).filter((surface) => surface.points.length === 4 && surface.confidence >= .72 && isSimpleRoomPolygon(surface.points));
+}
+
+export async function auditRoomEmptyingNeed(auditor: VisionAuditor, image: File): Promise<RoomEmptyingAudit> {
+  const imageUrl = await fileToDataUri(image);
+  const prompt = [
+    'You are the independent intake auditor for an interior-design room-emptying workflow.',
+    'Decide whether this exact room photograph needs emptying before materials or furniture are applied.',
+    'needsEmptying=true when at least one visible non-architectural item should be removed to obtain a genuinely empty real-estate room.',
+    'Count loose furniture and decor as well as fitted kitchens, fitted wardrobes, integrated appliances, bathroom vanities, mirrors, cabinets, beds, sofas, tables, chairs, lamps, rugs, curtains, pictures, plants and clutter.',
+    'Attachment is not architecture. Preserve only the building shell: walls, floors, ceilings, structural columns or beams, stairs, doors, windows, openings and skirting.',
+    'needsEmptying=false only when careful inspection confirms that no removable furnishing, appliance, decor or clutter remains. A room with only architectural surfaces is already empty.',
+    'removableObjectCount is an honest approximate count of separate removable groups. majorCategories contains short Italian category labels, not brand names.',
+    'Return one short factual Italian reason. Do not propose polygons and never generate or edit pixels.',
+  ].join('\n');
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${auditor.apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: auditor.model,
+      input: [{ role: 'user', content: [
+        { type: 'input_image', image_url: imageUrl, detail: 'original' },
+        { type: 'input_text', text: prompt },
+      ] }],
+      max_output_tokens: 900,
+      reasoning: { effort: 'medium' },
+      text: { format: { type: 'json_schema', name: 'room_emptying_audit', schema: roomEmptyingAuditSchema, strict: true } },
+      store: false,
+    }),
+    signal: AbortSignal.timeout(55000),
+  });
+  const payload = await response.json() as ResponsesPayload;
+  if (!response.ok) throw new Error(payload.error?.message ?? 'Controllo della stanza non disponibile.');
+  const parsed = JSON.parse(responseText(payload).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) as Partial<RoomEmptyingAudit>;
+  const count = Math.max(0, Math.min(50, Math.round(Number(parsed.removableObjectCount) || 0)));
+  const confidence = finiteUnit(parsed.confidence);
+  return {
+    needsEmptying: parsed.needsEmptying === true,
+    removableObjectCount: count,
+    majorCategories: (Array.isArray(parsed.majorCategories) ? parsed.majorCategories : [])
+      .map((category) => String(category).trim().slice(0, 60)).filter(Boolean).slice(0, 12),
+    confidence,
+    reason: String(parsed.reason || '').trim().slice(0, 320),
+  };
 }
 
 export async function detectRoomSurfaces(
@@ -1869,10 +2077,12 @@ export async function verifyRoomCleanup(provider: AiProvider, input: {
     method: 'POST',
     headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: provider.id === 'grok' ? 'grok-4.6' : 'gpt-5.4-mini',
+      model: provider.id === 'grok'
+        ? 'grok-4.6'
+        : ('model' in provider && typeof provider.model === 'string' ? provider.model : 'gpt-5.4-mini'),
       input: [{ role: 'user', content }],
       max_output_tokens: 600,
-      reasoning: { effort: 'low' },
+      reasoning: { effort: 'model' in provider ? 'medium' : 'low' },
       text: { format: { type: 'json_schema', name: 'room_cleanup_verification', schema: roomCleanupVerificationSchema, strict: true } },
       store: false,
     }),

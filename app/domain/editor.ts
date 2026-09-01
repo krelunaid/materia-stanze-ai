@@ -13,6 +13,7 @@ export type Surface = {
   slot?: 'left' | 'center' | 'right' | 'extra';
   parentId?: string;
   source?: 'ai' | 'manual' | 'demo';
+  audited?: boolean;
 };
 
 export const surfaceLabels: Record<SurfaceKind, string> = {

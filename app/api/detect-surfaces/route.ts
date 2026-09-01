@@ -1,4 +1,10 @@
-import { detectRoomSurfaces, getAiProvider } from '../../server/ai-provider';
+import {
+  detectArchitecturalOpenings,
+  detectRoomSurfaces,
+  getAiProvider,
+  getVisionAuditor,
+  mergeArchitecturalOpeningAudit,
+} from '../../server/ai-provider';
 import { guardAiRequest, handleAiOptions } from '../../server/ai-api-guard';
 
 function json(body: unknown, headers: Headers, status = 200) {
@@ -25,8 +31,23 @@ export async function POST(request: Request) {
       return json({ message: 'La fotografia deve essere in formato JPG o PNG.' }, headers, 400);
     }
     if (image.size > 20 * 1024 * 1024) return json({ message: 'La fotografia supera il limite di 20 MB.' }, headers, 413);
-    const surfaces = await detectRoomSurfaces(provider, image, { openingAudit: true, source: 'photo' });
-    return json({ surfaces, provider: provider.id }, headers);
+    const auditor = getVisionAuditor(process.env, provider);
+    const [primaryResult, auditResult] = await Promise.allSettled([
+      detectRoomSurfaces(provider, image, { openingAudit: true, source: 'photo' }),
+      auditor ? detectArchitecturalOpenings(auditor, image) : Promise.resolve([]),
+    ]);
+    if (primaryResult.status === 'rejected') throw primaryResult.reason;
+    const auditedOpenings = auditResult.status === 'fulfilled' ? auditResult.value : [];
+    const surfaces = auditedOpenings.length
+      ? mergeArchitecturalOpeningAudit(primaryResult.value, auditedOpenings)
+      : primaryResult.value;
+    return json({
+      surfaces,
+      provider: provider.id,
+      auditor: auditor?.id ?? null,
+      auditorModel: auditor?.model ?? null,
+      auditedOpenings: auditedOpenings.length,
+    }, headers);
   } catch (caught) {
     return json({
       message: caught instanceof Error ? caught.message : 'Non sono riuscito a riconoscere la geometria della stanza.',

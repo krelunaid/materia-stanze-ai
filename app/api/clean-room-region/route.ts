@@ -29,7 +29,7 @@ export async function POST(request: Request) {
         x: Math.min(1, Math.max(0, Number(point.x))),
         y: Math.min(1, Math.max(0, Number(point.y))),
       })).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)) : [];
-      if (points.length >= 4) targetArea = JSON.stringify(points);
+      if (points.length >= 3) targetArea = JSON.stringify(points);
     } catch {
       targetArea = '';
     }

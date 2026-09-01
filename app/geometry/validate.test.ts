@@ -62,6 +62,17 @@ describe('validateRoomGeometry', () => {
     expect(result.rejected).toContainEqual({ kind: 'window', reason: 'opening-without-wall' });
   });
 
+  it('keeps a high-confidence independently audited opening when its wall plane was not segmented', () => {
+    const edgeWindow: GeometryCandidate = {
+      name: 'Vetrata laterale verificata', kind: 'window', confidence: .94, audited: true,
+      points: [{ x: .01, y: .12 }, { x: .18, y: .12 }, { x: .18, y: .56 }, { x: .01, y: .56 }],
+    };
+    const geometryWithoutLeftWall = [base[1], base[2], edgeWindow];
+    const result = validateRoomGeometry(geometryWithoutLeftWall, { source: 'user' });
+    expect(result.surfaces).toContainEqual(expect.objectContaining({ kind: 'window', audited: true, slot: 'left' }));
+    expect(result.rejected).not.toContainEqual({ kind: 'window', reason: 'opening-without-wall' });
+  });
+
   it('allows the canonical window only for the explicit demo source', () => {
     const demoWall: GeometryCandidate = {
       id: 'demo-wall', name: 'Muro demo', kind: 'wall', confidence: .99,

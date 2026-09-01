@@ -4,7 +4,10 @@ export type CleanupTileRegion = {
   label: string;
   points: Point[];
   confidence: number;
+  internalEdges?: CleanupTileSplitEdge[];
 };
+
+export type CleanupTileSplitEdge = { axis: 'x' | 'y'; value: number };
 
 export type CleanupTileBounds = {
   left: number;
@@ -12,6 +15,26 @@ export type CleanupTileBounds = {
   right: number;
   bottom: number;
 };
+
+export type CleanupTileImageSize = { width: number; height: number };
+
+export type CleanupTilePixelRect = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  width: number;
+  height: number;
+};
+
+export type CleanupTileMaskEnvelope = {
+  outsetSourcePx: number;
+  shadowOffsetSourcePx: number;
+};
+
+// A crop may be large enough to contain a bed or a fitted kitchen, but a true
+// full-frame regeneration is never accepted by the local-cleanup pipeline.
+export const CLEANUP_MAX_TILE_AREA_RATIO = .65;
 
 export type CleanupTilePlan = {
   bounds: CleanupTileBounds;
@@ -72,44 +95,160 @@ export function snapCleanupTileBounds(
   imageWidth: number,
   imageHeight: number,
 ): CleanupTileBounds {
-  const left = Math.floor(bounds.left * imageWidth);
-  const top = Math.floor(bounds.top * imageHeight);
-  const right = Math.ceil(bounds.right * imageWidth);
-  const bottom = Math.ceil(bounds.bottom * imageHeight);
+  const size = { width: imageWidth, height: imageHeight };
+  return cleanupTileBoundsFromRect(snapCleanupTileRect(bounds, size), size);
+}
+
+export function cleanupTileBoundsFromRect(rect: CleanupTilePixelRect, size: CleanupTileImageSize): CleanupTileBounds {
+  return {
+    left: rect.left / size.width,
+    top: rect.top / size.height,
+    right: rect.right / size.width,
+    bottom: rect.bottom / size.height,
+  };
+}
+
+export function snapCleanupTileRect(bounds: CleanupTileBounds, size: CleanupTileImageSize): CleanupTilePixelRect {
+  const left = Math.floor(bounds.left * size.width);
+  const top = Math.floor(bounds.top * size.height);
+  const right = Math.ceil(bounds.right * size.width);
+  const bottom = Math.ceil(bounds.bottom * size.height);
   const requiredWidth = Math.max(1, right - left);
   const requiredHeight = Math.max(1, bottom - top);
   const candidates = supportedRatios.flatMap((ratio) => {
     const units = Math.ceil(Math.max(requiredWidth / ratio.width, requiredHeight / ratio.height));
     const width = units * ratio.width; const height = units * ratio.height;
-    return width <= imageWidth && height <= imageHeight ? [{ width, height, area: width * height }] : [];
+    return width <= size.width && height <= size.height ? [{ width, height, area: width * height }] : [];
   }).sort((first, second) => first.area - second.area);
   const chosen = candidates[0];
-  if (!chosen) return bounds;
+  if (!chosen) throw new Error('La zona richiesta è troppo estesa per una pulizia locale sicura. Indica un mobile alla volta.');
   const centerX = (left + right) / 2; const centerY = (top + bottom) / 2;
   let pixelLeft = Math.round(centerX - chosen.width / 2);
   let pixelTop = Math.round(centerY - chosen.height / 2);
-  pixelLeft = Math.min(imageWidth - chosen.width, Math.max(0, pixelLeft));
-  pixelTop = Math.min(imageHeight - chosen.height, Math.max(0, pixelTop));
+  pixelLeft = Math.min(size.width - chosen.width, Math.max(0, pixelLeft));
+  pixelTop = Math.min(size.height - chosen.height, Math.max(0, pixelTop));
   return {
-    left: pixelLeft / imageWidth,
-    top: pixelTop / imageHeight,
-    right: (pixelLeft + chosen.width) / imageWidth,
-    bottom: (pixelTop + chosen.height) / imageHeight,
+    left: pixelLeft,
+    top: pixelTop,
+    right: pixelLeft + chosen.width,
+    bottom: pixelTop + chosen.height,
+    width: chosen.width,
+    height: chosen.height,
   };
+}
+
+export function cleanupTileMaskEnvelope(
+  regions: CleanupTileRegion[],
+  size: CleanupTileImageSize,
+): CleanupTileMaskEnvelope {
+  const bounds = regionBounds(regions);
+  const shortSide = Math.min(size.width, size.height);
+  const targetWidth = (bounds.right - bounds.left) * size.width;
+  const targetHeight = (bounds.bottom - bounds.top) * size.height;
+  const outsetSourcePx = Math.min(
+    shortSide * .025,
+    Math.max(shortSide * .006, Math.min(targetWidth, targetHeight) * .10),
+  );
+  return { outsetSourcePx, shadowOffsetSourcePx: outsetSourcePx * .9 };
+}
+
+export function cleanupTileEdgeIsInternal(
+  region: CleanupTileRegion,
+  first: Point,
+  second: Point,
+) {
+  return (region.internalEdges ?? []).some((edge) => (
+    Math.abs(first[edge.axis] - edge.value) <= .00001
+    && Math.abs(second[edge.axis] - edge.value) <= .00001
+  ));
 }
 
 export function cleanupTileRatioMatches(width: number, height: number, expectedWidth: number, expectedHeight: number) {
   if (width <= 0 || height <= 0 || expectedWidth <= 0 || expectedHeight <= 0) return false;
-  return Math.abs(Math.log((width / height) / (expectedWidth / expectedHeight))) <= .015;
+  return Math.abs(Math.log((width / height) / (expectedWidth / expectedHeight))) <= .006;
 }
 
 /**
  * Splits furniture into a few left-to-right crops. A local crop gives an image
  * editor enough wall/floor context without letting it recompose the full room.
  */
-export function planCleanupTiles(regions: CleanupTileRegion[], maximumTiles = 3): CleanupTilePlan[] {
+export function planCleanupTiles(
+  regions: CleanupTileRegion[],
+  maximumTiles = 3,
+  imageSize?: CleanupTileImageSize,
+): CleanupTilePlan[] {
   if (!regions.length) return [];
-  const sorted = [...regions].sort((first, second) => {
+  const safeBounds = (bounds: CleanupTileBounds) => {
+    if (!imageSize) return true;
+    try {
+      const rect = snapCleanupTileRect(bounds, imageSize);
+      return rect.width * rect.height / (imageSize.width * imageSize.height) <= CLEANUP_MAX_TILE_AREA_RATIO;
+    } catch {
+      return false;
+    }
+  };
+  const safeGroup = (group: CleanupTileRegion[]) => safeBounds(paddedBounds(group));
+  const clipAt = (points: Point[], axis: 'x' | 'y', value: number, keepLower: boolean) => {
+    const clipped: Point[] = [];
+    const inside = (point: Point) => keepLower ? point[axis] <= value : point[axis] >= value;
+    for (let index = 0; index < points.length; index += 1) {
+      const current = points[index];
+      const next = points[(index + 1) % points.length];
+      const currentInside = inside(current);
+      const nextInside = inside(next);
+      if (currentInside) clipped.push(current);
+      if (currentInside !== nextInside) {
+        const delta = next[axis] - current[axis];
+        if (Math.abs(delta) > .000001) {
+          const progress = (value - current[axis]) / delta;
+          clipped.push({
+            x: axis === 'x' ? value : current.x + (next.x - current.x) * progress,
+            y: axis === 'y' ? value : current.y + (next.y - current.y) * progress,
+          });
+        }
+      }
+    }
+    return clipped.filter((point, index) => {
+      const previous = clipped[(index + clipped.length - 1) % clipped.length];
+      return !previous || Math.hypot(point.x - previous.x, point.y - previous.y) > .00001;
+    });
+  };
+  const isConvex = (points: Point[]) => {
+    let direction = 0;
+    for (let index = 0; index < points.length; index += 1) {
+      const first = points[index];
+      const second = points[(index + 1) % points.length];
+      const third = points[(index + 2) % points.length];
+      const cross = (second.x - first.x) * (third.y - second.y)
+        - (second.y - first.y) * (third.x - second.x);
+      if (Math.abs(cross) <= .000001) continue;
+      const nextDirection = Math.sign(cross);
+      if (direction && direction !== nextDirection) return false;
+      direction = nextDirection;
+    }
+    return direction !== 0;
+  };
+  const splitUnsafeRegion = (region: CleanupTileRegion, depth = 0): CleanupTileRegion[] => {
+    if (!imageSize || safeGroup([region])) return [region];
+    if (depth >= 3 || !isConvex(region.points)) {
+      throw new Error('La zona richiesta è troppo estesa per una pulizia locale sicura. Indica una parte più piccola del mobile.');
+    }
+    const bounds = regionBounds([region]);
+    const axis: 'x' | 'y' = bounds.right - bounds.left >= bounds.bottom - bounds.top ? 'x' : 'y';
+    const cut = axis === 'x' ? (bounds.left + bounds.right) / 2 : (bounds.top + bounds.bottom) / 2;
+    const halves = [clipAt(region.points, axis, cut, true), clipAt(region.points, axis, cut, false)]
+      .filter((points) => points.length >= 3);
+    if (halves.length !== 2) {
+      throw new Error('La zona richiesta è troppo estesa per una pulizia locale sicura. Indica una parte più piccola del mobile.');
+    }
+    return halves.flatMap((points, index) => splitUnsafeRegion({
+      ...region,
+      label: `${region.label} · parte ${index + 1}`,
+      points,
+      internalEdges: [...(region.internalEdges ?? []), { axis, value: cut }],
+    }, depth + 1));
+  };
+  const sorted = regions.flatMap((region) => splitUnsafeRegion(region)).sort((first, second) => {
     const firstX = first.points.reduce((sum, point) => sum + point.x, 0) / first.points.length;
     const secondX = second.points.reduce((sum, point) => sum + point.x, 0) / second.points.length;
     return firstX - secondX;
@@ -123,7 +262,7 @@ export function planCleanupTiles(regions: CleanupTileRegion[], maximumTiles = 3)
       const other = regionBounds(group);
       const horizontalGap = Math.max(0, Math.max(bounds.left, other.left) - Math.min(bounds.right, other.right));
       const verticalGap = Math.max(0, Math.max(bounds.top, other.top) - Math.min(bounds.bottom, other.bottom));
-      return horizontalGap <= .07 && verticalGap <= .14;
+      return horizontalGap <= .07 && verticalGap <= .14 && safeGroup([...group, region]);
     });
     if (matching) matching.push(region); else groups.push([region]);
   }
@@ -138,16 +277,23 @@ export function planCleanupTiles(regions: CleanupTileRegion[], maximumTiles = 3)
     let closestDistance = Number.POSITIVE_INFINITY;
     for (let first = 0; first < groups.length; first += 1) {
       for (let second = first + 1; second < groups.length; second += 1) {
+        if (!safeGroup([...groups[first], ...groups[second]])) continue;
         const a = center(groups[first]); const b = center(groups[second]);
         const distance = Math.hypot(a.x - b.x, (a.y - b.y) * .7);
         if (distance < closestDistance) { closestDistance = distance; closest = [first, second]; }
       }
+    }
+    if (!Number.isFinite(closestDistance)) {
+      throw new Error('Le zone sono troppo distanti per una pulizia automatica sicura. Usa “Pulisci un residuo” su un mobile alla volta.');
     }
     groups[closest[0]].push(...groups[closest[1]]);
     groups.splice(closest[1], 1);
   }
   return groups.filter((group) => group.length).map((group) => {
     const bounds = paddedBounds(group);
+    if (!safeBounds(bounds)) {
+      throw new Error('La zona richiesta è troppo estesa per una pulizia locale sicura. Usa “Pulisci un residuo” su un mobile alla volta.');
+    }
     return {
       bounds,
       regions: group,

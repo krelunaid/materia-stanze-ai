@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { acceptsFurnitureRender, acceptsRoomCleanup, chooseSupportedImageAspectRatio, classifyProductPhoto, detectMovableObjectRegions, detectObjectRegion, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, knownRetailerProductImage, normalizeCleanupRegions, normalizeProductPhotoClassification, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
+import { acceptsFurnitureRender, acceptsRoomCleanup, auditRoomEmptyingNeed, chooseSupportedImageAspectRatio, classifyProductPhoto, detectArchitecturalOpenings, detectMovableObjectRegions, detectObjectRegion, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, getVisionAuditor, knownRetailerProductImage, mergeArchitecturalOpeningAudit, normalizeCleanupRegions, normalizeProductPhotoClassification, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -30,6 +30,85 @@ describe('getAiProvider', () => {
     const environment = { XAI_API_KEY: 'xai-test', OPENAI_API_KEY: 'openai-test' };
     expect(getAiProvider(environment)?.id).toBe('grok');
     expect(getRenderProvider(environment)).toEqual({ id: 'openai', label: 'OpenAI', apiKey: 'openai-test' });
+  });
+
+  it('configures Terra as an independent opening auditor only beside Grok', () => {
+    const environment = { XAI_API_KEY: 'xai-test', OPENAI_API_KEY: 'openai-test' };
+    expect(getVisionAuditor(environment, getAiProvider(environment))).toEqual({
+      id: 'openai', label: 'OpenAI', apiKey: 'openai-test', model: 'gpt-5.6-terra',
+    });
+    expect(getVisionAuditor({ ...environment, OPENAI_VISION_MODEL: 'gpt-5.6-sol' }, getAiProvider(environment))?.model)
+      .toBe('gpt-5.6-sol');
+    expect(getVisionAuditor({ ...environment, VISION_AUDITOR_PROVIDER: 'off' }, getAiProvider(environment))).toBeNull();
+    expect(getVisionAuditor(environment, { id: 'openai', label: 'OpenAI', apiKey: 'openai-test' })).toBeNull();
+  });
+
+  it('asks the independent auditor for original-detail four-corner openings', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({
+        openings: [{
+          type: 'window', confidence: .93, evidence: 'Telaio e davanzale visibili',
+          points: [{ x: .2, y: .2 }, { x: .4, y: .2 }, { x: .4, y: .55 }, { x: .2, y: .55 }],
+        }],
+      }) }] }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await expect(detectArchitecturalOpenings(
+      { id: 'openai', label: 'OpenAI', apiKey: 'openai-test', model: 'gpt-5.6-terra' },
+      new File([new Uint8Array([1, 2, 3])], 'room.jpg', { type: 'image/jpeg' }),
+    )).resolves.toEqual([expect.objectContaining({ kind: 'window', confidence: .93 })]);
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://api.openai.com/v1/responses');
+    expect(payload.model).toBe('gpt-5.6-terra');
+    expect(payload.input[0].content[0]).toMatchObject({ type: 'input_image', detail: 'original' });
+    expect(payload.text.format.schema.properties.openings.items.properties.points).toMatchObject({ minItems: 4, maxItems: 4 });
+    expect(payload.store).toBe(false);
+  });
+
+  it('unions an auditor-only opening with the primary room geometry', () => {
+    const merged = mergeArchitecturalOpeningAudit([
+      { name: 'Muro', kind: 'wall', confidence: .9, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .7 }, { x: 0, y: .7 }] },
+      { name: 'Pavimento', kind: 'floor', confidence: .9, points: [{ x: 0, y: .7 }, { x: 1, y: .7 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+    ], [
+      { name: 'Finestra verificata', kind: 'window', confidence: .91, points: [{ x: .2, y: .2 }, { x: .45, y: .2 }, { x: .45, y: .55 }, { x: .2, y: .55 }] },
+    ]);
+    expect(merged.some((surface) => surface.kind === 'window')).toBe(true);
+  });
+
+  it('preserves an audited edge opening when the primary detector missed its wall plane', () => {
+    const merged = mergeArchitecturalOpeningAudit([
+      { name: 'Muro destro', kind: 'wall', confidence: .9, points: [{ x: .3, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: .3, y: .66 }] },
+      { name: 'Pavimento', kind: 'floor', confidence: .9, points: [{ x: 0, y: .76 }, { x: .3, y: .66 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+    ], [{
+      name: 'Vetrata laterale verificata', kind: 'window', confidence: .94, audited: true,
+      points: [{ x: .01, y: .08 }, { x: .22, y: .08 }, { x: .22, y: .58 }, { x: .01, y: .58 }],
+    }]);
+    expect(merged).toContainEqual(expect.objectContaining({ kind: 'window', audited: true }));
+  });
+
+  it('asks Terra whether the complete room really needs emptying', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({
+        needsEmptying: true,
+        removableObjectCount: 8,
+        majorCategories: ['letto', 'scrivania', 'armadio', 'disordine'],
+        confidence: .96,
+        reason: 'Sono presenti arredi e oggetti removibili.',
+      }) }] }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await expect(auditRoomEmptyingNeed(
+      { id: 'openai', label: 'OpenAI', apiKey: 'openai-test', model: 'gpt-5.6-terra' },
+      new File([new Uint8Array([1, 2, 3])], 'camera.jpg', { type: 'image/jpeg' }),
+    )).resolves.toMatchObject({ needsEmptying: true, removableObjectCount: 8, confidence: .96 });
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(payload.model).toBe('gpt-5.6-terra');
+    expect(payload.input[0].content[0]).toMatchObject({ type: 'input_image', detail: 'original' });
+    expect(payload.text.format).toMatchObject({ type: 'json_schema', name: 'room_emptying_audit', strict: true });
+    expect(payload.text.format.schema.required).toEqual(expect.arrayContaining(['needsEmptying', 'majorCategories', 'confidence']));
+    expect(payload.store).toBe(false);
   });
 
   it('respects an explicitly selected render provider', () => {

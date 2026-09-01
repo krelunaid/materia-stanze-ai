@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { cleanupTileRatioMatches, planCleanupTiles, pointInCleanupTile, snapCleanupTileBounds } from './cleanup-tiles';
+import {
+  CLEANUP_MAX_TILE_AREA_RATIO,
+  cleanupTileBoundsFromRect,
+  cleanupTileEdgeIsInternal,
+  cleanupTileMaskEnvelope,
+  cleanupTileRatioMatches,
+  planCleanupTiles,
+  pointInCleanupTile,
+  snapCleanupTileBounds,
+  snapCleanupTileRect,
+} from './cleanup-tiles';
 
 const region = (label: string, left: number, top: number, right: number, bottom: number) => ({
   label,
@@ -73,5 +83,88 @@ describe('cleanup tile planning', () => {
   it('rejects a generated tile whose aspect ratio changed', () => {
     expect(cleanupTileRatioMatches(1024, 1024, 1024, 768)).toBe(false);
     expect(cleanupTileRatioMatches(1024, 768, 800, 600)).toBe(true);
+  });
+
+  it('materializes one exact integer crop and round-trips its normalized bounds', () => {
+    const size = { width: 1379, height: 911 };
+    const rect = snapCleanupTileRect({ left: .2137, top: .1771, right: .6319, bottom: .7143 }, size);
+    const bounds = cleanupTileBoundsFromRect(rect, size);
+    expect([rect.left, rect.top, rect.right, rect.bottom, rect.width, rect.height].every(Number.isInteger)).toBe(true);
+    expect(Math.round(bounds.left * size.width)).toBe(rect.left);
+    expect(Math.round(bounds.top * size.height)).toBe(rect.top);
+    expect(Math.round(bounds.right * size.width)).toBe(rect.right);
+    expect(Math.round(bounds.bottom * size.height)).toBe(rect.bottom);
+  });
+
+  it('rejects unsafe forced merging instead of creating a full-frame tile', () => {
+    const chain = [
+      region('alto sx', .01, .02, .22, .3),
+      region('alto dx', .78, .02, .99, .3),
+      region('basso sx', .01, .7, .22, .98),
+      region('basso dx', .78, .7, .99, .98),
+    ];
+    expect(() => planCleanupTiles(chain, 1, { width: 1600, height: 900 }))
+      .toThrow(/troppo distanti|pulizia.*sicura/i);
+  });
+
+  it('never returns a crop above the safe frame-area limit', () => {
+    expect(CLEANUP_MAX_TILE_AREA_RATIO).toBeLessThanOrEqual(.65);
+    const size = { width: 1600, height: 900 };
+    const plans = planCleanupTiles([
+      region('basi', .04, .5, .32, .9),
+      region('pensili', .05, .16, .31, .48),
+      region('tavolo', .62, .58, .82, .84),
+    ], 3, size);
+    for (const plan of plans) {
+      const rect = snapCleanupTileRect(plan.bounds, size);
+      expect(rect.width * rect.height / (size.width * size.height)).toBeLessThanOrEqual(CLEANUP_MAX_TILE_AREA_RATIO);
+    }
+  });
+
+  it('uses one source-space mask envelope at every output scale', () => {
+    const envelope = cleanupTileMaskEnvelope([region('tavolo', .4, .45, .62, .78)], { width: 1600, height: 900 });
+    expect(envelope.outsetSourcePx * .8 / .8).toBeCloseTo(envelope.outsetSourcePx, 8);
+    expect(envelope.outsetSourcePx * .4 / .4).toBeCloseTo(envelope.outsetSourcePx, 8);
+    expect(envelope.shadowOffsetSourcePx).toBeCloseTo(envelope.outsetSourcePx * .9, 8);
+  });
+
+  it('splits one very large detected object into safe local pieces', () => {
+    const size = { width: 1600, height: 900 };
+    const plans = planCleanupTiles([region('armadio grande', .02, .03, .98, .97)], 4, size);
+    expect(plans.length).toBeGreaterThan(1);
+    expect(plans.length).toBeLessThanOrEqual(4);
+    const pieces = plans.flatMap((plan) => plan.regions);
+    expect(pieces.every((item) => item.label.includes('parte'))).toBe(true);
+    expect(pieces.every((item) => item.internalEdges?.length)).toBe(true);
+    expect(pieces.some((item) => item.points.some((point, index) => (
+      cleanupTileEdgeIsInternal(item, point, item.points[(index + 1) % item.points.length])
+    )))).toBe(true);
+    for (const plan of plans) {
+      const rect = snapCleanupTileRect(plan.bounds, size);
+      expect(rect.width * rect.height / (size.width * size.height)).toBeLessThanOrEqual(.65);
+    }
+  });
+
+  it('never joins disconnected parts of one large concave mask while splitting', () => {
+    const concave = {
+      label: 'mobile a U',
+      confidence: .9,
+      points: [
+        { x: .15, y: .05 }, { x: .15, y: .95 }, { x: .85, y: .95 }, { x: .85, y: .05 },
+        { x: .68, y: .05 }, { x: .68, y: .75 }, { x: .32, y: .75 }, { x: .32, y: .05 },
+      ],
+    };
+    expect(() => planCleanupTiles([concave], 4, { width: 900, height: 1600 }))
+      .toThrow(/parte più piccola|pulizia locale sicura/i);
+  });
+
+  it('keeps triangular pieces valid when a large diamond is split', () => {
+    const diamond = {
+      label: 'oggetto diagonale',
+      confidence: .9,
+      points: [{ x: .5, y: .01 }, { x: .99, y: .5 }, { x: .5, y: .99 }, { x: .01, y: .5 }],
+    };
+    const plans = planCleanupTiles([diamond], 5, { width: 1600, height: 900 });
+    expect(plans.flatMap((plan) => plan.regions).every((item) => item.points.length >= 3)).toBe(true);
   });
 });

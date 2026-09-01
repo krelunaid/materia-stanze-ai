@@ -1,4 +1,4 @@
-import { detectMovableObjectRegions, detectObjectRegion, getAiProvider } from '../../server/ai-provider';
+import { auditRoomEmptyingNeed, detectMovableObjectRegions, detectObjectRegion, getAiProvider, getVisionAuditor } from '../../server/ai-provider';
 import { guardAiRequest, handleAiOptions } from '../../server/ai-api-guard';
 
 function json(body: unknown, headers: Headers, status = 200) {
@@ -23,8 +23,19 @@ export async function POST(request: Request) {
     if (!(image instanceof File) || !['image/jpeg', 'image/png'].includes(image.type)) return json({ message: 'La fotografia deve essere JPG o PNG.' }, headers, 400);
     if (!image.size || image.size > 20 * 1024 * 1024) return json({ message: 'La fotografia supera il limite di 20 MB.' }, headers, 413);
     if (mode === 'all') {
-      const regions = await detectMovableObjectRegions(provider, image, 'real-estate-emptying');
-      return json({ regions, provider: provider.id }, headers);
+      const auditor = getVisionAuditor(process.env, provider);
+      const [regionsResult, auditResult] = await Promise.allSettled([
+        detectMovableObjectRegions(provider, image, 'real-estate-emptying'),
+        auditor ? auditRoomEmptyingNeed(auditor, image) : Promise.resolve(null),
+      ]);
+      if (regionsResult.status === 'rejected') throw regionsResult.reason;
+      return json({
+        regions: regionsResult.value,
+        roomAudit: auditResult.status === 'fulfilled' ? auditResult.value : null,
+        provider: provider.id,
+        auditor: auditor?.id ?? null,
+        auditorModel: auditor?.model ?? null,
+      }, headers);
     }
     if (![x, y].every((value) => Number.isFinite(value) && value >= 0 && value <= 1)) return json({ message: 'Il punto selezionato non è valido.' }, headers, 400);
     const region = await detectObjectRegion(provider, image, { x, y }, 'explicit-target-removal');
