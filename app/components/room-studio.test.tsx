@@ -890,8 +890,8 @@ describe('RoomStudio', () => {
     expect(screen.getByRole('button', { name: '↻ Torna automatico' })).toBeInTheDocument();
   });
 
-  it('allows an indicative floor preview when a linked product has no clean texture', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+  it('requires a material sample when a linked surface product has no clean texture', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
       if (url.includes('/api/capabilities')) {
         return new Response(JSON.stringify({ aiReady: true, providerLabel: 'Grok' }), { status: 200 });
@@ -913,9 +913,13 @@ describe('RoomStudio', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Cerca con Grok' }));
     fireEvent.click(await screen.findByRole('button', { name: /Impronta · Impronta Limestone Beige/ }));
 
-    expect(screen.getByText('Puoi provarlo subito.')).toBeInTheDocument();
+    expect(screen.getByText('Serve un campione prima della prova.')).toBeInTheDocument();
     expect(document.querySelector('.auto-apply-product-button')).toBeEnabled();
-    expect(screen.getAllByRole('button', { name: 'Prova ora su Pavimento' }).length).toBeGreaterThan(0);
+    const sampleButtons = screen.getAllByRole('button', { name: 'Aggiungi campione per provarlo' });
+    expect(sampleButtons.length).toBeGreaterThan(0);
+    fireEvent.click(sampleButtons[0]);
+    expect(screen.getByText(/non inventerò il disegno dal solo nome/i)).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/api/apply-product'))).toBe(false);
   });
 
   it('does not place an online furniture result when its product image is unavailable', async () => {
