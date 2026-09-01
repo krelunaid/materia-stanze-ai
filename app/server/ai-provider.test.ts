@@ -60,6 +60,10 @@ describe('getAiProvider', () => {
       output: [{ content: [{ type: 'output_text', text: JSON.stringify({
         openings: [{
           type: 'window', confidence: .93, evidence: 'Telaio e davanzale visibili',
+          architecturalFrame: true,
+          wallRevealSillOrThreshold: true,
+          showsOpeningInteriorOrGlazing: true,
+          furniturePanelMirrorOrAppliance: false,
           points: [{ x: .2, y: .2 }, { x: .4, y: .2 }, { x: .4, y: .55 }, { x: .2, y: .55 }],
         }],
       }) }] }],
@@ -97,6 +101,40 @@ describe('getAiProvider', () => {
       points: [{ x: .01, y: .08 }, { x: .22, y: .08 }, { x: .22, y: .58 }, { x: .01, y: .58 }],
     }]);
     expect(merged).toContainEqual(expect.objectContaining({ kind: 'window', audited: true }));
+  });
+
+  it('drops a primary-only cabinet rectangle when the independent opening audit does not confirm it', () => {
+    const merged = mergeArchitecturalOpeningAudit([
+      { name: 'Muro', kind: 'wall', confidence: .9, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: 0, y: .72 }] },
+      { name: 'Pavimento', kind: 'floor', confidence: .9, points: [{ x: 0, y: .72 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+      { name: 'Falsa finestra sul pensile', kind: 'window', confidence: .91, points: [{ x: .02, y: .08 }, { x: .12, y: .08 }, { x: .12, y: .42 }, { x: .02, y: .42 }] },
+    ], [{
+      name: 'Porta verificata', kind: 'door', confidence: .94,
+      points: [{ x: .75, y: .2 }, { x: .94, y: .2 }, { x: .94, y: .72 }, { x: .75, y: .72 }],
+    }]);
+
+    expect(merged.some((surface) => surface.name.includes('Falsa finestra'))).toBe(false);
+    expect(merged.some((surface) => surface.kind === 'door')).toBe(true);
+  });
+
+  it('rejects an audited cabinet panel even when it is a bright four-corner rectangle', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({
+        openings: [{
+          type: 'window', confidence: .96, evidence: 'Rettangolo luminoso accanto alla cucina',
+          architecturalFrame: false,
+          wallRevealSillOrThreshold: false,
+          showsOpeningInteriorOrGlazing: false,
+          furniturePanelMirrorOrAppliance: true,
+          points: [{ x: .01, y: .08 }, { x: .12, y: .08 }, { x: .12, y: .42 }, { x: .01, y: .42 }],
+        }],
+      }) }] }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await expect(detectArchitecturalOpenings(
+      { id: 'openai', label: 'OpenAI', apiKey: 'openai-test', model: 'gpt-5.6-terra' },
+      new File([new Uint8Array([1, 2, 3])], 'kitchen.jpg', { type: 'image/jpeg' }),
+    )).resolves.toEqual([]);
   });
 
   it('asks Terra whether the complete room really needs emptying', async () => {

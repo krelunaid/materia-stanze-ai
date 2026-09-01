@@ -417,8 +417,12 @@ const architecturalOpeningAuditSchema = {
           },
           confidence: { type: 'number', minimum: 0, maximum: 1 },
           evidence: { type: 'string' },
+          architecturalFrame: { type: 'boolean' },
+          wallRevealSillOrThreshold: { type: 'boolean' },
+          showsOpeningInteriorOrGlazing: { type: 'boolean' },
+          furniturePanelMirrorOrAppliance: { type: 'boolean' },
         },
-        required: ['type', 'points', 'confidence', 'evidence'],
+        required: ['type', 'points', 'confidence', 'evidence', 'architecturalFrame', 'wallRevealSillOrThreshold', 'showsOpeningInteriorOrGlazing', 'furniturePanelMirrorOrAppliance'],
       },
     },
   },
@@ -1492,6 +1496,7 @@ export function mergeArchitecturalOpeningAudit(
       && isSimpleRoomPolygon(surface.points)
     )).map((surface) => ({
       ...surface,
+      audited: true,
       points: orderQuadClockwise(surface.points.map((point) => ({
         x: finiteUnit(point.x),
         y: finiteUnit(point.y),
@@ -1506,6 +1511,11 @@ export function mergeArchitecturalOpeningAudit(
     else groups.push([opening]);
   }
   const audited = groups
+    // When the independent audit is available, a Grok-only rectangle is not
+    // enough evidence for an architectural opening.  This deliberately
+    // prefers a missing optional opening (which the user can add) over
+    // protecting a cabinet, mirror or appliance as if it were a window.
+    .filter((group) => group.some((surface) => surface.audited))
     .map((group) => consensusOpening(group, floor))
     .sort((left, right) => right.confidence - left.confidence)
     .slice(0, Math.max(0, 16 - structural.length));
@@ -1520,7 +1530,10 @@ export async function detectArchitecturalOpenings(auditor: VisionAuditor, image:
     'Return one item per physical opening. A multi-pane or full-height glazed assembly is one opening bounded by its complete outer architectural frame.',
     'Use exactly four perspective-correct outer corners in clockwise order. Coordinates are normalized to the complete source image: x=0 left, x=1 right, y=0 top, y=1 bottom.',
     'Use type=door only when the opening reaches a passable floor threshold. Use type=window when a sill or wall remains below it. A full-height glazed wall or French window that reaches the floor is a door.',
-    'Do not classify mirrors, pictures, televisions, air conditioners, cabinets, niches, shadows, reflections or bright wall patches as openings.',
+    'Do not classify mirrors, pictures, televisions, air conditioners, cabinets, kitchen wall units, cupboard doors, furniture panels, niches, shadows, reflections or bright wall patches as openings.',
+    'For every candidate, explicitly decide whether its outer frame is integrated into the architectural wall, whether a wall reveal plus sill or floor threshold is visible, whether the interior shows glazing/outdoors/a passable doorway, and whether it could instead be a furniture panel, mirror or appliance.',
+    'A bright vertical rectangle beside or inside kitchen cabinetry is not a window without visible architectural jambs, a real sill or threshold and glazing/outdoor depth. Glass-front cabinet doors remain furniture and must be rejected.',
+    'Return a candidate only when architecturalFrame, wallRevealSillOrThreshold and showsOpeningInteriorOrGlazing are all true, and furniturePanelMirrorOrAppliance is false. If any of those tests is uncertain, omit it; the editor lets the user add a missing opening manually.',
     'Inspect left wall, back wall, right wall, ceiling and every image edge separately. Low contrast, overexposure, curtains and perspective foreshortening are not reasons to omit a real frame.',
     'confidence measures the accuracy of the four outer-frame corners. evidence is one short factual Italian phrase describing the visible frame, glass, sill or threshold.',
     'Return only the structured result. You are an auditor: never invent, edit or repair pixels.',
@@ -1547,9 +1560,22 @@ export async function detectArchitecturalOpenings(auditor: VisionAuditor, image:
   const payload = await response.json() as ResponsesPayload;
   if (!response.ok) throw new Error(payload.error?.message ?? 'Controllo indipendente delle aperture non disponibile.');
   const parsed = JSON.parse(responseText(payload).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) as {
-    openings?: Array<{ type?: 'door' | 'window'; points?: Array<{ x: number; y: number }>; confidence?: number }>;
+    openings?: Array<{
+      type?: 'door' | 'window';
+      points?: Array<{ x: number; y: number }>;
+      confidence?: number;
+      architecturalFrame?: boolean;
+      wallRevealSillOrThreshold?: boolean;
+      showsOpeningInteriorOrGlazing?: boolean;
+      furniturePanelMirrorOrAppliance?: boolean;
+    }>;
   };
-  return (parsed.openings ?? []).slice(0, 16).map((opening, index) => ({
+  return (parsed.openings ?? []).slice(0, 16).filter((opening) => (
+    opening.architecturalFrame === true
+    && opening.wallRevealSillOrThreshold === true
+    && opening.showsOpeningInteriorOrGlazing === true
+    && opening.furniturePanelMirrorOrAppliance === false
+  )).map((opening, index) => ({
     name: opening.type === 'door' ? `Porta verificata ${index + 1}` : `Finestra verificata ${index + 1}`,
     kind: opening.type === 'door' ? 'door' as const : 'window' as const,
     points: orderQuadClockwise((opening.points ?? []).slice(0, 4).map((point) => ({
@@ -1558,7 +1584,7 @@ export async function detectArchitecturalOpenings(auditor: VisionAuditor, image:
     }))),
     confidence: finiteUnit(opening.confidence),
     audited: true,
-  })).filter((surface) => surface.points.length === 4 && surface.confidence >= .72 && isSimpleRoomPolygon(surface.points));
+  })).filter((surface) => surface.points.length === 4 && surface.confidence >= .82 && isSimpleRoomPolygon(surface.points));
 }
 
 export async function auditRoomEmptyingNeed(auditor: VisionAuditor, image: File): Promise<RoomEmptyingAudit> {
