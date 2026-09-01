@@ -404,7 +404,7 @@ const architecturalOpeningAuditSchema = {
           points: {
             type: 'array',
             minItems: 4,
-            maxItems: 4,
+            maxItems: 16,
             items: {
               type: 'object',
               additionalProperties: false,
@@ -1330,7 +1330,10 @@ function openingQuality(surface: DetectedRoomSurface, floor: DetectedRoomSurface
   const bounds = surfaceBounds(surface);
   const centerX = (bounds.left + bounds.right) / 2;
   const floorY = floorBoundaryAtX(floor, centerX);
-  let score = surface.confidence + (surface.points.length === 4 ? 1 : 0);
+  // Four corners are ideal for a straight rectangular opening, but a real
+  // masonry arch needs extra vertices. Audited contours are more trustworthy
+  // than a primary rectangle around only the inner door leaf.
+  let score = surface.confidence + (surface.audited ? 1.5 : surface.points.length === 4 ? 1 : 0);
   if (floorY !== null) {
     const isAboveFloor = bounds.bottom <= floorY - .045;
     if (surface.kind === 'window') score += isAboveFloor ? 1 : -1.5;
@@ -1492,15 +1495,16 @@ export function mergeArchitecturalOpeningAudit(
     ...auditedOpenings.filter((surface) => (
       (surface.kind === 'door' || surface.kind === 'window')
       && surface.confidence >= .72
-      && surface.points.length === 4
+      && surface.points.length >= 4
+      && surface.points.length <= 16
       && isSimpleRoomPolygon(surface.points)
     )).map((surface) => ({
       ...surface,
       audited: true,
-      points: orderQuadClockwise(surface.points.map((point) => ({
+      points: (surface.points.length === 4 ? orderQuadClockwise(surface.points) : surface.points).map((point) => ({
         x: finiteUnit(point.x),
         y: finiteUnit(point.y),
-      }))),
+      })),
     })),
   ];
 
@@ -1528,14 +1532,15 @@ export async function detectArchitecturalOpenings(auditor: VisionAuditor, image:
     'You are an independent architectural-opening auditor. Inspect the complete uncropped interior photograph before answering.',
     'List every visible fixed window, French window, glazed wall, skylight, door and doorway, including partially cropped openings at image edges and openings partly hidden by furniture or curtains.',
     'Return one item per physical opening. A multi-pane or full-height glazed assembly is one opening bounded by its complete outer architectural frame.',
-    'Use exactly four perspective-correct outer corners in clockwise order. Coordinates are normalized to the complete source image: x=0 left, x=1 right, y=0 top, y=1 bottom.',
+    'For a straight rectangular opening use exactly four perspective-correct outer corners. For a round, segmental or pointed arch use 5 to 16 clockwise vertices that follow the complete visible masonry arch and both jambs. Coordinates are normalized to the complete source image: x=0 left, x=1 right, y=0 top, y=1 bottom.',
+    'An arched doorway containing a smaller rectangular wooden door is one door opening: trace the OUTER wall opening, including the full brick or stone arch, reveals, jambs and floor threshold. Never trace only the inner door leaf or its rectangular frame.',
     'Use type=door only when the opening reaches a passable floor threshold. Use type=window when a sill or wall remains below it. A full-height glazed wall or French window that reaches the floor is a door.',
     'Do not classify mirrors, pictures, televisions, air conditioners, cabinets, kitchen wall units, cupboard doors, furniture panels, niches, shadows, reflections or bright wall patches as openings.',
-    'For every candidate, explicitly decide whether its outer frame is integrated into the architectural wall, whether a wall reveal plus sill or floor threshold is visible, whether the interior shows glazing/outdoors/a passable doorway, and whether it could instead be a furniture panel, mirror or appliance.',
+    'For every candidate, explicitly decide whether its outer frame is integrated into the architectural wall, whether a wall reveal plus sill or floor threshold is visible, whether the interior shows glazing/outdoors/a passable doorway, and whether it could instead be a furniture panel, mirror or appliance. For a closed solid door, showsOpeningInteriorOrGlazing is true only when a real operable door leaf and handle are visibly enclosed by architectural jambs and a threshold.',
     'A bright vertical rectangle beside or inside kitchen cabinetry is not a window without visible architectural jambs, a real sill or threshold and glazing/outdoor depth. Glass-front cabinet doors remain furniture and must be rejected.',
     'Return a candidate only when architecturalFrame, wallRevealSillOrThreshold and showsOpeningInteriorOrGlazing are all true, and furniturePanelMirrorOrAppliance is false. If any of those tests is uncertain, omit it; the editor lets the user add a missing opening manually.',
     'Inspect left wall, back wall, right wall, ceiling and every image edge separately. Low contrast, overexposure, curtains and perspective foreshortening are not reasons to omit a real frame.',
-    'confidence measures the accuracy of the four outer-frame corners. evidence is one short factual Italian phrase describing the visible frame, glass, sill or threshold.',
+    'confidence measures the accuracy of the complete outer-opening contour. evidence is one short factual Italian phrase describing the visible frame, arch, glass, sill or threshold.',
     'Return only the structured result. You are an auditor: never invent, edit or repair pixels.',
   ].join('\n');
   const response = await fetch('https://api.openai.com/v1/responses', {
@@ -1578,13 +1583,14 @@ export async function detectArchitecturalOpenings(auditor: VisionAuditor, image:
   )).map((opening, index) => ({
     name: opening.type === 'door' ? `Porta verificata ${index + 1}` : `Finestra verificata ${index + 1}`,
     kind: opening.type === 'door' ? 'door' as const : 'window' as const,
-    points: orderQuadClockwise((opening.points ?? []).slice(0, 4).map((point) => ({
+    points: ((opening.points?.length ?? 0) === 4 ? orderQuadClockwise(opening.points ?? []) : (opening.points ?? []).slice(0, 16)).map((point) => ({
       x: finiteUnit(point.x),
       y: finiteUnit(point.y),
-    }))),
+    })),
     confidence: finiteUnit(opening.confidence),
     audited: true,
-  })).filter((surface) => surface.points.length === 4 && surface.confidence >= .82 && isSimpleRoomPolygon(surface.points));
+  })).filter((surface) => surface.points.length >= 4 && surface.points.length <= 16
+    && surface.confidence >= .82 && isSimpleRoomPolygon(surface.points));
 }
 
 export async function auditRoomEmptyingNeed(auditor: VisionAuditor, image: File): Promise<RoomEmptyingAudit> {

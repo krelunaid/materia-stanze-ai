@@ -78,8 +78,36 @@ describe('getAiProvider', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe('https://api.openai.com/v1/responses');
     expect(payload.model).toBe('gpt-5.6-terra');
     expect(payload.input[0].content[0]).toMatchObject({ type: 'input_image', detail: 'original' });
-    expect(payload.text.format.schema.properties.openings.items.properties.points).toMatchObject({ minItems: 4, maxItems: 4 });
+    expect(payload.text.format.schema.properties.openings.items.properties.points).toMatchObject({ minItems: 4, maxItems: 16 });
+    expect(payload.input[0].content[1].text).toContain('full brick or stone arch');
+    expect(payload.input[0].content[1].text).toContain('Never trace only the inner door leaf');
     expect(payload.store).toBe(false);
+  });
+
+  it('keeps the full audited masonry arch instead of the inner rectangular door leaf', async () => {
+    const arch = [
+      { x: .82, y: .09 }, { x: .9, y: .12 }, { x: .96, y: .2 },
+      { x: .96, y: .72 }, { x: .7, y: .72 }, { x: .7, y: .2 }, { x: .74, y: .13 },
+    ];
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({
+        openings: [{
+          type: 'door', confidence: .95, evidence: 'Arco in mattoni con stipiti e soglia',
+          architecturalFrame: true,
+          wallRevealSillOrThreshold: true,
+          showsOpeningInteriorOrGlazing: true,
+          furniturePanelMirrorOrAppliance: false,
+          points: arch,
+        }],
+      }) }] }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    const result = await detectArchitecturalOpenings(
+      { id: 'openai', label: 'OpenAI', apiKey: 'openai-test', model: 'gpt-5.6-terra' },
+      new File([new Uint8Array([1, 2, 3])], 'arched-kitchen.jpg', { type: 'image/jpeg' }),
+    );
+
+    expect(result).toEqual([expect.objectContaining({ kind: 'door', points: arch })]);
   });
 
   it('unions an auditor-only opening with the primary room geometry', () => {
@@ -115,6 +143,22 @@ describe('getAiProvider', () => {
 
     expect(merged.some((surface) => surface.name.includes('Falsa finestra'))).toBe(false);
     expect(merged.some((surface) => surface.kind === 'door')).toBe(true);
+  });
+
+  it('prefers an audited outer arch over a primary rectangle around its door leaf', () => {
+    const outerArch = [
+      { x: .82, y: .09 }, { x: .9, y: .12 }, { x: .96, y: .2 },
+      { x: .96, y: .72 }, { x: .7, y: .72 }, { x: .7, y: .2 }, { x: .74, y: .13 },
+    ];
+    const merged = mergeArchitecturalOpeningAudit([
+      { name: 'Muro', kind: 'wall', confidence: .9, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: 0, y: .72 }] },
+      { name: 'Pavimento', kind: 'floor', confidence: .9, points: [{ x: 0, y: .72 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+      { name: 'Anta interna', kind: 'door', confidence: .98, points: [{ x: .77, y: .22 }, { x: .91, y: .22 }, { x: .91, y: .72 }, { x: .77, y: .72 }] },
+    ], [{ name: 'Arco esterno verificato', kind: 'door', confidence: .93, points: outerArch }]);
+
+    const door = merged.find((surface) => surface.kind === 'door');
+    expect(door?.points).toEqual(outerArch);
+    expect(door?.audited).toBe(true);
   });
 
   it('rejects an audited cabinet panel even when it is a bright four-corner rectangle', async () => {
