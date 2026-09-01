@@ -97,6 +97,17 @@ export type FurnitureRenderVerification = {
   referenceBottom: number;
 };
 
+export type FurnitureViewVerification = {
+  isolated: boolean;
+  correctFacing: boolean;
+  resemblesReference: boolean;
+  structurallyComplete: boolean;
+  completeSilhouette: boolean;
+  uniformWhiteBackground: boolean;
+  confidence: number;
+  reason: string;
+};
+
 export type RoomCleanupVerification = {
   sameCameraAndCrop: boolean;
   sameArchitecture: boolean;
@@ -140,6 +151,16 @@ export function acceptsFurnitureRender(verification: FurnitureRenderVerification
     && verification.confidence >= .8;
 }
 
+export function acceptsFurnitureView(verification: FurnitureViewVerification) {
+  return verification.isolated
+    && verification.correctFacing
+    && verification.resemblesReference
+    && verification.structurallyComplete
+    && verification.completeSilhouette
+    && verification.uniformWhiteBackground
+    && verification.confidence >= .86;
+}
+
 const furnitureVerificationSchema = {
   type: 'object',
   additionalProperties: false,
@@ -160,6 +181,22 @@ const furnitureVerificationSchema = {
     referenceBottom: { type: 'number', minimum: 0, maximum: 1 },
   },
   required: ['visible', 'atRequestedAnchor', 'atRequestedOrientation', 'resemblesReference', 'physicallyGrounded', 'contactShadow', 'structurallyComplete', 'realisticLighting', 'confidence', 'reason', 'referenceLeft', 'referenceTop', 'referenceRight', 'referenceBottom'],
+} as const;
+
+const furnitureViewVerificationSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    isolated: { type: 'boolean' },
+    correctFacing: { type: 'boolean' },
+    resemblesReference: { type: 'boolean' },
+    structurallyComplete: { type: 'boolean' },
+    completeSilhouette: { type: 'boolean' },
+    uniformWhiteBackground: { type: 'boolean' },
+    confidence: { type: 'number', minimum: 0, maximum: 1 },
+    reason: { type: 'string' },
+  },
+  required: ['isolated', 'correctFacing', 'resemblesReference', 'structurallyComplete', 'completeSilhouette', 'uniformWhiteBackground', 'confidence', 'reason'],
 } as const;
 
 const roomCleanupVerificationSchema = {
@@ -1951,7 +1988,7 @@ export async function editImage(provider: AiProvider, input: {
   maskReferenceFile?: File | null;
   referenceImageUrl?: string | null;
   referenceImageFile?: File | null;
-  referenceImageRole?: 'furniture' | 'material' | 'combined';
+  referenceImageRole?: 'furniture' | 'material' | 'combined' | 'room-context';
   prompt: string;
   maskExplanation?: string;
 }) {
@@ -2102,6 +2139,52 @@ export async function verifyFurniturePlacement(provider: AiProvider, input: {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function verifyFurnitureView(provider: AiProvider, input: {
+  source: File;
+  renderedImage: string;
+  facing: 'front-wall' | 'left-wall' | 'right-wall';
+  productName: string;
+}) {
+  const facingRequirement = input.facing === 'front-wall'
+    ? 'a centered straight front elevation, with the furniture rear edge parallel to the image plane'
+    : input.facing === 'left-wall'
+      ? 'the view needed for the furniture back to sit flush against the left wall, seen from the room center, showing its right side'
+      : 'the view needed for the furniture back to sit flush against the right wall, seen from the room center, showing its left side';
+  const content: Array<Record<string, unknown>> = [
+    { type: 'input_image', image_url: await fileToDataUri(input.source), detail: 'high' },
+    { type: 'input_image', image_url: input.renderedImage, detail: 'high' },
+    {
+      type: 'input_text',
+      text: [
+        `You are a strict identity-preserving product-view gate for “${input.productName}”. Image 1 is the exact source product. Image 2 is the proposed isolated view.`,
+        `correctFacing is true only if image 2 is ${facingRequirement}. A rolled, merely rotated or diagonally skewed copy is false.`,
+        'resemblesReference is true only if product proportions, construction, color, material, finish and recognizable identity match image 1.',
+        'structurallyComplete is true only if the exact number, side and position of every leg, drawer, door, shelf, panel and handle are preserved. Any invented, removed, mirrored or merged part is false.',
+        'completeSilhouette is true only if the whole physical product including every foot and outer edge is visible with margin and is not cropped.',
+        'isolated is true only if image 2 contains the product and nothing from the former room, catalog scene, labels or text.',
+        'uniformWhiteBackground is true only if the entire background is uniform white without floor line, horizon, reflection or cast shadow.',
+        'Be conservative: perspective correction is allowed, product redesign is not. Return only the structured result.',
+      ].join('\n'),
+    },
+  ];
+  const response = await fetch(provider.id === 'grok' ? 'https://api.x.ai/v1/responses' : 'https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${provider.apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: provider.id === 'grok' ? 'grok-4.6' : 'gpt-5.4-mini',
+      input: [{ role: 'user', content }],
+      max_output_tokens: 400,
+      reasoning: { effort: 'low' },
+      text: { format: { type: 'json_schema', name: 'furniture_view_verification', schema: furnitureViewVerificationSchema, strict: true } },
+      store: false,
+    }),
+    signal: AbortSignal.timeout(50000),
+  });
+  const payload = await response.json() as ResponsesPayload;
+  if (!response.ok) throw new Error(payload.error?.message ?? 'Verifica della prospettiva del mobile non disponibile.');
+  return JSON.parse(responseText(payload)) as FurnitureViewVerification;
 }
 
 export async function verifyRoomCleanup(provider: AiProvider, input: {

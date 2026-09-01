@@ -1,6 +1,6 @@
 import { aiRateLimitSchema, aiRateLimitUpdatedAtIndex } from '../../db/schema';
 
-type AiRoute = 'apply-product' | 'classify-product' | 'clean-product' | 'clean-room-region' | 'detect-object' | 'detect-surfaces' | 'empty-room' | 'render-room' | 'search-products' | 'verify-cleanup';
+type AiRoute = 'apply-product' | 'classify-product' | 'clean-product' | 'clean-room-region' | 'detect-object' | 'detect-surfaces' | 'empty-room' | 'prepare-furniture-view' | 'render-room' | 'search-products' | 'verify-cleanup';
 
 type LimitPolicy = {
   hourly: number;
@@ -32,6 +32,7 @@ const policies: Record<AiRoute, LimitPolicy> = {
   'detect-object': { hourly: 24, daily: 72 },
   'detect-surfaces': { hourly: 20, daily: 60 },
   'empty-room': { hourly: 12, daily: 36 },
+  'prepare-furniture-view': { hourly: 12, daily: 36 },
   'render-room': { hourly: 6, daily: 18 },
   'search-products': { hourly: 30, daily: 90 },
   'verify-cleanup': { hourly: 20, daily: 60 },

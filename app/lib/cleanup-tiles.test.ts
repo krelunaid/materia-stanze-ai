@@ -60,6 +60,33 @@ describe('cleanup tile planning', () => {
     ]));
   });
 
+  it('plans a distributed fully furnished kitchen without merging distant objects', () => {
+    const size = { width: 1600, height: 1068 };
+    const input = [
+      region('pensile sinistro', .01, .04, .22, .39),
+      region('mensola spezie', .02, .39, .23, .54),
+      region('frigorifero', .08, .53, .25, .97),
+      region('lampada', .28, .1, .35, .36),
+      region('pentole', .23, .22, .38, .49),
+      region('cappa', .37, .17, .57, .42),
+      region('cucina', .39, .51, .59, .94),
+      region('pensile destro', .59, .19, .72, .48),
+      region('credenza', .58, .5, .77, .91),
+      region('arco', .73, .08, .98, .52),
+      region('tavolo', .72, .57, .99, .97),
+      region('sedie', .76, .59, .99, .98),
+    ];
+    const plans = planCleanupTiles(input, 10, size);
+    expect(plans.length).toBeGreaterThan(1);
+    expect(plans.length).toBeLessThanOrEqual(10);
+    expect(plans.flatMap((plan) => plan.regions).map((item) => item.label).sort())
+      .toEqual(input.map((item) => item.label).sort());
+    for (const plan of plans) {
+      const rect = snapCleanupTileRect(plan.bounds, size);
+      expect(rect.width * rect.height / (size.width * size.height)).toBeLessThanOrEqual(CLEANUP_MAX_TILE_AREA_RATIO);
+    }
+  });
+
   it('maps a known tile corner exactly', () => {
     expect(pointInCleanupTile({ x: .25, y: .2 }, { left: .25, top: .2, right: .75, bottom: .8 }))
       .toEqual({ x: 0, y: 0 });

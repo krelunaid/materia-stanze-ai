@@ -497,12 +497,47 @@ describe('RoomStudio', () => {
     expect(screen.getByRole('button', { name: /Render/ })).not.toHaveClass('is-active');
     expect(screen.getByRole('alert')).toHaveTextContent('Prima posiziona “Divano chiaro”');
     expect(screen.getByText('Tocca il punto sul pavimento')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '← Torna ai prodotti' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Annulla' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Annulla' }));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Render/ }));
     expect(screen.getByRole('button', { name: /Render/ })).toHaveClass('is-active');
     expect(screen.getByRole('dialog', { name: 'Crea il render reale' })).toBeInTheDocument();
+  });
+
+  it('anchors initial furniture to the front wall and exposes undo and delete', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+    const search = screen.getByLabelText('Cerca materiali, colori o mobili');
+    fireEvent.change(search, { target: { value: 'divano' } });
+    const canvas = document.querySelector('.canvas') as HTMLDivElement;
+    vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+
+    fireEvent.click(screen.getByRole('button', { name: /Divano chiaro/ }));
+    fireEvent.click(canvas, { clientX: 500, clientY: 280 });
+    const first = screen.getByRole('button', { name: 'Sposta Divano chiaro' });
+    const anchoredTop = Number.parseFloat((first as HTMLElement).style.top);
+    expect(screen.getByRole('button', { name: 'Torna indietro di una modifica del mobile' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Elimina Divano chiaro' })).toBeEnabled();
+    fireEvent.change(screen.getByLabelText('Larghezza reale del mobile'), { target: { value: '360' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Applica misura' }));
+    expect(screen.getByText(/larghezza reale 360 cm/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Elimina Divano chiaro' }));
+    expect(screen.queryByRole('button', { name: 'Sposta Divano chiaro' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Divano chiaro/ }));
+    fireEvent.click(canvas, { clientX: 500, clientY: 590 });
+    const second = screen.getByRole('button', { name: 'Sposta Divano chiaro' });
+    expect(Number.parseFloat((second as HTMLElement).style.top)).toBeCloseTo(anchoredTop, 5);
+
+    const leftBefore = Number.parseFloat((second as HTMLElement).style.left);
+    fireEvent.click(screen.getByRole('button', { name: 'Sposta Divano chiaro a destra' }));
+    expect(Number.parseFloat((second as HTMLElement).style.left)).toBeGreaterThan(leftBefore);
+    fireEvent.click(screen.getByRole('button', { name: 'Torna indietro di una modifica del mobile' }));
+    expect(Number.parseFloat((second as HTMLElement).style.left)).toBeCloseTo(leftBefore, 5);
   });
 
   it('uses one search for furniture and accepts a free-form render request', () => {

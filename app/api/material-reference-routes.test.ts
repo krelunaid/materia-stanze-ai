@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   editImage: vi.fn(),
   verifyFurniturePlacement: vi.fn(),
+  verifyFurnitureView: vi.fn(),
 }));
 
 vi.mock('../server/ai-api-guard.ts', () => ({
@@ -12,12 +13,15 @@ vi.mock('../server/ai-api-guard.ts', () => ({
 
 vi.mock('../server/ai-provider.ts', () => ({
   acceptsFurnitureRender: vi.fn(() => true),
+  acceptsFurnitureView: vi.fn((verification) => Object.values(verification).every((value) => value === true || typeof value === 'number' || typeof value === 'string')),
   editImage: mocks.editImage,
   getRenderProvider: vi.fn(() => ({ id: 'grok', label: 'Grok', apiKey: 'test' })),
   verifyFurniturePlacement: mocks.verifyFurniturePlacement,
+  verifyFurnitureView: mocks.verifyFurnitureView,
 }));
 
 import { POST as applyProduct } from './apply-product/route';
+import { POST as prepareFurnitureView } from './prepare-furniture-view/route';
 import { POST as renderRoom } from './render-room/route';
 
 function baseForm() {
@@ -34,6 +38,16 @@ function formRequest(form: FormData) {
 beforeEach(() => {
   mocks.editImage.mockReset().mockResolvedValue('data:image/png;base64,result');
   mocks.verifyFurniturePlacement.mockReset();
+  mocks.verifyFurnitureView.mockReset().mockResolvedValue({
+    isolated: true,
+    correctFacing: true,
+    resemblesReference: true,
+    structurallyComplete: true,
+    completeSilhouette: true,
+    uniformWhiteBackground: true,
+    confidence: .98,
+    reason: 'Vista fedele.',
+  });
 });
 
 describe('uploaded material references', () => {
@@ -108,5 +122,53 @@ describe('uploaded material references', () => {
         referenceImageFile: expect.objectContaining({ name: 'sofa.png', type: 'image/png' }),
       }),
     );
+  });
+});
+
+describe('identity-preserving furniture views', () => {
+  function furnitureViewForm(facing = 'front-wall') {
+    const form = new FormData();
+    form.append('image', new File(['desk'], 'scrivania.jpg', { type: 'image/jpeg' }));
+    form.append('facing', facing);
+    form.append('productName', 'Scrivania');
+    form.append('productDescription', 'Legno chiaro con cassettiera grigia a destra');
+    return form;
+  }
+
+  it('returns a corrected view only after strict identity and facing verification', async () => {
+    const response = await prepareFurnitureView(formRequest(furnitureViewForm('front-wall')));
+
+    expect(response.ok, await response.clone().text()).toBe(true);
+    expect(mocks.editImage).toHaveBeenCalledTimes(1);
+    expect(mocks.editImage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'grok' }),
+      expect.objectContaining({ prompt: expect.stringContaining('front elevation') }),
+    );
+    expect(mocks.verifyFurnitureView).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'grok' }),
+      expect.objectContaining({ facing: 'front-wall', productName: 'Scrivania' }),
+    );
+  });
+
+  it('retries once and rejects a perspective that changes product identity', async () => {
+    const failed = {
+      isolated: true,
+      correctFacing: true,
+      resemblesReference: false,
+      structurallyComplete: false,
+      completeSilhouette: true,
+      uniformWhiteBackground: true,
+      confidence: .73,
+      reason: 'La cassettiera è stata spostata e manca una maniglia.',
+    };
+    mocks.verifyFurnitureView.mockResolvedValue(failed);
+
+    const response = await prepareFurnitureView(formRequest(furnitureViewForm('right-wall')));
+    const result = await response.json() as { code?: string };
+
+    expect(response.status).toBe(422);
+    expect(result.code).toBe('identity_check_failed');
+    expect(mocks.editImage).toHaveBeenCalledTimes(2);
+    expect(mocks.editImage.mock.calls[1]?.[1]?.prompt).toContain('manca una maniglia');
   });
 });

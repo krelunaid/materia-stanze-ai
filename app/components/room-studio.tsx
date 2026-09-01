@@ -87,10 +87,11 @@ type PlacedFurniture = {
   previewUrl?: string;
   sidePreviewUrl?: string;
   cutoutUrl?: string;
+  preparedViews?: Partial<Record<FurnitureFacing, string>>;
   description?: string;
 };
-type PendingFurniture = { name: string; previewUrl?: string; sidePreviewUrl?: string; cutoutUrl?: string; description?: string; file?: File };
-type DragFurniture = { id: string; pointerId: number; offsetX: number; offsetY: number };
+type PendingFurniture = { name: string; previewUrl?: string; sidePreviewUrl?: string; cutoutUrl?: string; preparedViews?: Partial<Record<FurnitureFacing, string>>; description?: string; file?: File };
+type DragFurniture = { id: string; pointerId: number; offsetX: number; offsetY: number; previous: PlacedFurniture[] };
 type CleanupRegion = { label: string; points: Point[]; confidence: number; internalEdges?: CleanupTileSplitEdge[] };
 type CleanupTileResult = {
   bounds: CleanupTileBounds;
@@ -344,6 +345,38 @@ function floorContactYAtX(surface: Surface | undefined, x: number) {
     }
   }
   return intersections.length ? Math.min(...intersections) : Math.min(...surface.points.map((point) => point.y));
+}
+
+function floorBoundsAtY(surface: Surface | undefined, y: number) {
+  if (!surface || surface.points.length < 3) return { left: .04, right: .96 };
+  const intersections: number[] = [];
+  for (let index = 0; index < surface.points.length; index += 1) {
+    const first = surface.points[index];
+    const second = surface.points[(index + 1) % surface.points.length];
+    if ((first.y <= y && second.y >= y) || (second.y <= y && first.y >= y)) {
+      if (Math.abs(second.y - first.y) < .0001) continue;
+      const ratio = (y - first.y) / (second.y - first.y);
+      if (ratio >= 0 && ratio <= 1) intersections.push(first.x + (second.x - first.x) * ratio);
+    }
+  }
+  return intersections.length >= 2
+    ? { left: Math.min(...intersections), right: Math.max(...intersections) }
+    : { left: Math.min(...surface.points.map((point) => point.x)), right: Math.max(...surface.points.map((point) => point.x)) };
+}
+
+function snapFurnitureToWall(item: PlacedFurniture, facing: FurnitureFacing, floor: Surface | undefined) {
+  if (facing === 'front-wall') {
+    const y = Math.min(.94, Math.max(.08, floorContactYAtX(floor, item.x) + .025));
+    return { ...item, facing, y };
+  }
+  const floorContact = floorContactYAtX(floor, item.x);
+  const y = Math.min(.94, Math.max(floorContact + .04, item.y));
+  const bounds = floorBoundsAtY(floor, y);
+  const wallOffset = Math.min(.11, Math.max(.025, item.scale / 420));
+  const x = facing === 'left-wall'
+    ? Math.min(.94, Math.max(.04, bounds.left + wallOffset))
+    : Math.min(.96, Math.max(.06, bounds.right - wallOffset));
+  return { ...item, facing, x, y };
 }
 
 function inheritSurfaceState(detected: Surface[], previous: Surface[]) {
@@ -812,6 +845,7 @@ export function RoomStudio() {
   const [searchSourceUrl, setSearchSourceUrl] = useState('');
   const [onlineMaterials, setOnlineMaterials] = useState<StudioMaterial[]>([]);
   const [placedFurniture, setPlacedFurniture] = useState<PlacedFurniture[]>([]);
+  const [pastFurniture, setPastFurniture] = useState<PlacedFurniture[][]>([]);
   const [pendingFurniture, setPendingFurniture] = useState<PendingFurniture | null>(null);
   const [selectedFurnitureId, setSelectedFurnitureId] = useState<string | null>(null);
   const [dragFurniture, setDragFurniture] = useState<DragFurniture | null>(null);
@@ -832,6 +866,7 @@ export function RoomStudio() {
   const [cleanupRegion, setCleanupRegion] = useState<CleanupRegion | null>(null);
   const [isSearchingProducts, setIsSearchingProducts] = useState(false);
   const [isClassifyingProduct, setIsClassifyingProduct] = useState(false);
+  const [isPreparingFurniture, setIsPreparingFurniture] = useState(false);
   const [isApplyingProduct, setIsApplyingProduct] = useState(false);
   const [isRendering, setIsRendering] = useState(false);
   const [aiStatus, setAiStatus] = useState<AiStatus>('checking');
@@ -847,6 +882,7 @@ export function RoomStudio() {
   const [showSurfaceGuides, setShowSurfaceGuides] = useState(true);
   const [manualRoomWidth, setManualRoomWidth] = useState<number | null>(null);
   const [roomWidthDraft, setRoomWidthDraft] = useState('');
+  const [furnitureWidthDraft, setFurnitureWidthDraft] = useState('');
   const [isEditingRoomMeasure, setIsEditingRoomMeasure] = useState(false);
   const roomInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -872,6 +908,7 @@ export function RoomStudio() {
   const autoFitPreviewRef = useRef<string | null>(null);
   const originalSurfacesRef = useRef<Surface[]>([]);
   const processedSurfacesRef = useRef<Surface[] | null>(null);
+  const cleanupHistoryRef = useRef<CleanupRegion[]>([]);
   const projectIdRef = useRef('draft');
   const skipAutosaveRef = useRef(false);
   const manualOpeningParentRef = useRef<string | null>(null);
@@ -1220,7 +1257,7 @@ export function RoomStudio() {
       const initialSurfaces = sourceType === 'floorplan' ? createFloorplanOutline() : [];
       setRoom({ ...result.value, previewUrl, sourceType });
       setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]);
-      setPlacedFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); furnitureFilesRef.current.clear();
+      setPlacedFurniture([]); setPastFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); furnitureFilesRef.current.clear();
       setCleanupRegion(null); setIsPickingCleanup(false);
       setShowSurfaceGuides(true);
       setGeometryDetectionStatus(null);
@@ -1228,6 +1265,7 @@ export function RoomStudio() {
       autoFitPreviewRef.current = null;
       originalSurfacesRef.current = initialSurfaces;
       processedSurfacesRef.current = null;
+      cleanupHistoryRef.current = [];
       setSurfaces(initialSurfaces); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(initialSurfaces[0]?.id ?? null); setRenameDraft(initialSurfaces[0]?.name ?? ''); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setError(null);
       setIsCorrectingEdges(false);
       setNotice(sourceType === 'floorplan'
@@ -1272,10 +1310,11 @@ export function RoomStudio() {
     materialSampleRef.current = null;
     originalSurfacesRef.current = [];
     processedSurfacesRef.current = null;
+    cleanupHistoryRef.current = [];
     furnitureBlobUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     furnitureBlobUrlsRef.current = [];
     furnitureFilesRef.current.clear();
-    setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]); setPlacedFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); setCleanupRegion(null); setIsPickingCleanup(false); setNotice(null); setIsCorrectingEdges(false); setGeometryDetectionStatus(null); setShowSurfaceGuides(true); setManualRoomWidth(null); setRoomWidthDraft(''); setIsEditingRoomMeasure(false);
+    setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]); setPlacedFurniture([]); setPastFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); setCleanupRegion(null); setIsPickingCleanup(false); setNotice(null); setIsCorrectingEdges(false); setGeometryDetectionStatus(null); setShowSurfaceGuides(true); setManualRoomWidth(null); setRoomWidthDraft(''); setIsEditingRoomMeasure(false);
   }
 
   function startDrawing(kind: SurfaceKind = 'wall', quick = false) {
@@ -1937,7 +1976,11 @@ export function RoomStudio() {
   ) {
     const source = await loadImageSource(sourceUrl);
     const sourceSize = { width: source.naturalWidth, height: source.naturalHeight };
-    const plans = planCleanupTiles(regions, mode === 'local' ? 4 : 5, sourceSize);
+    const globalContext = await createGeometryInput(sourceUrl);
+    // A furnished kitchen can legitimately contain more than twenty distinct
+    // detections spread across the frame. Keep every edit local, group nearby
+    // connected targets and use the full safe request budget when needed.
+    const plans = planCleanupTiles(regions, mode === 'local' ? 4 : 12, sourceSize);
     const results: CleanupTileResult[] = [];
     for (let index = 0; index < plans.length; index += 1) {
       const plan = plans[index];
@@ -1949,6 +1992,7 @@ export function RoomStudio() {
       form.append('image', prepared.inputImage, `room-tile-${index + 1}.jpg`);
       form.append('mask', prepared.mask, `room-tile-mask-${index + 1}.png`);
       form.append('maskReference', prepared.maskReference, `room-tile-guide-${index + 1}.png`);
+      form.append('contextImage', globalContext, 'room-global-context.jpg');
       form.append('localCrop', 'true');
       const hasMultipleTargets = prepared.normalizedRegions.length > 1;
       let route = endpoint('/api/empty-room');
@@ -2217,6 +2261,27 @@ export function RoomStudio() {
     return result.image;
   }
 
+  async function prepareFurnitureView(
+    sourceUrl: string,
+    productName: string,
+    facing: FurnitureFacing,
+    productDescription?: string,
+  ) {
+    const sourceResponse = await fetch(sourceUrl);
+    if (!sourceResponse.ok) throw new Error('Non riesco a rileggere la sagoma del mobile.');
+    const sourceBlob = await sourceResponse.blob();
+    const form = new FormData();
+    form.append('image', new File([sourceBlob], 'mobile-scontornato.png', { type: sourceBlob.type || 'image/png' }));
+    form.append('facing', facing);
+    form.append('productName', productName);
+    if (productDescription) form.append('productDescription', productDescription);
+    const { response, result } = await requestJson<{ image?: string; message?: string }>(endpoint('/api/prepare-furniture-view'), {
+      method: 'POST', body: form,
+    }, 170000);
+    if (!response.ok || !result.image) throw new Error(result.message ?? 'Ricostruzione della prospettiva non disponibile.');
+    return createFurnitureCutout(result.image, productName, undefined, false, productDescription);
+  }
+
   async function applyMaterialAutomatically(chosenMaterial: StudioMaterial | null = material) {
     if (!chosenMaterial || !room?.previewUrl || isApplyingProduct) return;
     setMaterial(chosenMaterial);
@@ -2313,24 +2378,27 @@ export function RoomStudio() {
           ? await createAiCleanedFurnitureCutout(next.previewUrl, name, next.description)
           : undefined;
         if (!cutoutUrl) throw new Error('Non sono riuscito a isolare il mobile dalla foto.');
-        startFurniturePlacement(name, next.previewUrl, next.description, undefined, cutoutUrl);
+        setNotice(`Ricostruisco “${name}” in vista frontale senza cambiarne geometria e materiali…`);
+        setIsPreparingFurniture(true);
+        const frontViewUrl = await prepareFurnitureView(cutoutUrl, name, 'front-wall', next.description);
+        startFurniturePlacement(name, next.previewUrl, next.description, undefined, cutoutUrl, undefined, { 'front-wall': frontViewUrl });
       } catch (caught) {
         setError(caught instanceof Error
           ? `Non inserisco la foto intera: ${caught.message}`
           : 'Non sono riuscito a isolare il mobile dalla foto.');
         setNotice(null);
-      }
+      } finally { setIsPreparingFurniture(false); }
       return;
     }
     chooseMaterial(next);
   }
 
-  function startFurniturePlacement(name: string, previewUrl?: string, description?: string, file?: File, cutoutUrl?: string, sidePreviewUrl?: string) {
+  function startFurniturePlacement(name: string, previewUrl?: string, description?: string, file?: File, cutoutUrl?: string, sidePreviewUrl?: string, preparedViews?: Partial<Record<FurnitureFacing, string>>) {
     if (!room || room.sourceType !== 'photo') {
       setError('Per posizionare un mobile serve una foto della stanza.');
       return;
     }
-    setPendingFurniture({ name, previewUrl, sidePreviewUrl, cutoutUrl, description, file });
+    setPendingFurniture({ name, previewUrl, sidePreviewUrl, cutoutUrl, preparedViews, description, file });
     setSelectedFurnitureId(null);
     setNotice(`Tocca il punto del pavimento dove vuoi mettere “${name}”.`);
   }
@@ -2401,8 +2469,11 @@ export function RoomStudio() {
       setNotice(`Scontorno “${name}” e preparo soltanto la sagoma del mobile…`);
       try {
         const cutoutUrl = await createAiCleanedFurnitureFile(file);
+        setIsPreparingFurniture(true);
+        setNotice(`Ricostruisco “${name}” in vista frontale senza cambiarne geometria e materiali…`);
+        const frontViewUrl = await prepareFurnitureView(cutoutUrl, name, 'front-wall');
         furnitureBlobUrlsRef.current.push(previewUrl);
-        startFurniturePlacement(name, previewUrl, undefined, file, cutoutUrl);
+        startFurniturePlacement(name, previewUrl, undefined, file, cutoutUrl, undefined, { 'front-wall': frontViewUrl });
         setError(null);
       } catch (caught) {
         URL.revokeObjectURL(previewUrl);
@@ -2413,7 +2484,7 @@ export function RoomStudio() {
     } catch (caught) {
       setError(friendlyRequestError(caught).message); setNotice(null);
     } finally {
-      setIsClassifyingProduct(false);
+      setIsClassifyingProduct(false); setIsPreparingFurniture(false);
     }
   }
 
@@ -2426,6 +2497,31 @@ export function RoomStudio() {
     const floor = surfaces.find((surface) => surface.kind === 'floor');
     const floorContact = floorContactYAtX(floor, x);
     return perspectiveFurnitureScale(name, description, y, floorContact, floor, measurement);
+  }
+
+  function rememberFurnitureState(snapshot = placedFurniture) {
+    setPastFurniture((history) => [...history.slice(-19), snapshot.map((item) => ({
+      ...item, preparedViews: item.preparedViews ? { ...item.preparedViews } : undefined,
+    }))]);
+  }
+
+  function selectFurnitureForEditing(item: PlacedFurniture) {
+    const width = productWidthMeters(item.name, item.description);
+    setSelectedFurnitureId(item.id);
+    setFurnitureWidthDraft(width ? String(Math.round(width * 1000) / 10).replace('.', ',') : '');
+  }
+
+  function undoFurnitureChange() {
+    const previous = pastFurniture[pastFurniture.length - 1];
+    if (!previous) return;
+    const restoredSelected = previous.find((item) => item.id === selectedFurnitureId) ?? previous.at(-1) ?? null;
+    setPlacedFurniture(previous);
+    setPastFurniture((history) => history.slice(0, -1));
+    setSelectedFurnitureId(restoredSelected?.id ?? null);
+    const restoredWidth = restoredSelected ? productWidthMeters(restoredSelected.name, restoredSelected.description) : null;
+    setFurnitureWidthDraft(restoredWidth ? String(Math.round(restoredWidth * 1000) / 10).replace('.', ',') : '');
+    setPendingFurniture(null); setError(null);
+    setNotice('Ultima modifica del mobile annullata.');
   }
 
   function confirmRoomWidth() {
@@ -2442,6 +2538,29 @@ export function RoomStudio() {
     setNotice(`Scala confermata: parete principale ${calibrated.widthMeters.toLocaleString('it-IT')} m. I mobili automatici sono stati ricalcolati.`);
   }
 
+  function confirmFurnitureWidth() {
+    if (!selectedFurniture || selectedFurniture.frozen) return;
+    const widthCm = Number(furnitureWidthDraft.replace(',', '.'));
+    if (!Number.isFinite(widthCm) || widthCm < 20 || widthCm > 1200) {
+      setError('Inserisci una larghezza del mobile compresa tra 20 e 1200 cm.');
+      return;
+    }
+    const withoutOldWidth = (selectedFurniture.description ?? '')
+      .replace(/(?:^|\s*[·;]\s*)L\s*[\d.,]+\s*cm\b/ig, '')
+      .trim();
+    const description = [withoutOldWidth, `L ${String(widthCm).replace('.', ',')} cm`].filter(Boolean).join(' · ');
+    const next = {
+      ...selectedFurniture,
+      description,
+      autoScale: true,
+      scale: automaticFurnitureScale(selectedFurniture.name, description, selectedFurniture.x, selectedFurniture.y),
+    };
+    rememberFurnitureState();
+    setPlacedFurniture((current) => current.map((item) => item.id === selectedFurniture.id ? next : item));
+    setError(null);
+    setNotice(`${selectedFurniture.name}: larghezza reale ${widthCm.toLocaleString('it-IT')} cm. La scala prospettica è stata ricalcolata sulla misura della stanza.`);
+  }
+
   function restoreAutomaticRoomMeasurement() {
     const automatic = inferRoomMeasurement(surfaces, roomRatio);
     setManualRoomWidth(null); setRoomWidthDraft(''); setIsEditingRoomMeasure(false); setError(null);
@@ -2455,19 +2574,21 @@ export function RoomStudio() {
     if (!pendingFurniture || activeStep !== 3) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const x = Math.min(.94, Math.max(.06, (event.clientX - rect.left) / rect.width));
-    const requestedY = (event.clientY - rect.top) / rect.height;
     const floorContact = floorContactYAtX(surfaces.find((surface) => surface.kind === 'floor'), x);
-    const y = Math.min(.94, Math.max(floorContact + .015, requestedY));
+    // The default target is the front wall: the tap chooses the horizontal
+    // anchor, while the floor/wall junction determines the physical contact.
+    const y = Math.min(.94, Math.max(.08, floorContact + .025));
     furnitureIdRef.current += 1;
     const id = `furniture-${furnitureIdRef.current}`;
     const scale = automaticFurnitureScale(pendingFurniture.name, pendingFurniture.description, x, y);
-    const placed: PlacedFurniture = { id, name: pendingFurniture.name, x, y, scale, autoScale: true, facing: 'front-wall', rotation: 0, frozen: false, previewUrl: pendingFurniture.previewUrl, sidePreviewUrl: pendingFurniture.sidePreviewUrl, cutoutUrl: pendingFurniture.cutoutUrl, description: pendingFurniture.description };
+    const placed: PlacedFurniture = { id, name: pendingFurniture.name, x, y, scale, autoScale: true, facing: 'front-wall', rotation: 0, frozen: false, previewUrl: pendingFurniture.previewUrl, sidePreviewUrl: pendingFurniture.sidePreviewUrl, cutoutUrl: pendingFurniture.cutoutUrl, preparedViews: pendingFurniture.preparedViews, description: pendingFurniture.description };
     if (pendingFurniture.file) furnitureFilesRef.current.set(id, pendingFurniture.file);
+    rememberFurnitureState();
     setPlacedFurniture((current) => [...current, placed]);
-    setSelectedFurnitureId(id);
+    selectFurnitureForEditing(placed);
     setPendingFurniture(null);
     setError(null);
-    setNotice(`${placed.name} posizionato con misura automatica ${Math.round(placed.scale)}%. Trascinalo avanti o indietro per adattarlo alla profondità.`);
+    setNotice(`${placed.name} appoggiato automaticamente al muro frontale e al pavimento, con misura ${Math.round(placed.scale)}%. Puoi scegliere un altro muro o spostarlo.`);
   }
 
   function beginFurnitureDrag(event: ReactPointerEvent<HTMLButtonElement>, id: string) {
@@ -2478,8 +2599,8 @@ export function RoomStudio() {
     const rect = canvasRef.current.getBoundingClientRect();
     const pointerX = (event.clientX - rect.left) / rect.width;
     const pointerY = (event.clientY - rect.top) / rect.height;
-    setSelectedFurnitureId(id);
-    setDragFurniture({ id, pointerId: event.pointerId, offsetX: pointerX - item.x, offsetY: pointerY - item.y });
+    selectFurnitureForEditing(item);
+    setDragFurniture({ id, pointerId: event.pointerId, offsetX: pointerX - item.x, offsetY: pointerY - item.y, previous: placedFurniture });
   }
 
   function moveFurniture(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -2496,21 +2617,50 @@ export function RoomStudio() {
   function endFurnitureDrag(event: ReactPointerEvent<HTMLButtonElement>) {
     if (dragFurniture?.pointerId !== event.pointerId) return;
     event.preventDefault(); event.stopPropagation();
+    const moved = placedFurniture.find((item) => item.id === dragFurniture.id);
+    const before = dragFurniture.previous.find((item) => item.id === dragFurniture.id);
+    if (moved && before && (Math.abs(moved.x - before.x) > .0001 || Math.abs(moved.y - before.y) > .0001)) {
+      rememberFurnitureState(dragFurniture.previous);
+    }
     setDragFurniture(null);
   }
 
   function updateSelectedFurniture(changes: Partial<PlacedFurniture>) {
     if (!selectedFurniture || selectedFurniture.frozen && changes.frozen !== false) return;
+    rememberFurnitureState();
     setPlacedFurniture((current) => current.map((item) => item.id === selectedFurniture.id ? { ...item, ...changes } : item));
   }
 
-  function orientSelectedFurniture(facing: FurnitureFacing) {
-    updateSelectedFurniture({ facing });
-    if (selectedFurniture) setNotice(`${selectedFurniture.name}: ${furnitureFacingLabels[facing].toLocaleLowerCase('it')}. L’anteprima mostra subito l’orientamento; Grok rifinisce prospettiva e ombre nel render.`);
+  async function orientSelectedFurniture(facing: FurnitureFacing) {
+    if (!selectedFurniture || selectedFurniture.frozen || isPreparingFurniture) return;
+    const item = selectedFurniture;
+    const floor = surfaces.find((surface) => surface.kind === 'floor');
+    const snapped = snapFurnitureToWall(item, facing, floor);
+    rememberFurnitureState();
+    setPlacedFurniture((current) => current.map((candidate) => candidate.id === item.id ? snapped : candidate));
+    setNotice(`${item.name} agganciato a ${furnitureFacingLabels[facing].toLocaleLowerCase('it')} e appoggiato al pavimento.`);
+
+    const existingView = item.preparedViews?.[facing]
+      || (facing !== 'front-wall' ? item.sidePreviewUrl : undefined);
+    const sourceUrl = item.cutoutUrl ?? item.previewUrl;
+    if (existingView || !sourceUrl) return;
+    setIsPreparingFurniture(true); setError(null);
+    setNotice(`Ricostruisco la vista di “${item.name}” per ${furnitureFacingLabels[facing].toLocaleLowerCase('it')}, senza cambiarne geometria…`);
+    try {
+      const preparedView = await prepareFurnitureView(sourceUrl, item.name, facing, item.description);
+      setPlacedFurniture((current) => current.map((candidate) => candidate.id === item.id
+        ? { ...candidate, preparedViews: { ...(candidate.preparedViews ?? {}), [facing]: preparedView } }
+        : candidate));
+      setNotice(`${item.name}: vista IA ricostruita, agganciata alla parete e appoggiata al pavimento. Il render finale controllerà ancora somiglianza, scala e contatto.`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Non sono riuscito a ricostruire la vista del mobile.');
+      setNotice('Il mobile è agganciato alla parete, ma la vista fotografica non è stata convalidata: non la considero definitiva.');
+    } finally { setIsPreparingFurniture(false); }
   }
 
   function resizeSelectedFurniture(delta: number) {
     if (!selectedFurniture) return;
+    rememberFurnitureState();
     setPlacedFurniture((current) => current.map((item) => item.id === selectedFurniture.id
       ? { ...item, scale: Math.min(90, Math.max(12, item.scale + delta)), autoScale: false }
       : item));
@@ -2518,6 +2668,7 @@ export function RoomStudio() {
 
   function nudgeSelectedFurniture(deltaX: number, deltaY: number) {
     if (!selectedFurniture) return;
+    rememberFurnitureState();
     setPlacedFurniture((current) => current.map((item) => {
       if (item.id !== selectedFurniture.id || item.frozen) return item;
       const x = Math.min(.96, Math.max(.04, item.x + deltaX));
@@ -2533,6 +2684,7 @@ export function RoomStudio() {
 
   function rotateSelectedFurniture(delta: number) {
     if (!selectedFurniture) return;
+    rememberFurnitureState();
     setPlacedFurniture((current) => current.map((item) => item.id === selectedFurniture.id && !item.frozen
       ? { ...item, rotation: Math.min(60, Math.max(-60, item.rotation + delta)) }
       : item));
@@ -2552,9 +2704,11 @@ export function RoomStudio() {
 
   function removeSelectedFurniture() {
     if (!selectedFurniture || selectedFurniture.frozen) return;
+    rememberFurnitureState();
     furnitureFilesRef.current.delete(selectedFurniture.id);
     setPlacedFurniture((current) => current.filter((item) => item.id !== selectedFurniture.id));
     setSelectedFurnitureId(null);
+    setFurnitureWidthDraft('');
     setNotice(`${selectedFurniture.name} rimosso dal render.`);
   }
 
@@ -2683,6 +2837,7 @@ export function RoomStudio() {
       const created = clientValidatedSurfaces(result.surfaces ?? [], `floorplan-room-${geometryDetectionIdRef.current}`);
       originalSurfacesRef.current = created;
       processedSurfacesRef.current = null;
+      cleanupHistoryRef.current = [];
       autoFitPreviewRef.current = created.length ? result.image : null;
       const preferred = created.find((surface) => surface.kind === 'floor') ?? created[0] ?? null;
       setSurfaces(created); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(preferred?.id ?? null); setRenameDraft(preferred?.name ?? '');
@@ -2791,6 +2946,7 @@ export function RoomStudio() {
       if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
       processedBlobRef.current = protectedPreview;
       setProcessedPreview(protectedPreview); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
+      cleanupHistoryRef.current = regions.map((region) => ({ ...region, points: region.points.map((point) => ({ ...point })) }));
       const approved = geometryForDerivedImage(baselineSurfaces);
       originalSurfacesRef.current = geometryForDerivedImage(baselineSurfaces);
       processedSurfacesRef.current = approved;
@@ -2865,19 +3021,24 @@ export function RoomStudio() {
 
   async function cleanResidualRegion() {
     if (!cleanupRegion || !room?.previewUrl || isCleaningRegion) return;
-    const sourceUrl = showProcessedPreview && processedPreview ? processedPreview : room.previewUrl;
-    setIsCleaningRegion(true); setError(null); setNotice(`Pulisco soltanto “${cleanupRegion.label}”. Tutto il resto viene ricopiato pixel per pixel.`);
+    const previousRegions = cleanupHistoryRef.current;
+    const rebuildFromOriginal = previousRegions.length > 0;
+    const sourceUrl = rebuildFromOriginal ? room.previewUrl : showProcessedPreview && processedPreview ? processedPreview : room.previewUrl;
+    const cumulativeRegions = rebuildFromOriginal ? [...previousRegions, cleanupRegion] : [cleanupRegion];
+    setIsCleaningRegion(true); setError(null); setNotice(rebuildFromOriginal
+      ? `Aggiungo “${cleanupRegion.label}” alla maschera completa e ricostruisco dall’originale, senza applicare una toppa sopra l’altra.`
+      : `Pulisco soltanto “${cleanupRegion.label}”. Tutto il resto viene ricopiato pixel per pixel.`);
     try {
       const architecturalAnchors = surfaces.filter((surface) => surface.frozen || surface.kind === 'door' || surface.kind === 'window');
-      const cleanupResult = await generateCleanupTiles(sourceUrl, [cleanupRegion], architecturalAnchors, 'local');
+      const cleanupResult = await generateCleanupTiles(sourceUrl, cumulativeRegions, architecturalAnchors, cumulativeRegions.length > 1 ? 'automatic' : 'local');
       const protectedPreview = cleanupResult.previewUrl;
       try {
         setNotice('Controllo che la pulizia locale non abbia alterato la stanza…');
         await verifyCleanupPreview(
           sourceUrl,
           protectedPreview,
-          cleanupRegion.label,
-          [cleanupRegion],
+          cumulativeRegions.map((region) => region.label).join(', '),
+          cumulativeRegions,
           cleanupResult.authorizationReference,
         );
       } catch (caught) {
@@ -2894,9 +3055,10 @@ export function RoomStudio() {
       }
       if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
       processedBlobRef.current = protectedPreview;
-      setProcessedPreview(protectedPreview); setProcessedLabel('Pulizia locale'); setShowProcessedPreview(true); setCleanupRegion(null);
+      cleanupHistoryRef.current = cumulativeRegions.map((region) => ({ ...region, points: region.points.map((point) => ({ ...point })) }));
+      setProcessedPreview(protectedPreview); setProcessedLabel(rebuildFromOriginal ? 'Stanza vuota' : 'Pulizia locale'); setShowProcessedPreview(true); setCleanupRegion(null);
       processedSurfacesRef.current = geometryForDerivedImage(surfaces);
-      setNotice(`${cleanupRegion.label} rimosso. Fuori dal contorno selezionato la foto è rimasta identica.`);
+      setNotice(`${cleanupRegion.label} rimosso. Il risultato è stato ricostruito dalla foto originale con una maschera cumulativa; fuori dai contorni autorizzati i pixel sono rimasti identici.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Non sono riuscito a pulire la zona selezionata.'); setNotice(null);
     } finally { setIsCleaningRegion(false); }
@@ -2981,6 +3143,7 @@ export function RoomStudio() {
     });
     const furnitureAssignments = placedFurniture.map((item) => [
       item.name,
+      item.description ? `exact product data: ${item.description}` : 'product dimensions not supplied; do not claim exact physical scale',
       `anchor at x ${Math.round(item.x * 100)}%, y ${Math.round(item.y * 100)}% of the source image`,
       `approximate visible width ${Math.round(item.scale)}%`,
       furnitureFacingInstructions[item.facing],
@@ -3095,8 +3258,9 @@ export function RoomStudio() {
     const created = createDemoSurfaces();
     originalSurfacesRef.current = created;
     processedSurfacesRef.current = null;
+    cleanupHistoryRef.current = [];
     setRoom({ file, kind: 'image', canPreview: true, displaySize: 'esempio incluso', projectName: 'Stanza vuota con finestra', previewUrl: '/demo-room.jpg', sourceType: 'photo' });
-    setPlacedFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); furnitureFilesRef.current.clear();
+    setPlacedFurniture([]); setPastFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); furnitureFilesRef.current.clear();
     setRoomRatio(16 / 10); setSurfaces(created); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(created[0].id); setRenameDraft(created[0].name); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setError(null);
     setIsCorrectingEdges(false);
     setGeometryDetectionStatus('ai');
@@ -3141,10 +3305,11 @@ export function RoomStudio() {
       projectIdRef.current = crypto.randomUUID();
       originalSurfacesRef.current = created;
       processedSurfacesRef.current = created;
+      cleanupHistoryRef.current = [];
       setRoom({ file, kind: 'image', canPreview: true, displaySize: formatBytes(originalBlob.size), projectName: 'Prova stanza ripulita', previewUrl: originalUrl, sourceType: 'photo' });
       setRoomRatio(originalImage.naturalWidth / originalImage.naturalHeight);
       setSurfaces(created); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(created[0].id); setRenameDraft(created[0].name);
-      setPlacedFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); furnitureFilesRef.current.clear();
+      setPlacedFurniture([]); setPastFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); furnitureFilesRef.current.clear();
       setProcessedPreview(stabilizedUrl); setProcessedLabel('Stanza vuota'); setShowProcessedPreview(true);
       setCleanupRegion(null); setIsPickingCleanup(false); setIsCorrectingEdges(false);
       autoFitPreviewRef.current = originalUrl;
@@ -3225,12 +3390,13 @@ export function RoomStudio() {
                 <div><strong>{selectedFurniture.name}</strong><span>Tastiera semplice · tocca un comando</span></div>
                 <div className="furniture-pencil-heading-actions">
                   <button type="button" className={`pencil-auto-size ${selectedFurniture.autoScale ? 'is-active' : ''}`} aria-label={`Misura automatica per ${selectedFurniture.name}`} onClick={restoreAutomaticFurnitureScale} disabled={selectedFurniture.frozen || selectedFurniture.autoScale}>{selectedFurniture.autoScale ? `✓ AUTO ${Math.round(selectedFurniture.scale)}%` : '◎ AUTO'}</button>
+                  <button type="button" className="pencil-undo" aria-label="Torna indietro di una modifica del mobile" onClick={undoFurnitureChange} disabled={!pastFurniture.length || isPreparingFurniture}>↶ Indietro</button>
                   <button type="button" className={`pencil-freeze ${selectedFurniture.frozen ? 'is-active' : ''}`} aria-label={selectedFurniture.frozen ? `Sblocca ${selectedFurniture.name}` : `Blocca ${selectedFurniture.name}`} onClick={() => updateSelectedFurniture({ frozen: !selectedFurniture.frozen })}>{selectedFurniture.frozen ? '◇' : '◆'}</button>
-                  <button type="button" className="pencil-delete" aria-label={`Elimina ${selectedFurniture.name}`} onClick={removeSelectedFurniture} disabled={selectedFurniture.frozen}>⌫</button>
+                  <button type="button" className="pencil-delete" aria-label={`Elimina ${selectedFurniture.name}`} onClick={removeSelectedFurniture} disabled={selectedFurniture.frozen || isPreparingFurniture}>⌫ Cancella</button>
                 </div>
               </div>
               <div className="furniture-pencil-walls" role="group" aria-label="Scegli il muro del mobile">
-                {(Object.keys(furnitureFacingLabels) as FurnitureFacing[]).map((facing) => <button type="button" key={facing} aria-label={`Orienta ${selectedFurniture.name}: ${furnitureFacingLabels[facing]}`} className={selectedFurniture.facing === facing ? 'is-active' : ''} onClick={() => orientSelectedFurniture(facing)} disabled={selectedFurniture.frozen}>{facing === 'front-wall' ? '↑ FRONTE' : facing === 'left-wall' ? '↙ MURO SX' : 'MURO DX ↘'}</button>)}
+                {(Object.keys(furnitureFacingLabels) as FurnitureFacing[]).map((facing) => <button type="button" key={facing} aria-label={`Orienta ${selectedFurniture.name}: ${furnitureFacingLabels[facing]}`} className={selectedFurniture.facing === facing ? 'is-active' : ''} onClick={() => void orientSelectedFurniture(facing)} disabled={selectedFurniture.frozen || isPreparingFurniture}>{isPreparingFurniture && selectedFurniture.facing === facing ? 'Creo vista…' : facing === 'front-wall' ? '↑ FRONTE' : facing === 'left-wall' ? '↙ MURO SX' : 'MURO DX ↘'}</button>)}
               </div>
               <div className="furniture-pencil-actions">
                 <button type="button" aria-label={`Ruota ${selectedFurniture.name} a sinistra`} onClick={() => rotateSelectedFurniture(-10)} disabled={selectedFurniture.frozen}>↶ <small>RUOTA SX</small></button>
@@ -3299,11 +3465,13 @@ export function RoomStudio() {
                 })}
               </div>}
               {activeStep === 3 && <div className="furniture-placement-layer" aria-label="Mobili posizionati">{placedFurniture.map((item) => {
-                const usesSideAsset = item.facing !== 'front-wall' && Boolean(item.sidePreviewUrl);
-                const imageUrl = usesSideAsset ? item.sidePreviewUrl : item.cutoutUrl ?? item.previewUrl;
-                return <button key={item.id} type="button" className={`placed-furniture facing-${item.facing} ${usesSideAsset ? 'has-side-preview' : ''} ${selectedFurnitureId === item.id ? 'is-selected' : ''} ${item.frozen ? 'is-frozen' : ''}`} style={{ left: `${item.x * 100}%`, top: `${item.y * 100}%`, width: `${item.scale}%`, transform: item.rotation ? `translate(-50%,-100%) rotate(${item.rotation}deg)` : 'translate(-50%,-100%)' }} aria-label={`Sposta ${item.name}`} onClick={(event) => { event.stopPropagation(); setSelectedFurnitureId(item.id); }} onPointerDown={(event) => beginFurnitureDrag(event, item.id)} onPointerMove={moveFurniture} onPointerUp={endFurnitureDrag} onPointerCancel={endFurnitureDrag}>{imageUrl ? <img src={imageUrl} alt="" /> : <span className="placed-furniture-placeholder">▰</span>}<strong>{item.name}</strong><span className="furniture-facing-badge">{furnitureFacingLabels[item.facing]}</span><i aria-hidden="true" /></button>;
+                const preparedView = item.preparedViews?.[item.facing];
+                const usesSideAsset = !preparedView && item.facing !== 'front-wall' && Boolean(item.sidePreviewUrl);
+                const imageUrl = preparedView ?? (usesSideAsset ? item.sidePreviewUrl : item.cutoutUrl ?? item.previewUrl);
+                const hasPerspectiveView = Boolean(preparedView || usesSideAsset);
+                return <button key={item.id} type="button" className={`placed-furniture facing-${item.facing} ${hasPerspectiveView ? 'has-perspective-view' : ''} ${usesSideAsset ? 'has-side-preview' : ''} ${selectedFurnitureId === item.id ? 'is-selected' : ''} ${item.frozen ? 'is-frozen' : ''}`} style={{ left: `${item.x * 100}%`, top: `${item.y * 100}%`, width: `${item.scale}%`, transform: item.rotation ? `translate(-50%,-100%) rotate(${item.rotation}deg)` : 'translate(-50%,-100%)' }} aria-label={`Sposta ${item.name}`} onClick={(event) => { event.stopPropagation(); selectFurnitureForEditing(item); }} onPointerDown={(event) => beginFurnitureDrag(event, item.id)} onPointerMove={moveFurniture} onPointerUp={endFurnitureDrag} onPointerCancel={endFurnitureDrag}>{imageUrl ? <img src={imageUrl} alt="" /> : <span className="placed-furniture-placeholder">▰</span>}<strong>{item.name}</strong><span className="furniture-facing-badge">{furnitureFacingLabels[item.facing]}</span><i aria-hidden="true" /></button>;
               })}</div>}
-              {activeStep === 3 && pendingFurniture && <div className="placement-hint" role="status"><strong>Tocca il punto sul pavimento</strong><span>Posiziona “{pendingFurniture.name}”</span><button type="button" onClick={(event) => { event.stopPropagation(); setPendingFurniture(null); setError(null); setNotice('Inserimento mobile annullato.'); }}>Annulla</button></div>}
+              {activeStep === 3 && pendingFurniture && <div className="placement-hint" role="status"><strong>Tocca il punto sul pavimento</strong><span>“{pendingFurniture.name}” verrà agganciato automaticamente al muro frontale.</span><div><button type="button" onClick={(event) => { event.stopPropagation(); setPendingFurniture(null); setError(null); setNotice('Sei tornato alla scelta dei prodotti.'); document.querySelector('.product-search-section')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }); }}>← Torna ai prodotti</button><button type="button" className="cancel-placement" aria-label="Annulla" onClick={(event) => { event.stopPropagation(); setPendingFurniture(null); setError(null); setNotice('Inserimento mobile annullato.'); }}>✕ Annulla</button></div></div>}
               <div className="import-status"><span className="status-dot" /><div><strong>{showProcessedPreview ? processedLabel : 'Originale intatto'}</strong><small>{showProcessedPreview ? 'Elaborazione IA · originale sempre disponibile' : importedCaption}</small></div></div>
               <button className="replace-button" type="button" onClick={() => roomInputRef.current?.click()}>↑ Carica la tua foto</button>
               {processedPreview && <div className="before-after-toggle" aria-label="Confronta originale e risultato"><button type="button" className={!showProcessedPreview ? 'is-active' : ''} onClick={showOriginalRoom}>Originale</button><button type="button" className={showProcessedPreview ? 'is-active' : ''} onClick={showProcessedRoom}>{processedLabel}</button></div>}
@@ -3328,7 +3496,7 @@ export function RoomStudio() {
                 <p>Calcolate da {roomMeasurement.referenceLabel}. I mobili con dimensioni trovate nel prodotto cambiano scala automaticamente mentre li sposti.</p>
                 {isEditingRoomMeasure ? <div className="room-measurement-edit"><label htmlFor="room-width-reference">Quanto misura la parete principale?</label><div><input id="room-width-reference" aria-label="Larghezza reale parete principale" inputMode="decimal" value={roomWidthDraft} onChange={(event) => setRoomWidthDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') confirmRoomWidth(); }} placeholder={roomMeasurement.widthMeters.toLocaleString('it-IT')} /><span>metri</span><button type="button" onClick={confirmRoomWidth}>Conferma</button></div><button type="button" className="cancel-measure-edit" onClick={() => setIsEditingRoomMeasure(false)}>Annulla</button></div> : <div className="room-measurement-actions"><button type="button" onClick={() => { setRoomWidthDraft(String(roomMeasurement.widthMeters).replace('.', ',')); setIsEditingRoomMeasure(true); }}>✎ Correggi una misura</button>{manualRoomWidth && <button type="button" onClick={restoreAutomaticRoomMeasurement}>↻ Torna automatico</button>}</div>}
               </div>}
-              {activeStep === 3 && <div className="surface-target-card">
+              {activeStep === 3 && !selectedFurniture && !pendingFurniture && <div className="surface-target-card">
                 <div className="surface-target-heading"><span>1</span><div><strong>Dove vuoi applicarlo?</strong><small>Scegli pavimento o muro. La linea verde indica la zona attiva.</small></div></div>
                 <div className="surface-target-buttons" role="group" aria-label="Scegli superficie da modificare">
                   {productTargetSurfaces.map((surface) => <button type="button" key={surface.id} className={surface.id === selectedId ? 'is-active' : ''} onClick={() => { setSelectedId(surface.id); setRenameDraft(surface.name); setShowSurfaceGuides(true); setError(null); setNotice(`${surface.name} selezionato.`); if (isCorrectingEdges) window.requestAnimationFrame(() => canvasRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })); }} disabled={surface.frozen}><span style={{ background: kindColors[surface.kind] }} />{surface.name}{surface.frozen ? ' · bloccato' : ''}</button>)}
@@ -3338,7 +3506,7 @@ export function RoomStudio() {
               <div className="property-title"><span>Come vuoi inserire il prodotto?</span></div>
               <div className="product-entry-cards" aria-label="Modalità inserimento prodotto">
                 <button type="button" className="product-entry-card is-primary" onClick={() => document.querySelector<HTMLInputElement>('.guided-search input')?.focus()}><span>⌕</span><strong>Cerca online</strong><small>Marca, modello, colore o link</small></button>
-                <button type="button" className="product-entry-card" onClick={() => furnitureInputRef.current?.click()} disabled={isClassifyingProduct}><span>▣</span><strong>{isClassifyingProduct ? 'Riconosco…' : 'Foto prodotto'}</strong><small>Capisce materiale o mobile</small></button>
+                <button type="button" className="product-entry-card" onClick={() => furnitureInputRef.current?.click()} disabled={isClassifyingProduct || isPreparingFurniture}><span>▣</span><strong>{isClassifyingProduct || isPreparingFurniture ? 'Riconosco e preparo…' : 'Foto prodotto'}</strong><small>Capisce materiale o mobile</small></button>
                 <button type="button" className="product-entry-card" onClick={() => materialInputRef.current?.click()}><span>▦</span><strong>Campione materiale</strong><small>Per pavimenti e pareti</small></button>
               </div>
               <div className="product-search-heading"><strong>Ricerca normale</strong><span>oppure incolla il link del prodotto</span></div>
@@ -3351,13 +3519,15 @@ export function RoomStudio() {
               {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => { const missingFurnitureImage = item.category === 'Arredi' && !item.previewUrl; const needsSurfaceSample = requiresVerifiedSurfaceSample(item); const target = recommendedSurface(item); return <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={`Riferimento ${item.name}`} /> : <span className="catalog-swatch tile" /> }<button className="online-product-info" type="button" onClick={() => void chooseOnlineProduct(item)} disabled={missingFurnitureImage} title={missingFurnitureImage ? 'Serve una foto prodotto prima di inserire questo mobile' : undefined}><strong>{item.brand} · {item.name}</strong><span className={`reference-badge reference-${item.referenceKind ?? 'metadata-only'}`}>{materialReferenceLabel(item)}</span><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a><button className="online-product-try" type="button" onClick={() => item.category === 'Arredi' ? void chooseOnlineProduct(item) : void applyMaterialAutomatically(item)} disabled={missingFurnitureImage || isApplyingProduct}>{item.category === 'Arredi' ? 'Inserisci nella stanza' : needsSurfaceSample ? 'Aggiungi campione per provarlo' : `Prova ora su ${target?.name ?? 'una superficie'}`}</button></div>; })}</div>}
               <div className="material-results">{filteredMaterials.length > 0 && <div className="included-results-heading"><strong>Esempi compatibili</strong><span>Seleziona per provarli subito nella stanza</span></div>}{filteredMaterials.map((item) => <button type="button" key={item.id} className={`material-result ${material?.id === item.id ? 'is-selected' : ''}`} onClick={() => chooseMaterial(item)}><span className={`catalog-swatch ${item.pattern ?? 'color'}`} style={{ '--swatch-color': item.color } as CSSProperties} /><span><strong>{item.name}</strong><small>{item.category} · {item.description}</small></span></button>)}{filteredFurniture.map((item) => <button type="button" key={item.name} className={`material-result furniture-result ${pendingFurniture?.name === item.name ? 'is-selected' : ''}`} onClick={() => startFurniturePlacement(item.name, item.previewUrl, item.description, undefined, item.previewUrl, item.sidePreviewUrl)}>{item.previewUrl ? <img className="furniture-result-preview" src={item.previewUrl} alt="" /> : <span className="furniture-icon">＋</span>}<span><strong>{item.name}</strong><small>Tocca e poi scegli il punto nella stanza · {item.description}</small></span></button>)}{filteredMaterials.length === 0 && filteredFurniture.length === 0 && onlineMaterials.length === 0 && <div className="custom-search-result"><p>Nessun campione incluso corrisponde. Per trovare marca e prodotto esatti serve la ricerca IA attiva.</p><button type="button" onClick={addCustomRequest}>Aggiungi “{materialQuery.trim()}” alla richiesta</button></div>}</div>
               <div className="custom-color"><input type="color" aria-label="Scegli colore personalizzato" value={customColor} onChange={(event) => setCustomColor(event.target.value)} /><button type="button" onClick={chooseCustomColor}>Usa questo colore</button></div>
-              {material && <div className="loaded-material">{material.previewUrl ? <img src={material.previewUrl} alt={`Campione ${material.name}`} /> : <span className="catalog-swatch tile" />}<div><strong>{material.name}</strong><small>{materialReferenceLabel(material)}</small></div></div>}
-              {materialNeedsSample && <div className="indicative-product-note"><div><strong>Serve un campione prima della prova.</strong><span>La fonte verifica il prodotto, ma non fornisce una texture applicabile. L’app non inventa il disegno dal solo nome.</span></div><button type="button" onClick={() => materialInputRef.current?.click()}>＋ Carica campione materiale</button></div>}
-              <button className="auto-apply-product-button" type="button" onClick={() => void applyMaterialAutomatically()} disabled={!material || isApplyingProduct}>{isApplyingProduct ? 'Adatto il prodotto alla stanza…' : materialNeedsSample ? 'Aggiungi campione per provarlo' : `Prova ora su ${materialTarget?.name ?? 'la superficie scelta'}`}</button>
-              <button className="apply-button secondary-apply" type="button" aria-label={`Applica a ${selected.name}`} onClick={applyMaterial} disabled={!material || selected.frozen || materialNeedsSample}>Oppure applica solo a {selected.name}</button>
-              <p className="material-search-note">L’app sceglie pavimento o muro, corregge prospettiva e scala, e lascia identiche tutte le zone Freeze. La resa è fedele al prodotto solo quando compare “Texture ufficiale verificata” o usi un tuo campione.</p>
+              {!selectedFurniture && !pendingFurniture ? <>
+                {material && <div className="loaded-material">{material.previewUrl ? <img src={material.previewUrl} alt={`Campione ${material.name}`} /> : <span className="catalog-swatch tile" />}<div><strong>{material.name}</strong><small>{materialReferenceLabel(material)}</small></div></div>}
+                {materialNeedsSample && <div className="indicative-product-note"><div><strong>Serve un campione prima della prova.</strong><span>La fonte verifica il prodotto, ma non fornisce una texture applicabile. L’app non inventa il disegno dal solo nome.</span></div><button type="button" onClick={() => materialInputRef.current?.click()}>＋ Carica campione materiale</button></div>}
+                <button className="auto-apply-product-button" type="button" onClick={() => void applyMaterialAutomatically()} disabled={!material || isApplyingProduct}>{isApplyingProduct ? 'Adatto il prodotto alla stanza…' : materialNeedsSample ? 'Aggiungi campione per provarlo' : `Prova ora su ${materialTarget?.name ?? 'la superficie scelta'}`}</button>
+                <button className="apply-button secondary-apply" type="button" aria-label={`Applica a ${selected.name}`} onClick={applyMaterial} disabled={!material || selected.frozen || materialNeedsSample}>Oppure applica solo a {selected.name}</button>
+                <p className="material-search-note">L’app sceglie pavimento o muro, corregge prospettiva e scala, e lascia identiche tutte le zone Freeze. La resa è fedele al prodotto solo quando compare “Texture ufficiale verificata” o usi un tuo campione.</p>
+              </> : <div className="furniture-mode-note"><strong>Modalità mobile attiva</strong><span>I comandi di pavimento e rivestimento sono nascosti per evitare di applicare per errore la foto del mobile a un muro.</span></div>}
             </div>
-            <div className="property-section furniture-section"><div className="property-title"><span>Mobili nella stanza</span><span className="editable-badge">{placedFurniture.length + customRequests.length} scelti</span></div><button className="upload-furniture-button" type="button" onClick={() => furnitureInputRef.current?.click()} disabled={isClassifyingProduct}>{isClassifyingProduct ? 'Riconosco e preparo la foto…' : '＋ Carica la foto di un prodotto'}</button>{placedFurniture.length || customRequests.length ? <div className="selected-assets">{placedFurniture.map((item, index) => <button type="button" className={selectedFurnitureId === item.id ? 'is-selected' : ''} key={item.id} onClick={() => setSelectedFurnitureId(item.id)}>{item.name} {placedFurniture.filter((candidate) => candidate.name === item.name).length > 1 ? index + 1 : ''}<span>{item.frozen ? '◆' : '›'}</span></button>)}{customRequests.map((item) => <button type="button" key={item} onClick={() => setCustomRequests((current) => current.filter((name) => name !== item))}>{item}<span>×</span></button>)}</div> : <p className="no-results">Carica una foto: l’app riconosce se è un mobile oppure un materiale e sceglie il flusso corretto.</p>}{selectedFurniture && <div className="furniture-controls"><div className="furniture-control-heading"><strong>{selectedFurniture.name}</strong><span>{selectedFurniture.frozen ? 'Posizione bloccata' : 'Tocca i comandi per sistemarlo'}</span></div><div className="furniture-facing-controls" role="group" aria-label="Parete di orientamento"><span>Schienale verso</span>{(Object.keys(furnitureFacingLabels) as FurnitureFacing[]).map((facing) => <button type="button" key={facing} className={selectedFurniture.facing === facing ? 'is-active' : ''} onClick={() => orientSelectedFurniture(facing)} disabled={selectedFurniture.frozen}>{facing === 'front-wall' ? '↑ Frontale' : facing === 'left-wall' ? '↙ Sinistra' : '↘ Destra'}</button>)}</div><div className="furniture-ipad-pad" role="group" aria-label="Comandi rapidi per il mobile"><button type="button" onClick={() => rotateSelectedFurniture(-5)} disabled={selectedFurniture.frozen || selectedFurniture.rotation <= -35} aria-label="Ruota mobile a sinistra">↶</button><button type="button" onClick={() => nudgeSelectedFurniture(0, -.025)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile in alto">↑</button><button type="button" onClick={() => rotateSelectedFurniture(5)} disabled={selectedFurniture.frozen || selectedFurniture.rotation >= 35} aria-label="Ruota mobile a destra">↷</button><button type="button" onClick={() => nudgeSelectedFurniture(-.025, 0)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile a sinistra">←</button><button type="button" className="furniture-angle-reset" onClick={() => updateSelectedFurniture({ rotation: 0 })} disabled={selectedFurniture.frozen || selectedFurniture.rotation === 0} aria-label="Raddrizza mobile">{Math.round(selectedFurniture.rotation)}°</button><button type="button" onClick={() => nudgeSelectedFurniture(.025, 0)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile a destra">→</button><button type="button" onClick={() => resizeSelectedFurniture(-6)} disabled={selectedFurniture.frozen} aria-label="Rimpicciolisci mobile">−</button><button type="button" onClick={() => nudgeSelectedFurniture(0, .025)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile in basso">↓</button><button type="button" onClick={() => resizeSelectedFurniture(6)} disabled={selectedFurniture.frozen} aria-label="Ingrandisci mobile">＋</button></div><div className="furniture-quick-actions"><button className={`auto-size-furniture-button ${selectedFurniture.autoScale ? 'is-active' : ''}`} type="button" onClick={restoreAutomaticFurnitureScale} disabled={selectedFurniture.frozen || selectedFurniture.autoScale} aria-label="Misura automatica">{selectedFurniture.autoScale ? `✓ Auto ${Math.round(selectedFurniture.scale)}%` : '◎ Auto'}</button><button className={`freeze-furniture-button ${selectedFurniture.frozen ? 'is-active' : ''}`} type="button" onClick={() => updateSelectedFurniture({ frozen: !selectedFurniture.frozen })}>{selectedFurniture.frozen ? '◇ Sblocca' : '◆ Blocca'}</button><button className="remove-furniture-button" type="button" onClick={removeSelectedFurniture} disabled={selectedFurniture.frozen} aria-label="Rimuovi mobile">⌫ Elimina</button></div></div>}<p className="material-search-note">Posizione, parete, angolo e dimensione saranno usati nel render finale.</p></div>
+            <div className="property-section furniture-section"><div className="property-title"><span>Mobili nella stanza</span><span className="editable-badge">{placedFurniture.length + customRequests.length} scelti</span></div><button className="upload-furniture-button" type="button" onClick={() => furnitureInputRef.current?.click()} disabled={isClassifyingProduct || isPreparingFurniture}>{isClassifyingProduct || isPreparingFurniture ? 'Riconosco, scontorno e preparo la prospettiva…' : '＋ Carica la foto di un prodotto'}</button>{placedFurniture.length || customRequests.length ? <div className="selected-assets">{placedFurniture.map((item, index) => <button type="button" className={selectedFurnitureId === item.id ? 'is-selected' : ''} key={item.id} onClick={() => selectFurnitureForEditing(item)}>{item.name} {placedFurniture.filter((candidate) => candidate.name === item.name).length > 1 ? index + 1 : ''}<span>{item.frozen ? '◆' : '›'}</span></button>)}{customRequests.map((item) => <button type="button" key={item} onClick={() => setCustomRequests((current) => current.filter((name) => name !== item))}>{item}<span>×</span></button>)}</div> : <p className="no-results">Carica una foto: l’app riconosce se è un mobile oppure un materiale e sceglie il flusso corretto.</p>}{selectedFurniture && <div className="furniture-controls"><div className="furniture-control-heading"><strong>{selectedFurniture.name}</strong><span>{selectedFurniture.frozen ? 'Posizione bloccata' : 'Tocca i comandi per sistemarlo'}</span></div><div className="furniture-real-size"><label htmlFor="furniture-real-width">Larghezza reale</label><div><input id="furniture-real-width" aria-label="Larghezza reale del mobile" inputMode="decimal" value={furnitureWidthDraft} onChange={(event) => setFurnitureWidthDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') confirmFurnitureWidth(); }} placeholder="es. 140" disabled={selectedFurniture.frozen} /><span>cm</span><button type="button" onClick={confirmFurnitureWidth} disabled={selectedFurniture.frozen}>Applica misura</button></div><small>Per una scala esatta usa la misura del prodotto; senza quote l’app può soltanto stimarla.</small></div><div className="furniture-facing-controls" role="group" aria-label="Parete di orientamento"><span>Schienale verso</span>{(Object.keys(furnitureFacingLabels) as FurnitureFacing[]).map((facing) => <button type="button" key={facing} className={selectedFurniture.facing === facing ? 'is-active' : ''} onClick={() => void orientSelectedFurniture(facing)} disabled={selectedFurniture.frozen || isPreparingFurniture}>{facing === 'front-wall' ? '↑ Frontale' : facing === 'left-wall' ? '↙ Sinistra' : '↘ Destra'}</button>)}</div><div className="furniture-ipad-pad" role="group" aria-label="Comandi rapidi per il mobile"><button type="button" onClick={() => rotateSelectedFurniture(-5)} disabled={selectedFurniture.frozen || selectedFurniture.rotation <= -35} aria-label="Ruota mobile a sinistra">↶</button><button type="button" onClick={() => nudgeSelectedFurniture(0, -.025)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile in alto">↑</button><button type="button" onClick={() => rotateSelectedFurniture(5)} disabled={selectedFurniture.frozen || selectedFurniture.rotation >= 35} aria-label="Ruota mobile a destra">↷</button><button type="button" onClick={() => nudgeSelectedFurniture(-.025, 0)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile a sinistra">←</button><button type="button" className="furniture-angle-reset" onClick={() => updateSelectedFurniture({ rotation: 0 })} disabled={selectedFurniture.frozen || selectedFurniture.rotation === 0} aria-label="Raddrizza mobile">{Math.round(selectedFurniture.rotation)}°</button><button type="button" onClick={() => nudgeSelectedFurniture(.025, 0)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile a destra">→</button><button type="button" onClick={() => resizeSelectedFurniture(-6)} disabled={selectedFurniture.frozen} aria-label="Rimpicciolisci mobile">−</button><button type="button" onClick={() => nudgeSelectedFurniture(0, .025)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile in basso">↓</button><button type="button" onClick={() => resizeSelectedFurniture(6)} disabled={selectedFurniture.frozen} aria-label="Ingrandisci mobile">＋</button></div><div className="furniture-quick-actions"><button type="button" onClick={undoFurnitureChange} disabled={!pastFurniture.length}>↶ Indietro</button><button className={`auto-size-furniture-button ${selectedFurniture.autoScale ? 'is-active' : ''}`} type="button" onClick={restoreAutomaticFurnitureScale} disabled={selectedFurniture.frozen || selectedFurniture.autoScale} aria-label="Misura automatica">{selectedFurniture.autoScale ? `✓ Auto ${Math.round(selectedFurniture.scale)}%` : '◎ Auto'}</button><button className={`freeze-furniture-button ${selectedFurniture.frozen ? 'is-active' : ''}`} type="button" onClick={() => updateSelectedFurniture({ frozen: !selectedFurniture.frozen })}>{selectedFurniture.frozen ? '◇ Sblocca' : '◆ Blocca'}</button><button className="remove-furniture-button" type="button" onClick={removeSelectedFurniture} disabled={selectedFurniture.frozen} aria-label="Rimuovi mobile">⌫ Cancella</button></div></div>}<p className="material-search-note">La vista fotografica viene ricostruita per la parete scelta; posizione, scala e contatto col pavimento sono controllati di nuovo nel render finale.</p></div>
             <div className="property-section metrics"><div><span>Vertici</span><strong>{selected.points.length}</strong></div><div><span>Stato</span><strong>{selected.frozen ? 'Lock' : 'Edit'}</strong></div><div><span>Texture</span><strong>{selected.materialId ? 'Sì' : 'No'}</strong></div></div><button className="remove-button" type="button" onClick={deleteSelected} disabled={selected.frozen}>Elimina superficie</button></> : room ? <div className="empty-properties"><strong>Seleziona un contorno</strong><p>Tocca una superficie sulla foto o sceglila dall’elenco. Puoi anche disegnarne una nuova.</p></div> : null}
           {room && <button className="remove-room-button" type="button" onClick={removeRoom}>Chiudi progetto</button>}
           <div className="phase-card"><span className="phase-index">0.3</span><div><p className="eyebrow">Modalità prova</p><strong>IA e Freeze pronti</strong><p>Ricerca prodotti, stanza vuota e render vengono elaborati dal server senza mostrare chiavi nell’app.</p></div></div>

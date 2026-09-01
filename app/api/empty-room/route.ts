@@ -23,6 +23,7 @@ export async function POST(request: Request) {
     const image = incoming.get('image');
     const mask = incoming.get('mask');
     const maskReference = incoming.get('maskReference');
+    const contextImage = incoming.get('contextImage');
     const protectedAreas = String(incoming.get('protectedAreas') ?? '').slice(0, 1000);
     const localCrop = incoming.get('localCrop') === 'true';
     const targetAreasInput = String(incoming.get('targetAreas') ?? '').slice(0, 12000);
@@ -49,10 +50,14 @@ export async function POST(request: Request) {
     if (maskReference != null && (!(maskReference instanceof File) || maskReference.type !== 'image/png' || maskReference.size > 8 * 1024 * 1024)) {
       return json({ message: 'La guida visiva della maschera non è valida.' }, headers, 400);
     }
+    if (contextImage != null && (!(contextImage instanceof File) || !contextImage.type.startsWith('image/') || contextImage.size > 12 * 1024 * 1024)) {
+      return json({ message: 'Il riferimento globale della stanza non è valido.' }, headers, 400);
+    }
 
     const prompt = [
       'This is strictly local photographic inpainting, not a new room generation. Return the complete source photograph and edit only the areas marked editable by the technical mask.',
       localCrop ? 'The source is an exact local crop from a larger room photograph. Preserve all four crop borders pixel-aligned so the result can be pasted back into the original photograph without any seam.' : '',
+      contextImage instanceof File ? 'The additional reference image is the complete original room. Use it only to keep global perspective, illumination, wall color and continuous floor or wall texture coherent across this local crop. Never copy its furniture back into an authorized removal region.' : '',
       `Remove every non-architectural target inside these real-estate-emptying regions: ${targetAreas}.`,
       'Each listed target is explicitly authorized for removal even when fitted, built-in, attached, wired or plumbed: this includes kitchen base, wall and tall cabinets, worktops, islands, integrated ovens, hobs, hoods, fitted wardrobes, bathroom vanities, cabinets, mirrors and storage.',
       'The output must be a pixel-aligned edit of the input with the identical width-to-height ratio, field of view and framing. Every unchanged architectural landmark must remain at the same normalized image coordinates.',
@@ -70,6 +75,8 @@ export async function POST(request: Request) {
       source: image,
       mask,
       maskReferenceFile: maskReference instanceof File ? maskReference : null,
+      referenceImageFile: contextImage instanceof File ? contextImage : null,
+      referenceImageRole: 'room-context',
       prompt,
       maskExplanation: 'transparent polygons are the only editable furniture-removal areas; every solid white pixel is protected and must stay visually identical',
     });

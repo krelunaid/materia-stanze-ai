@@ -97,6 +97,28 @@ describe('real-estate room cleanup prompts', () => {
     expect(mocks.verifyRoomCleanup).not.toHaveBeenCalled();
   });
 
+  it('conditions every local crop on the complete original room', async () => {
+    const form = baseForm();
+    form.append('contextImage', new File(['complete room'], 'room-global-context.jpg', { type: 'image/jpeg' }));
+    form.append('localCrop', 'true');
+    form.append('targetAreas', JSON.stringify([{
+      label: 'Basi e pensili cucina',
+      points: [{ x: .05, y: .18 }, { x: .9, y: .18 }, { x: .9, y: .85 }, { x: .05, y: .85 }],
+    }]));
+
+    const response = await emptyRoom(formRequest(form));
+
+    expect(response.ok, await response.clone().text()).toBe(true);
+    expect(mocks.editImage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'grok' }),
+      expect.objectContaining({
+        referenceImageFile: expect.objectContaining({ name: 'room-global-context.jpg' }),
+        referenceImageRole: 'room-context',
+        prompt: expect.stringContaining('complete original room'),
+      }),
+    );
+  });
+
   it('rejects the locally composited preview when it fails the visual gate', async () => {
     mocks.verifyRoomCleanup.mockResolvedValue({
       ...acceptedVerification,
