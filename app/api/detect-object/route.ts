@@ -1,4 +1,4 @@
-import { auditRoomEmptyingNeed, detectMovableObjectRegions, detectObjectRegion, getAiProvider, getVisionAuditor } from '../../server/ai-provider';
+import { auditRoomEmptyingNeed, detectMovableObjectRegions, detectObjectRegion, getAiProvider, getVisionAuditor, normalizeCleanupRegions } from '../../server/ai-provider';
 import { guardAiRequest, handleAiOptions } from '../../server/ai-api-guard';
 
 function json(body: unknown, headers: Headers, status = 200) {
@@ -29,9 +29,26 @@ export async function POST(request: Request) {
         auditor ? auditRoomEmptyingNeed(auditor, image) : Promise.resolve(null),
       ]);
       if (regionsResult.status === 'rejected') throw regionsResult.reason;
+      const roomAudit = auditResult.status === 'fulfilled' ? auditResult.value : null;
+      let regions = regionsResult.value;
+      let localizationPasses = 1;
+      if (roomAudit?.needsEmptying && roomAudit.confidence >= .75) {
+        const expectedRegions = Math.min(10, Math.max(1, Math.ceil(roomAudit.removableObjectCount * .5)));
+        if (regions.length < expectedRegions) {
+          try {
+            const focused = await detectMovableObjectRegions(provider, image, 'real-estate-emptying', roomAudit.majorCategories);
+            regions = normalizeCleanupRegions([...regions, ...focused], .4);
+            localizationPasses = 2;
+          } catch {
+            // Keep the first safe localization when the focused recovery is
+            // temporarily unavailable.
+          }
+        }
+      }
       return json({
-        regions: regionsResult.value,
-        roomAudit: auditResult.status === 'fulfilled' ? auditResult.value : null,
+        regions,
+        roomAudit,
+        localizationPasses,
         provider: provider.id,
         auditor: auditor?.id ?? null,
         auditorModel: auditor?.model ?? null,

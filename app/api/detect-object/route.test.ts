@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   auditRoomEmptyingNeed: vi.fn(),
   detectMovableObjectRegions: vi.fn(),
+  normalizeCleanupRegions: vi.fn(),
 }));
 
 vi.mock('../../server/ai-api-guard.ts', () => ({
@@ -16,6 +17,7 @@ vi.mock('../../server/ai-provider.ts', () => ({
   detectObjectRegion: vi.fn(),
   getAiProvider: vi.fn(() => ({ id: 'grok', label: 'Grok', apiKey: 'grok-test' })),
   getVisionAuditor: vi.fn(() => ({ id: 'openai', label: 'OpenAI', apiKey: 'openai-test', model: 'gpt-5.6-terra' })),
+  normalizeCleanupRegions: mocks.normalizeCleanupRegions,
 }));
 
 import { POST } from './route';
@@ -39,6 +41,7 @@ beforeEach(() => {
     confidence: .97,
     reason: 'È presente un divano.',
   });
+  mocks.normalizeCleanupRegions.mockReset().mockImplementation((regions) => regions);
 });
 
 describe('automatic room-emptying detection', () => {
@@ -66,5 +69,34 @@ describe('automatic room-emptying detection', () => {
     expect(response.ok).toBe(true);
     expect(result.regions).toHaveLength(1);
     expect(result.roomAudit).toBeNull();
+  });
+
+  it('asks Grok for a focused second localization when Terra sees many more objects', async () => {
+    mocks.detectMovableObjectRegions
+      .mockResolvedValueOnce([{
+        label: 'Quadro', confidence: .9, removalKind: 'loose-object',
+        points: [{ x: .1, y: .1 }, { x: .2, y: .1 }, { x: .2, y: .2 }, { x: .1, y: .2 }],
+      }])
+      .mockResolvedValueOnce([{
+        label: 'Letto', confidence: .96, removalKind: 'loose-object',
+        points: [{ x: .2, y: .4 }, { x: .9, y: .4 }, { x: .9, y: .9 }, { x: .2, y: .9 }],
+      }]);
+    mocks.auditRoomEmptyingNeed.mockResolvedValueOnce({
+      needsEmptying: true,
+      removableObjectCount: 10,
+      majorCategories: ['letto', 'cassettiera', 'tende'],
+      confidence: .99,
+      reason: 'La camera è arredata.',
+    });
+
+    const response = await POST(automaticRequest());
+    const result = await response.json() as { regions?: unknown[]; localizationPasses?: number };
+
+    expect(response.ok).toBe(true);
+    expect(result.regions).toHaveLength(2);
+    expect(result.localizationPasses).toBe(2);
+    expect(mocks.detectMovableObjectRegions).toHaveBeenNthCalledWith(
+      2, expect.anything(), expect.any(File), 'real-estate-emptying', ['letto', 'cassettiera', 'tende'],
+    );
   });
 });

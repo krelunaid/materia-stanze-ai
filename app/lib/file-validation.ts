@@ -1,7 +1,7 @@
 export const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
-const allowedMimeTypes = new Set(['image/jpeg', 'image/png', 'image/heic', 'image/heif']);
-const allowedFallbackExtensions = new Set(['jpg', 'jpeg', 'png', 'heic', 'heif']);
+const allowedMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
+const allowedFallbackExtensions = new Set(['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif']);
 
 export type AcceptedRoomFile = {
   file: File;
@@ -41,7 +41,7 @@ export function validateRoomFile(file: File): RoomFileValidation {
     return { ok: false, message: 'Il PDF non è ancora modificabile. Esportalo come JPG o PNG e riprova.' };
   }
   if (!recognizedType && !recognizedFallback) {
-    return { ok: false, message: 'Formato non supportato. Usa JPG, PNG o HEIC.' };
+    return { ok: false, message: 'Formato non supportato. Usa JPG, PNG, WEBP o HEIC.' };
   }
   if (file.size <= 0) {
     return { ok: false, message: 'Il file è vuoto. Scegli un originale valido.' };

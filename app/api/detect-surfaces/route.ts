@@ -11,6 +11,12 @@ function json(body: unknown, headers: Headers, status = 200) {
   return Response.json(body, { status, headers });
 }
 
+function isTransientVisionFailure(caught: unknown) {
+  const name = caught instanceof Error ? caught.name.toLowerCase() : '';
+  const message = caught instanceof Error ? caught.message.toLowerCase() : String(caught).toLowerCase();
+  return name === 'aborterror' || /aborted|timeout|timed out|network connection|fetch failed/.test(message);
+}
+
 export function OPTIONS(request: Request) {
   return handleAiOptions(request);
 }
@@ -32,8 +38,16 @@ export async function POST(request: Request) {
     }
     if (image.size > 20 * 1024 * 1024) return json({ message: 'La fotografia supera il limite di 20 MB.' }, headers, 413);
     const auditor = getVisionAuditor(process.env, provider);
+    const detectPrimaryGeometry = async () => {
+      try {
+        return await detectRoomSurfaces(provider, image, { openingAudit: true, source: 'photo' });
+      } catch (caught) {
+        if (!isTransientVisionFailure(caught)) throw caught;
+        return detectRoomSurfaces(provider, image, { openingAudit: true, source: 'photo' });
+      }
+    };
     const [primaryResult, auditResult] = await Promise.allSettled([
-      detectRoomSurfaces(provider, image, { openingAudit: true, source: 'photo' }),
+      detectPrimaryGeometry(),
       auditor ? detectArchitecturalOpenings(auditor, image) : Promise.resolve([]),
     ]);
     if (primaryResult.status === 'rejected') throw primaryResult.reason;

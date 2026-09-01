@@ -64,4 +64,26 @@ describe('room geometry with an independent opening audit', () => {
     expect(result.surfaces).toEqual(primarySurfaces);
     expect(result.auditedOpenings).toBe(0);
   });
+
+  it('retries the primary geometry once after a transient abort', async () => {
+    mocks.detectRoomSurfaces
+      .mockRejectedValueOnce(new DOMException('The operation was aborted', 'AbortError'))
+      .mockResolvedValueOnce(primarySurfaces);
+
+    const response = await POST(photoRequest());
+    const result = await response.json() as { surfaces?: unknown[] };
+
+    expect(response.ok).toBe(true);
+    expect(result.surfaces).toHaveLength(2);
+    expect(mocks.detectRoomSurfaces).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry a non-transient geometry failure', async () => {
+    mocks.detectRoomSurfaces.mockRejectedValueOnce(new Error('invalid geometry'));
+
+    const response = await POST(photoRequest());
+
+    expect(response.status).toBe(500);
+    expect(mocks.detectRoomSurfaces).toHaveBeenCalledTimes(1);
+  });
 });

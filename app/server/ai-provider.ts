@@ -466,12 +466,22 @@ function validPublicUrl(value: string) {
   }
 }
 
+export function normalizeMaterialProductCategory(product: Pick<MaterialProduct, 'name' | 'collection' | 'category' | 'effect' | 'description'>) {
+  const text = `${product.name} ${product.collection} ${product.effect} ${product.description}`
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (/carta\s+da\s+parati|wall\s*paper|wallpaper|wallcovering|tappezzeria|rivestimento\s+murale/.test(text)) return 'Rivestimenti' as const;
+  if (/\bparquet\b|\bpaviment[oi]\b|floor(?:ing)?|doghe\s+per\s+pavimento/.test(text)) return 'Pavimenti' as const;
+  if (/pittura\s+murale|vernice\s+murale|wall\s*paint/.test(text)) return 'Colori' as const;
+  return product.category;
+}
+
 function normalizeProducts(products: MaterialProduct[]) {
   return products.slice(0, 6).filter((item) => {
     const source = validPublicUrl(item.sourceUrl);
     return Boolean(item.name && item.brand && source && item.confidence >= .55);
   }).map((item) => ({
     ...item,
+    category: normalizeMaterialProductCategory(item),
     productImageUrl: validPublicUrl(item.productImageUrl)?.toString() ?? '',
     textureImageUrl: validPublicUrl(item.textureImageUrl)?.toString() ?? '',
     roomImageUrls: (Array.isArray(item.roomImageUrls) ? item.roomImageUrls : []).slice(0, 3)
@@ -1743,6 +1753,7 @@ export async function detectMovableObjectRegions(
   provider: AiProvider,
   image: File,
   intent: CleanupIntent = 'real-estate-emptying',
+  requiredCategories: string[] = [],
 ) {
   const imageUrl = await fileToDataUri(image);
   const requestRegions = async (instruction: string, effort: 'low' | 'medium', timeoutMs: number) => {
@@ -1790,6 +1801,18 @@ export async function detectMovableObjectRegions(
     'For each likely movable group return a tight clockwise 4-to-16-point normalized polygon and an honest confidence. Never return a room-wide polygon. Return an empty list only when careful inspection confirms that the room is already empty.',
     'Return only the structured result.',
   ].join('\n');
+
+  const focusedPrompt = [
+    `Focused recovery for ${intent}. An independent room inventory says these removable categories are present: ${requiredCategories.join(', ')}.`,
+    'Locate every large or dominant item in that inventory before small decor. Beds, sofas, wardrobes, chests of drawers, tables, continuous kitchen runs, bathroom vanities and curtains must never be skipped merely because they cover a large part of the image or touch an image edge.',
+    'Return one complete tight polygon per physical item or continuous fitted group. Infer the full visible silhouette behind bedding, cushions and small clutter, but never include walls, floor, ceiling, doors or windows.',
+    'Use removalKind=loose-object for movable furniture and textiles, installed-furnishing for fitted cabinetry, fixed-appliance for appliances and bathroom-furnishing for sanitary or vanity groups. Return only the structured result.',
+  ].join('\n');
+
+  if (requiredCategories.length) {
+    const focused = await requestRegions(focusedPrompt, 'medium', 45000);
+    return normalizeCleanupRegions(focused.regions ?? [], .4);
+  }
 
   const inventoryAttempts = await Promise.allSettled([
     requestRegions(primaryPrompt, 'low', 35000),

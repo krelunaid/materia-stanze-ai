@@ -1,8 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { acceptsFurnitureRender, acceptsRoomCleanup, auditRoomEmptyingNeed, chooseSupportedImageAspectRatio, classifyProductPhoto, detectArchitecturalOpenings, detectMovableObjectRegions, detectObjectRegion, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, getVisionAuditor, knownRetailerProductImage, mergeArchitecturalOpeningAudit, normalizeCleanupRegions, normalizeProductPhotoClassification, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
+import { acceptsFurnitureRender, acceptsRoomCleanup, auditRoomEmptyingNeed, chooseSupportedImageAspectRatio, classifyProductPhoto, detectArchitecturalOpenings, detectMovableObjectRegions, detectObjectRegion, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, getVisionAuditor, knownRetailerProductImage, mergeArchitecturalOpeningAudit, normalizeCleanupRegions, normalizeMaterialProductCategory, normalizeProductPhotoClassification, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe('catalog category safeguards', () => {
+  it('always routes wallpaper to a wall surface, never to furniture placement', () => {
+    expect(normalizeMaterialProductCategory({
+      name: 'Carta da Parati Vintage Rose',
+      collection: 'Dekornik',
+      category: 'Arredi',
+      effect: 'wallpaper floreale',
+      description: 'Rivestimento murale decorativo',
+    })).toBe('Rivestimenti');
+  });
 });
 
 describe('getAiProvider', () => {
@@ -681,6 +693,28 @@ describe('getAiProvider', () => {
 
     expect(result).toMatchObject([{ label: 'Divano', confidence: .48 }]);
     expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('performs one focused localization using Terra categories', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ output: [{ content: [{
+      type: 'output_text', text: JSON.stringify({ regions: [{
+        label: 'Letto completo', confidence: .96, removalKind: 'loose-object',
+        points: [{ x: .15, y: .4 }, { x: .9, y: .4 }, { x: .9, y: .92 }, { x: .15, y: .92 }],
+      }] }),
+    }] }] }), { status: 200 }));
+
+    const result = await detectMovableObjectRegions(
+      { id: 'grok', label: 'Grok', apiKey: 'xai-test' },
+      new File(['room'], 'room.jpg', { type: 'image/jpeg' }),
+      'real-estate-emptying',
+      ['letto', 'cassettiera', 'tende'],
+    );
+
+    expect(result).toMatchObject([{ label: 'Letto completo' }]);
+    expect(globalThis.fetch).toHaveBeenCalledOnce();
+    const prompt = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)).input[0].content[1].text as string;
+    expect(prompt).toContain('letto, cassettiera, tende');
+    expect(prompt).toContain('must never be skipped');
   });
 
   it('rejects an opening hallucinated by only one geometry pass', () => {

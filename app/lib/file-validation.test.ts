@@ -20,6 +20,11 @@ describe('validateRoomFile', () => {
     if (result.ok) expect(result.value.canPreview).toBe(true);
   });
 
+  it('accepts WEBP room photos by MIME type or extension', () => {
+    expect(validateRoomFile(new File(['room'], 'pavimento.webp', { type: 'image/webp' })).ok).toBe(true);
+    expect(validateRoomFile(new File(['room'], 'pavimento.WEBP')).ok).toBe(true);
+  });
+
   it('accepts very small JPEG and alpha-capable PNG inputs without crashing', () => {
     expect(validateRoomFile(new File([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], 'tiny.jpg', { type: 'image/jpeg' })).ok).toBe(true);
     expect(validateRoomFile(new File([new Uint8Array([137, 80, 78, 71])], 'alpha.png', { type: 'image/png' })).ok).toBe(true);
