@@ -422,9 +422,9 @@ function createDemoSurfaces() {
     // the floor upper boundary meet at the skirting-floor contact, not at the
     // visually stronger upper trim edge.
     { name: 'Muro 1', kind: 'wall', frozen: false, points: [{ x: .218, y: .13 }, { x: .785, y: .13 }, { x: .785, y: .714 }, { x: .218, y: .714 }] },
-    { name: 'Muro 2', kind: 'wall', frozen: false, points: [{ x: 0, y: 0 }, { x: .218, y: .13 }, { x: .218, y: .714 }, { x: 0, y: .885 }] },
-    { name: 'Muro 3', kind: 'wall', frozen: false, points: [{ x: .785, y: .13 }, { x: 1, y: 0 }, { x: 1, y: .885 }, { x: .785, y: .714 }] },
-    { name: 'Pavimento', kind: 'floor', frozen: false, points: [{ x: .218, y: .714 }, { x: .785, y: .714 }, { x: 1, y: .885 }, { x: 1, y: 1 }, { x: 0, y: 1 }, { x: 0, y: .885 }] },
+    { name: 'Muro 2', kind: 'wall', frozen: false, points: [{ x: 0, y: 0 }, { x: .218, y: .13 }, { x: .218, y: .714 }, { x: 0, y: .8885 }] },
+    { name: 'Muro 3', kind: 'wall', frozen: false, points: [{ x: .785, y: .13 }, { x: 1, y: 0 }, { x: 1, y: .8885 }, { x: .785, y: .714 }] },
+    { name: 'Pavimento', kind: 'floor', frozen: false, points: [{ x: .218, y: .714 }, { x: .785, y: .714 }, { x: 1, y: .8885 }, { x: 1, y: 1 }, { x: 0, y: 1 }, { x: 0, y: .8885 }] },
     { name: 'Soffitto', kind: 'ceiling', frozen: false, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: .785, y: .13 }, { x: .218, y: .13 }] },
     { name: 'Finestra', kind: 'window', frozen: false, points: [{ x: .334, y: .18 }, { x: .667, y: .18 }, { x: .667, y: .552 }, { x: .334, y: .552 }] },
   ];

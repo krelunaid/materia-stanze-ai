@@ -110,14 +110,18 @@ describe('RoomStudio', () => {
     const floor = document.querySelector('.surface-kind-floor polygon') as SVGPolygonElement;
     const points = String(floor.getAttribute('points')).split(' ').map((point) => point.split(',').map(Number));
     expect(points.slice(0, 4)).toEqual([
-      [218, 446.25], [785, 446.25], [1000, 553.125], [1000, 625],
+      [218, 446.25], [785, 446.25], [1000, 555.3125], [1000, 625],
     ]);
     const sharedWallPoints = Array.from(document.querySelectorAll('.surface-kind-wall polygon'))
       .flatMap((polygon) => String(polygon.getAttribute('points')).split(' ').map((point) => point.split(',').map(Number)));
     expect(sharedWallPoints).toContainEqual([218, 446.25]);
     expect(sharedWallPoints).toContainEqual([785, 446.25]);
-    expect(sharedWallPoints).toContainEqual([0, 553.125]);
-    expect(sharedWallPoints).toContainEqual([1000, 553.125]);
+    expect(sharedWallPoints).toContainEqual([0, 555.3125]);
+    expect(sharedWallPoints).toContainEqual([1000, 555.3125]);
+
+    const leftSlope = (446.25 - 555.3125) / 218;
+    const rightSlope = (555.3125 - 446.25) / (1000 - 785);
+    expect(Math.abs(Math.abs(leftSlope) - Math.abs(rightSlope))).toBeLessThan(.008);
   });
 
   it('translates the iOS network error without losing the project', () => {
