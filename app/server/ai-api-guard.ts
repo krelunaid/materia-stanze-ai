@@ -31,7 +31,10 @@ const policies: Record<AiRoute, LimitPolicy> = {
   'clean-room-region': { hourly: 16, daily: 48 },
   'detect-object': { hourly: 24, daily: 72 },
   'detect-surfaces': { hourly: 20, daily: 60 },
-  'empty-room': { hourly: 12, daily: 36 },
+  // One automatic cleanup may legitimately need a coherent first pass plus a
+  // cumulative residual pass.  Keep enough headroom for several real rooms
+  // without making the second pass fail after otherwise successful work.
+  'empty-room': { hourly: 24, daily: 72 },
   'prepare-furniture-view': { hourly: 12, daily: 36 },
   'render-room': { hourly: 6, daily: 18 },
   'search-products': { hourly: 30, daily: 90 },

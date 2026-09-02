@@ -633,6 +633,29 @@ describe('getAiProvider', () => {
     expect(arch?.points).toEqual(expect.arrayContaining([{ x: .7, y: .72 }, { x: .96, y: .72 }]));
   });
 
+  it('uses the surrounding floor trace when an occluder creates a notch below one arch jamb', () => {
+    const result = normalizeRoomSurfaces([
+      { name: 'Muro', kind: 'wall', confidence: .9, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: 0, y: .72 }] },
+      {
+        name: 'Pavimento', kind: 'floor', confidence: .95,
+        points: [
+          { x: 0, y: .72 }, { x: .68, y: .72 }, { x: .69, y: .55 }, { x: .71, y: .55 },
+          { x: .72, y: .72 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 },
+        ],
+      },
+      {
+        name: 'Arco esterno verificato', kind: 'door', confidence: .93, audited: true,
+        points: [
+          { x: .7, y: .55 }, { x: .7, y: .2 }, { x: .74, y: .13 },
+          { x: .82, y: .09 }, { x: .9, y: .12 }, { x: .96, y: .2 }, { x: .96, y: .5 },
+        ],
+      },
+    ]);
+
+    expect(result.find((surface) => surface.kind === 'door')?.points)
+      .toEqual(expect.arrayContaining([{ x: .7, y: .72 }, { x: .96, y: .72 }]));
+  });
+
   it('rejects self-intersecting and microscopic detected polygons', () => {
     const result = normalizeRoomSurfaces([
       { name: 'bow tie', kind: 'wall', confidence: .99, points: [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 1, y: 0 }, { x: 0, y: 1 }] },
@@ -844,6 +867,7 @@ describe('getAiProvider', () => {
     expect(prompts.join('\n')).toContain('attachment is not architecture');
     expect(prompts.join('\n')).toContain('fruit bowls');
     expect(prompts.join('\n')).toContain('coffee machines');
+    expect(prompts.join('\n')).toContain('visible cable and chain');
     expect(prompts.join('\n')).toContain('must not remain floating');
   });
 
@@ -890,6 +914,8 @@ describe('getAiProvider', () => {
     const prompt = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)).input[0].content[1].text as string;
     expect(prompt).toContain('letto, cassettiera, tende');
     expect(prompt).toContain('must never be skipped');
+    expect(prompt).toContain('hanging lanterns');
+    expect(prompt).toContain('cables, chains');
   });
 
   it('rejects an opening hallucinated by only one geometry pass', () => {

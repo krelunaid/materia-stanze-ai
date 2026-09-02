@@ -68,6 +68,8 @@ export async function POST(request: Request) {
       'Do not preserve cabinetry, appliances or bathroom furniture merely because they are attached to a wall or connected to services. Never recreate a removed unit inside its mask.',
       'Never create a new window, door, opening, column, beam, stair, trim or architectural feature that is not visibly present in the source photograph.',
       'Where a removed installation hid the room, reconstruct the simplest continuous extension of the nearest visible wall, wall covering, skirting and floor. Do not invent niches, service holes, replacement cabinetry or fixtures.',
+      'For tiled splashbacks, brick, terracotta, parquet or any repeating finish, continue the exact visible module: preserve the same grout width, row and column spacing, phase, color and perspective directions. Never enlarge the tiles, add a plinth or step, or turn a flat surface into a niche.',
+      'Remove complete hanging lights, including their ceiling rose, cable or chain and shade, whenever they are inside an authorized target. Never leave a floating wire or shadow.',
       'Keep unchanged pixels visually identical outside the authorized masks. Do not redesign, recolor, restyle, enlarge, straighten or add anything.',
       protectedAreas ? `These user-protected surfaces must remain unchanged: ${protectedAreas}.` : '',
     ].filter(Boolean).join(' ');

@@ -1350,8 +1350,15 @@ function alignAuditedDoorToFloorThreshold(
   const left = lowest(leftCandidates);
   const right = lowest(rightCandidates);
   if (!left || !right || left.index === right.index) return surface;
-  const leftFloor = floorBoundaryAtX(floor, left.point.x);
-  const rightFloor = floorBoundaryAtX(floor, right.point.x);
+  const localFloor = (x: number) => {
+    const samples = Array.from({ length: 7 }, (_, index) => (
+      Math.min(1, Math.max(0, x + (index - 3) * .012))
+    )).map((sampleX) => floorBoundaryAtX(floor, sampleX))
+      .filter((value): value is number => value !== null);
+    return samples.length ? Math.max(...samples) : null;
+  };
+  const leftFloor = localFloor(left.point.x);
+  const rightFloor = localFloor(right.point.x);
   if (leftFloor === null || rightFloor === null || Math.abs(leftFloor - rightFloor) > .16) return surface;
   const needsLeftExtension = leftFloor - left.point.y >= .035;
   const needsRightExtension = rightFloor - right.point.y >= .035;
@@ -1944,7 +1951,7 @@ export async function detectMovableObjectRegions(
   };
   const primaryPrompt = [
     `Intent: ${intent}. Find every visible non-architectural object or installed furnishing that must be removed to make this exact room empty for a real-estate photograph.`,
-    'Include beds, sofas, chairs, tables, cabinets, lamps, rugs, curtains, pictures, loose objects, fitted wardrobes, fitted kitchen cabinets and appliances, bathroom vanities, mirrors and storage. Group touching parts of one physical item or continuous fitted installation into one region.',
+    'Include beds, sofas, chairs, tables, cabinets, lamps, rugs, curtains, pictures, loose objects, fitted wardrobes, fitted kitchen cabinets and appliances, bathroom vanities, mirrors and storage. Lamps include every pendant, lantern, shade, ceiling rose, visible cable and chain: keep their thin suspension parts in the same polygon as the light. Group touching parts of one physical item or continuous fitted installation into one region.',
     'When a removable table, worktop, cabinet, shelf or kitchen run is removed, include every removable item resting on it, hanging from it or stored visibly inside it in that same envelope: fruit bowls, dishes, bottles, coffee machines, kettles, cookware, utensils, books, baskets and decor must not remain floating after the supporting furniture disappears.',
     'Classify each region as exactly one removalKind: loose-object, installed-furnishing, fixed-appliance, bathroom-furnishing, architecture.',
     'Attachment is not architecture: fitted, built-in, attached, wired or plumbed units are still removable. Use architecture only for walls, floor, ceiling, structural columns or beams, stairs, doors, windows, openings and skirting.',
@@ -1962,7 +1969,7 @@ export async function detectMovableObjectRegions(
   ].join('\n');
   const recoveryPrompt = [
     `Recovery for ${intent}: both inventory passes found no removable content. Recheck the complete photograph from left to right and foreground to background.`,
-    'Inventory every bed, sofa, chair, table, cabinet, lamp, rug, curtain, picture, loose object, fitted kitchen, integrated appliance, fitted wardrobe and bathroom furnishing; then trace each visible functional group.',
+    'Inventory every bed, sofa, chair, table, cabinet, lamp, pendant, lantern, suspension cable or chain, rug, curtain, picture, loose object, fitted kitchen, integrated appliance, fitted wardrobe and bathroom furnishing; then trace each visible functional group.',
     'Furniture partly hidden, attached, built-in, wired, plumbed, cropped by an image edge or covering most of the foreground is still removable and must not be omitted. A bed with bedding and a continuous kitchen run are each one removable group.',
     'Classify each region using removalKind. Exclude only true architecture: walls, floor, ceiling, structural columns or beams, stairs, doors, windows, openings and skirting.',
     'For each likely movable group return a tight clockwise 4-to-16-point normalized polygon and an honest confidence. Never return a room-wide polygon. Return an empty list only when careful inspection confirms that the room is already empty.',
@@ -1972,6 +1979,7 @@ export async function detectMovableObjectRegions(
   const focusedPrompt = [
     `Focused recovery for ${intent}. An independent room inventory says these removable categories are present: ${requiredCategories.join(', ')}.`,
     'Locate every large or dominant item in that inventory before small decor. Beds, sofas, wardrobes, chests of drawers, tables, continuous kitchen runs, bathroom vanities and curtains must never be skipped merely because they cover a large part of the image or touch an image edge.',
+    'Also recover thin or small remnants left by an earlier edit: hanging lanterns, pendant shades, ceiling roses, cables, chains, kettles, coffee machines, bowls, dishes, shelf fragments and cabinet corners. A cable or chain belonging to a removable light is not architecture.',
     'Return one complete tight polygon per physical item or continuous fitted group. Infer the full visible silhouette behind bedding, cushions and small clutter, and include loose items resting on furniture that will be removed, but never include walls, floor, ceiling, doors or windows.',
     'Use removalKind=loose-object for movable furniture and textiles, installed-furnishing for fitted cabinetry, fixed-appliance for appliances and bathroom-furnishing for sanitary or vanity groups. Return only the structured result.',
   ].join('\n');

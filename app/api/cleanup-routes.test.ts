@@ -12,7 +12,12 @@ const acceptedVerification = {
   reason: 'ok',
 };
 
-const mocks = vi.hoisted(() => ({ editImage: vi.fn(), verifyRoomCleanup: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  editImage: vi.fn(),
+  getAiProvider: vi.fn(),
+  getVisionAuditor: vi.fn(),
+  verifyRoomCleanup: vi.fn(),
+}));
 
 vi.mock('../server/ai-api-guard.ts', () => ({
   guardAiRequest: vi.fn(async () => ({ ok: true, headers: new Headers() })),
@@ -22,9 +27,9 @@ vi.mock('../server/ai-api-guard.ts', () => ({
 vi.mock('../server/ai-provider.ts', () => ({
   acceptsRoomCleanup: vi.fn((verification) => Object.values(verification).filter((value) => typeof value === 'boolean').every(Boolean) && verification.confidence >= .82),
   editImage: mocks.editImage,
-  getAiProvider: vi.fn(() => ({ id: 'grok', label: 'Grok', apiKey: 'test' })),
+  getAiProvider: mocks.getAiProvider,
   getRenderProvider: vi.fn(() => ({ id: 'grok', label: 'Grok', apiKey: 'test' })),
-  getVisionAuditor: vi.fn(() => null),
+  getVisionAuditor: mocks.getVisionAuditor,
   verifyRoomCleanup: mocks.verifyRoomCleanup,
 }));
 
@@ -53,6 +58,8 @@ function verificationForm() {
 
 beforeEach(() => {
   mocks.editImage.mockReset().mockResolvedValue('data:image/png;base64,result');
+  mocks.getAiProvider.mockReset().mockReturnValue({ id: 'grok', label: 'Grok', apiKey: 'test' });
+  mocks.getVisionAuditor.mockReset().mockReturnValue(null);
   mocks.verifyRoomCleanup.mockReset().mockResolvedValue(acceptedVerification);
 });
 
@@ -76,6 +83,8 @@ describe('real-estate room cleanup prompts', () => {
     const prompt = mocks.editImage.mock.calls[0]?.[1]?.prompt as string;
     expect(prompt).toContain('kitchen base, wall and tall cabinets');
     expect(prompt).toContain('Treat only genuine building architecture as protected');
+    expect(prompt).toContain('continue the exact visible module');
+    expect(prompt).toContain('complete hanging lights');
     expect(prompt).not.toContain('Remove only the movable objects');
   });
 
@@ -148,6 +157,22 @@ describe('real-estate room cleanup prompts', () => {
 
     expect(response.status).toBe(500);
     expect(await response.text()).toContain('Il controllo fotografico ha impiegato troppo tempo');
+  });
+
+  it('falls back to Grok when the independent OpenAI verifier is unavailable', async () => {
+    mocks.getVisionAuditor.mockReturnValueOnce({
+      id: 'openai', label: 'OpenAI', apiKey: 'openai-test', model: 'gpt-5.6-terra',
+    });
+    mocks.verifyRoomCleanup
+      .mockRejectedValueOnce(new Error('OpenAI temporary 500'))
+      .mockResolvedValueOnce(acceptedVerification);
+
+    const response = await verifyCleanup(formRequest(verificationForm()));
+
+    expect(response.ok, await response.clone().text()).toBe(true);
+    expect(mocks.verifyRoomCleanup).toHaveBeenCalledTimes(2);
+    expect(mocks.verifyRoomCleanup.mock.calls[0]?.[0]).toMatchObject({ id: 'openai', model: 'gpt-5.6-terra' });
+    expect(mocks.verifyRoomCleanup.mock.calls[1]?.[0]).toMatchObject({ id: 'grok' });
   });
 
   it('treats a tapped fitted residual as an explicit removal request', async () => {

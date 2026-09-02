@@ -32,10 +32,26 @@ export async function POST(request: Request) {
     if (maskReference != null && (!(maskReference instanceof File) || maskReference.type !== 'image/png' || maskReference.size > 8 * 1024 * 1024)) {
       return json({ message: 'La guida delle aree autorizzate non è valida.' }, headers, 400);
     }
-    const verification = await verifyRoomCleanup(provider, {
-      source, renderedFile: rendered, targetDescription,
-      maskReferenceFile: maskReference instanceof File ? maskReference : undefined,
-    });
+    const candidates = [provider, primary]
+      .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
+      .filter((candidate, index, all) => all.findIndex((peer) => (
+        peer.id === candidate.id
+        && ('model' in peer ? peer.model : '') === ('model' in candidate ? candidate.model : '')
+      )) === index);
+    let verification: Awaited<ReturnType<typeof verifyRoomCleanup>> | null = null;
+    let verificationFailure: unknown = null;
+    for (const candidate of candidates) {
+      try {
+        verification = await verifyRoomCleanup(candidate, {
+          source, renderedFile: rendered, targetDescription,
+          maskReferenceFile: maskReference instanceof File ? maskReference : undefined,
+        });
+        break;
+      } catch (caught) {
+        verificationFailure = caught;
+      }
+    }
+    if (!verification) throw verificationFailure ?? new Error('Verifica fotografica non disponibile.');
     if (!acceptsRoomCleanup(verification)) {
       return json({
         code: 'cleanup_quality_rejected',
@@ -58,6 +74,7 @@ export async function POST(request: Request) {
     const message = String(record?.message ?? '');
     const timedOut = /abort|timeout|timed out/i.test(`${record?.name ?? ''} ${message}`);
     return json({
+      code: timedOut ? 'cleanup_verification_timeout' : 'cleanup_verification_unavailable',
       message: timedOut
         ? 'Il controllo fotografico ha impiegato troppo tempo. La foto originale è rimasta intatta: riprova oppure indica un mobile alla volta.'
         : 'Non sono riuscito a verificare la pulizia. La foto originale è rimasta intatta: riprova tra poco.',

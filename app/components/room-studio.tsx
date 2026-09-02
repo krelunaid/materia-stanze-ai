@@ -2221,6 +2221,7 @@ export function RoomStudio() {
     }
     const { response, result } = await requestJson<{
       accepted?: boolean;
+      code?: string;
       message?: string;
       checks?: Record<string, boolean | number>;
     }>(
@@ -2230,8 +2231,10 @@ export function RoomStudio() {
       if (result.checks) console.warn('Materia cleanup quality checks', result.checks);
       const failure = new Error(result.message ?? 'La pulizia non ha superato il controllo fotografico.') as Error & {
         cleanupChecks?: Record<string, boolean | number>;
+        cleanupFailureCode?: string;
       };
       failure.cleanupChecks = result.checks;
+      failure.cleanupFailureCode = result.code;
       throw failure;
     }
   }
@@ -2967,15 +2970,15 @@ export function RoomStudio() {
       let cleanupResult = await generateCleanupTiles(room.previewUrl, finalRegions, architecturalAnchors, 'automatic');
       let protectedPreview = cleanupResult.previewUrl;
 
-      // A first image edit can remove the large fitted units yet leave fruit,
-      // coffee machines, chairs or fragments behind.  Before accepting it,
-      // inspect the actual result once more.  When the remaining request fits
-      // inside the same hourly image-edit budget, rebuild the complete edit
-      // from the untouched original with one cumulative mask.  Never inpaint
-      // an already-generated patch.
-      if (cleanupResult.planCount <= 6) {
+      // A first edit can remove the large fitted units yet leave lamps,
+      // countertop appliances, chairs or fragments behind. Inspect the actual
+      // result up to twice. Every retry rebuilds from the untouched original
+      // with one cumulative mask; an already-generated patch is never used as
+      // the inpainting source.
+      let usedCleanupRequests = cleanupResult.planCount;
+      for (let residualPass = 0; residualPass < 2 && usedCleanupRequests <= 10; residualPass += 1) {
         try {
-          setNotice('Controllo se dopo il primo passaggio sono rimasti mobili, elettrodomestici o oggetti…');
+          setNotice(`Controllo residui ${residualPass + 1} di 2: cerco lampade, mobili, elettrodomestici e piccoli frammenti…`);
           const residualImage = await createGeometryInput(protectedPreview);
           const residualForm = new FormData();
           residualForm.append('image', residualImage, 'room-residuals.jpg');
@@ -2983,24 +2986,30 @@ export function RoomStudio() {
           const residualDetection = await requestJson<{
             regions?: CleanupRegion[];
             roomAudit?: RoomEmptyingAudit | null;
+            message?: string;
           }>(endpoint('/api/detect-object'), { method: 'POST', body: residualForm }, 90000);
-          const residualRegions = residualDetection.response.ok
-            ? (residualDetection.result.regions ?? []).filter((region) => isValidPolygon(region.points))
-            : [];
-          const residualAudit = residualDetection.result.roomAudit;
-          if (residualRegions.length && (!residualAudit || residualAudit.needsEmptying || residualAudit.confidence < .7)) {
-            const cumulativeRegions = [...finalRegions, ...residualRegions];
-            const cumulativePlanCount = planCleanupTiles(cumulativeRegions, 12, cleanupResult.sourceSize).length;
-            if (cleanupResult.planCount + cumulativePlanCount <= 12) {
-              setNotice(`Sono rimaste ${residualRegions.length} zone. Ricostruisco la pulizia dall’originale con una maschera completa, senza sovrapporre toppe…`);
-              const rebuilt = await generateCleanupTiles(room.previewUrl, cumulativeRegions, architecturalAnchors, 'automatic');
-              URL.revokeObjectURL(protectedPreview);
-              cleanupResult = rebuilt;
-              protectedPreview = rebuilt.previewUrl;
-              finalRegions = cumulativeRegions;
-            }
+          if (!residualDetection.response.ok) {
+            throw new Error(residualDetection.result.message ?? 'Il controllo dei residui non è disponibile.');
           }
-        } catch {
+          const residualRegions = (residualDetection.result.regions ?? [])
+            .filter((region) => isValidPolygon(region.points));
+          const residualAudit = residualDetection.result.roomAudit;
+          if (!residualRegions.length || (residualAudit && !residualAudit.needsEmptying && residualAudit.confidence >= .7)) break;
+          const cumulativeRegions = [...finalRegions, ...residualRegions];
+          const cumulativePlanCount = planRoomCleanupPass(cumulativeRegions, 12, cleanupResult.sourceSize).length;
+          if (usedCleanupRequests + cumulativePlanCount > 12) break;
+          setNotice(`Sono rimaste ${residualRegions.length} zone. Ricostruisco dall’originale con la maschera cumulativa, senza sovrapporre toppe…`);
+          const rebuilt = await generateCleanupTiles(room.previewUrl, cumulativeRegions, architecturalAnchors, 'automatic');
+          usedCleanupRequests += rebuilt.planCount;
+          URL.revokeObjectURL(protectedPreview);
+          cleanupResult = rebuilt;
+          protectedPreview = rebuilt.previewUrl;
+          finalRegions = cumulativeRegions;
+          if (residualPass === 1) {
+            setNotice('Seconda ricostruzione completata: avvio il controllo fotografico finale.');
+          }
+        } catch (caught) {
+          if (caught instanceof Error && /limite temporaneo|rate.?limit/i.test(caught.message)) throw caught;
           // The final verifier still decides whether the first pass is safe.
           // A failed optional residual inventory must never discard a valid
           // cleanup or make the original unavailable.
@@ -3021,7 +3030,10 @@ export function RoomStudio() {
           if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
           processedBlobRef.current = protectedPreview;
           setProcessedPreview(protectedPreview);
-          setProcessedLabel('Anteprima QA rifiutata');
+          const failureCode = (caught as Error & { cleanupFailureCode?: string }).cleanupFailureCode;
+          setProcessedLabel(failureCode === 'cleanup_quality_rejected'
+            ? 'Anteprima QA rifiutata'
+            : 'Anteprima QA non verificata');
           setShowProcessedPreview(true);
         } else {
           URL.revokeObjectURL(protectedPreview);
