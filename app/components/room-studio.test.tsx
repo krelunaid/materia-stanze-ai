@@ -263,6 +263,46 @@ describe('RoomStudio', () => {
     expect(screen.getByRole('button', { name: '⌂ Svuota la stanza' })).toBeDisabled();
   });
 
+  it('describes an inferred arch as awaiting confirmation instead of rejected', async () => {
+    mockMaterialPhotoCrop();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/capabilities')) {
+        return new Response(JSON.stringify({ aiReady: true, providerLabel: 'Grok', auditorReady: true }), { status: 200 });
+      }
+      if (url.includes('/api/detect-surfaces')) {
+        return new Response(JSON.stringify({
+          surfaces: [
+            { name: 'Muro', kind: 'wall', confidence: .9, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: 0, y: .72 }] },
+            { name: 'Pavimento', kind: 'floor', confidence: .94, points: [{ x: 0, y: .72 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+            {
+              name: 'Arco', kind: 'door', confidence: .94, audited: true, thresholdInferred: true,
+              points: [{ x: .7, y: .3 }, { x: .74, y: .18 }, { x: .84, y: .1 }, { x: .94, y: .18 }, { x: .98, y: .3 }, { x: .98, y: .72 }, { x: .7, y: .72 }],
+            },
+          ],
+          openingAuditStatus: 'geometry-invalid',
+          shellGeometryStatus: 'verified',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<RoomStudio />);
+    fireEvent.change(document.querySelector('#room-file') as HTMLInputElement, {
+      target: { files: [new File(['room'], 'cucina-arco-occluso.jpg', { type: 'image/jpeg' })] },
+    });
+    const image = screen.getByAltText('Originale importato: cucina-arco-occluso.jpg') as HTMLImageElement;
+    Object.defineProperties(image, {
+      naturalWidth: { configurable: true, value: 1200 },
+      naturalHeight: { configurable: true, value: 800 },
+    });
+    fireEvent.load(image);
+
+    expect(await screen.findByText(/Arco: soglia o stipiti sono stimati dietro i mobili/)).toBeInTheDocument();
+    expect(screen.queryByText(/l’apertura è stata rifiutata/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '⌂ Svuota la stanza' })).toBeDisabled();
+  });
+
   it('skips optional cleanup immediately while automatic geometry is still pending', () => {
     render(<RoomStudio />);
     fireEvent.change(document.querySelector('#room-file') as HTMLInputElement, {

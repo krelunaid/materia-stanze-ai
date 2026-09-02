@@ -2975,6 +2975,7 @@ export function RoomStudio() {
       setSelectedId(first?.id ?? null); setRenameDraft(first?.name ?? '');
       const openingInvalid = usedGrok && openingAuditStatus === 'geometry-invalid';
       const shellInvalid = usedGrok && shellGeometryStatus === 'geometry-invalid';
+      const inferredOpening = nextSurfaces.find((surface) => surface.kind === 'door' && surface.thresholdInferred);
       setGeometryDetectionStatus(shellInvalid && openingInvalid
         ? 'opening-shell-invalid'
         : shellInvalid ? 'shell-invalid' : openingInvalid ? 'opening-invalid' : usedGrok ? 'ai' : 'fallback');
@@ -2985,7 +2986,9 @@ export function RoomStudio() {
         : shellInvalid
         ? `${nextSurfaces.length} superfici trovate, ma pareti, soffitto e pavimento non condividono gli stessi confini. Correggi le linee oppure riprova; prodotti, misure e svuotamento restano bloccati.`
         : openingInvalid
-        ? `${nextSurfaces.length} superfici riconosciute, ma l’apertura è stata rifiutata: gli stipiti non arrivano al pavimento o seguono un mobile. Correggi con “＋ Arco” oppure riprova; lo svuotamento resta bloccato.`
+        ? inferredOpening
+          ? `${nextSurfaces.length} superfici riconosciute. ${inferredOpening.name}: soglia o stipiti sono stimati dietro i mobili. Se coincidono, seleziona l’apertura e conferma la soglia; altrimenti sposta i punti. Lo svuotamento resta bloccato fino alla conferma.`
+          : `${nextSurfaces.length} superfici riconosciute, ma l’apertura è stata rifiutata: gli stipiti non arrivano al pavimento o seguono un mobile. Correggi con “＋ Arco” oppure riprova; lo svuotamento resta bloccato.`
         : usedGrok
           ? `${nextSurfaces.length} superfici proposte da controllare sulla foto originale.${nextSurfaces.some((surface) => surface.kind === 'door') ? '' : ' La porta non è sicura: aggiungila con “＋ Porta” e quattro tocchi.'}`
         : `${grokError ? 'Grok non ha completato il riconoscimento. ' : ''}Questi sono contorni provvisori: trascina direttamente una linea intera o i pallini prima di applicare un prodotto.`);
