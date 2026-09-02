@@ -27,6 +27,15 @@ export type CleanupTilePixelRect = {
   height: number;
 };
 
+export type CleanupGenerationFrame = {
+  width: number;
+  height: number;
+  sourceLeft: number;
+  sourceTop: number;
+  sourceWidth: number;
+  sourceHeight: number;
+};
+
 export type CleanupTileMaskEnvelope = {
   outsetSourcePx: number;
   shadowOffsetSourcePx: number;
@@ -55,6 +64,35 @@ const supportedRatios = [
   { width: 4, height: 3 }, { width: 3, height: 4 }, { width: 3, height: 2 },
   { width: 2, height: 3 }, { width: 2, height: 1 }, { width: 1, height: 2 },
 ];
+
+/**
+ * Keeps the complete source photograph at its original scale and centres it
+ * inside the smallest canvas accepted by the image editor.  The extra border
+ * is technical context only and is cropped away after the single coherent
+ * generation.
+ */
+export function cleanupGenerationFrame(width: number, height: number): CleanupGenerationFrame {
+  const candidates = supportedRatios.map((ratio) => {
+    const units = Math.ceil(Math.max(width / ratio.width, height / ratio.height));
+    const frameWidth = units * ratio.width;
+    const frameHeight = units * ratio.height;
+    return {
+      width: frameWidth,
+      height: frameHeight,
+      area: frameWidth * frameHeight,
+      addedArea: frameWidth * frameHeight - width * height,
+    };
+  }).sort((first, second) => first.addedArea - second.addedArea || first.area - second.area);
+  const chosen = candidates[0];
+  return {
+    width: chosen.width,
+    height: chosen.height,
+    sourceLeft: Math.floor((chosen.width - width) / 2),
+    sourceTop: Math.floor((chosen.height - height) / 2),
+    sourceWidth: width,
+    sourceHeight: height,
+  };
+}
 
 function clamp(value: number) {
   return Math.min(1, Math.max(0, value));
@@ -168,10 +206,7 @@ export function planRoomCleanupPass(
   maximumTiles = 12,
   imageSize?: CleanupTileImageSize,
 ): CleanupTilePlan[] {
-  const wholeFrameRatioSupported = !imageSize || supportedRatios.some((ratio) => (
-    cleanupTileRatioMatches(imageSize.width, imageSize.height, ratio.width, ratio.height)
-  ));
-  if (regions.length >= COHERENT_ROOM_PASS_MIN_REGIONS && wholeFrameRatioSupported) {
+  if (regions.length >= COHERENT_ROOM_PASS_MIN_REGIONS) {
     return [{
       bounds: { left: 0, top: 0, right: 1, bottom: 1 },
       regions,
@@ -181,10 +216,6 @@ export function planRoomCleanupPass(
       })),
     }];
   }
-  // The image editor returns only the supported aspect ratios above. Sending
-  // a full 5:4 (or another unsupported) photograph would force it to change
-  // the frame and the compositor would correctly reject the result. Keep the
-  // original framing by splitting those rooms into exact-ratio local tiles.
   return planCleanupTiles(regions, maximumTiles, imageSize);
 }
 

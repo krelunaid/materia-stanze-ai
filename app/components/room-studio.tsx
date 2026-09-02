@@ -16,12 +16,14 @@ import {
 } from 'react';
 import { drawImageCover } from '../lib/canvas-draw';
 import {
+  cleanupGenerationFrame,
   cleanupTileBoundsFromRect,
   cleanupTileEdgeIsInternal,
   cleanupTileMaskEnvelope,
   cleanupProtectionMode,
   cleanupTileRatioMatches,
   CleanupTileBounds,
+  CleanupGenerationFrame,
   CleanupTileImageSize,
   CleanupTileMaskEnvelope,
   CleanupTilePixelRect,
@@ -98,6 +100,7 @@ type CleanupRegion = { label: string; points: Point[]; confidence: number; inter
 type CleanupTileResult = {
   bounds: CleanupTileBounds;
   pixelRect: CleanupTilePixelRect;
+  generationFrame: CleanupGenerationFrame;
   sourceSize: CleanupTileImageSize;
   envelope: CleanupTileMaskEnvelope;
   regions: CleanupRegion[];
@@ -118,6 +121,11 @@ type DetectedSurface = {
   thresholdInferred?: boolean;
 };
 type ProductSearchCategory = '' | StudioMaterial['category'];
+
+function generationCropCoordinate(value: number, frameSize: number, generatedSize: number) {
+  return value / Math.max(1, frameSize) * generatedSize;
+}
+
 type ProductPhotoClassification = {
   kind: 'furniture' | 'surface-material' | 'unknown';
   category: 'Pavimenti' | 'Rivestimenti' | 'Arredi';
@@ -1863,10 +1871,36 @@ export function RoomStudio() {
       })),
     }));
     const { left: sourceLeft, top: sourceTop, width: sourceWidth, height: sourceHeight } = pixelRect;
+    const wholeRoomPass = plan.bounds.left === 0 && plan.bounds.top === 0
+      && plan.bounds.right === 1 && plan.bounds.bottom === 1;
+    const generationFrame = wholeRoomPass
+      ? cleanupGenerationFrame(sourceWidth, sourceHeight)
+      : {
+          width: sourceWidth,
+          height: sourceHeight,
+          sourceLeft: 0,
+          sourceTop: 0,
+          sourceWidth,
+          sourceHeight,
+        };
+    const inGenerationFrame = (point: Point): Point => ({
+      x: (generationFrame.sourceLeft + point.x * generationFrame.sourceWidth) / generationFrame.width,
+      y: (generationFrame.sourceTop + point.y * generationFrame.sourceHeight) / generationFrame.height,
+    });
+    const framedRegions = normalizedRegions.map((region) => ({
+      ...region,
+      points: region.points.map(inGenerationFrame),
+      internalEdges: region.internalEdges?.map((edge) => ({
+        axis: edge.axis,
+        value: edge.axis === 'x'
+          ? (generationFrame.sourceLeft + edge.value * generationFrame.sourceWidth) / generationFrame.width
+          : (generationFrame.sourceTop + edge.value * generationFrame.sourceHeight) / generationFrame.height,
+      })),
+    }));
     const maximumSide = isAppleTouchDevice() ? 1024 : 1280;
-    const scale = Math.min(1, maximumSide / Math.max(sourceWidth, sourceHeight));
-    const width = Math.max(1, Math.round(sourceWidth * scale));
-    const height = Math.max(1, Math.round(sourceHeight * scale));
+    const scale = Math.min(1, maximumSide / Math.max(generationFrame.width, generationFrame.height));
+    const width = Math.max(1, Math.round(generationFrame.width * scale));
+    const height = Math.max(1, Math.round(generationFrame.height * scale));
     const imageCanvas = document.createElement('canvas');
     const maskCanvas = document.createElement('canvas');
     const maskReferenceCanvas = document.createElement('canvas');
@@ -1876,7 +1910,27 @@ export function RoomStudio() {
     const maskContext = maskCanvas.getContext('2d');
     const maskReferenceContext = maskReferenceCanvas.getContext('2d');
     if (!imageContext || !maskContext || !maskReferenceContext) throw new Error('Non posso preparare il ritaglio locale.');
-    imageContext.drawImage(source, sourceLeft, sourceTop, sourceWidth, sourceHeight, 0, 0, width, height);
+    const framedLeft = generationFrame.sourceLeft / generationFrame.width * width;
+    const framedTop = generationFrame.sourceTop / generationFrame.height * height;
+    const framedWidth = generationFrame.sourceWidth / generationFrame.width * width;
+    const framedHeight = generationFrame.sourceHeight / generationFrame.height * height;
+    if (generationFrame.width !== sourceWidth || generationFrame.height !== sourceHeight) {
+      imageContext.save();
+      imageContext.filter = `blur(${Math.max(8, Math.round(Math.min(width, height) * .02))}px)`;
+      imageContext.drawImage(source, sourceLeft, sourceTop, sourceWidth, sourceHeight, 0, 0, width, height);
+      imageContext.restore();
+    }
+    imageContext.drawImage(
+      source,
+      sourceLeft,
+      sourceTop,
+      sourceWidth,
+      sourceHeight,
+      framedLeft,
+      framedTop,
+      framedWidth,
+      framedHeight,
+    );
 
     const traceRegion = (context: CanvasRenderingContext2D, region: CleanupRegion) => {
       context.beginPath();
@@ -1905,7 +1959,7 @@ export function RoomStudio() {
     // Object detectors usually stop at the visible body.  Include contact
     // shadows and tiny attachment fringes as well, otherwise the room can be
     // left with a table-shaped shadow after the table itself is removed.
-    const tileScale = Math.min(width / sourceWidth, height / sourceHeight);
+    const tileScale = Math.min(width / generationFrame.width, height / generationFrame.height);
     const expansion = envelope.outsetSourcePx * tileScale;
     const shadowOffset = envelope.shadowOffsetSourcePx * tileScale;
     maskContext.fillStyle = '#ffffff'; maskContext.fillRect(0, 0, width, height);
@@ -1915,7 +1969,7 @@ export function RoomStudio() {
     maskReferenceContext.fillStyle = '#000000'; maskReferenceContext.fillRect(0, 0, width, height);
     maskReferenceContext.fillStyle = '#ff00ff'; maskReferenceContext.strokeStyle = '#ff00ff';
     maskReferenceContext.lineWidth = expansion * 2; maskReferenceContext.lineJoin = 'round'; maskReferenceContext.lineCap = 'butt';
-    for (const region of normalizedRegions) {
+    for (const region of framedRegions) {
       traceRegion(maskContext, region); maskContext.fill(); strokeRegionBoundary(maskContext, region);
       maskContext.save(); maskContext.translate(0, shadowOffset); strokeRegionBoundary(maskContext, region); maskContext.restore();
       traceRegion(maskReferenceContext, region); maskReferenceContext.fill(); strokeRegionBoundary(maskReferenceContext, region);
@@ -1930,7 +1984,7 @@ export function RoomStudio() {
       region: {
         label: surface.name,
         confidence: 1,
-        points: surface.points.map((point) => pointInCleanupTile(point, bounds)),
+        points: surface.points.map((point) => inGenerationFrame(pointInCleanupTile(point, bounds))),
       } satisfies CleanupRegion,
     }));
     maskContext.fillStyle = '#ffffff';
@@ -1959,7 +2013,18 @@ export function RoomStudio() {
       new Promise<Blob | null>((resolve) => maskReferenceCanvas.toBlob(resolve, 'image/png')),
     ]);
     if (!inputImage || !mask || !maskReference) throw new Error('Non posso preparare foto e maschera del ritaglio locale.');
-    return { ...plan, bounds, pixelRect, sourceSize, envelope, normalizedRegions, inputImage, mask, maskReference };
+    return {
+      ...plan,
+      bounds,
+      pixelRect,
+      generationFrame,
+      sourceSize,
+      envelope,
+      normalizedRegions: framedRegions,
+      inputImage,
+      mask,
+      maskReference,
+    };
   }
 
   async function composeCleanupTiles(
@@ -1976,8 +2041,8 @@ export function RoomStudio() {
         || !cleanupTileRatioMatches(
           generated[index].naturalWidth,
           generated[index].naturalHeight,
-          result.pixelRect.width,
-          result.pixelRect.height,
+          result.generationFrame.width,
+          result.generationFrame.height,
         )) {
         throw new Error('Il ritaglio IA ha cambiato proporzioni o geometria: è stato scartato e la fotografia è rimasta intatta.');
       }
@@ -2046,7 +2111,23 @@ export function RoomStudio() {
         tileWidth,
         tileHeight,
       );
-      const stabilized = colorStabilizedRoomLayer(originalTile, generated[resultIndex], tileWidth, tileHeight);
+      const generatedTile = document.createElement('canvas');
+      generatedTile.width = tileWidth; generatedTile.height = tileHeight;
+      const generatedTileContext = generatedTile.getContext('2d');
+      if (!generatedTileContext) throw new Error('Non posso ritagliare il risultato coerente della stanza.');
+      const generatedImage = generated[resultIndex];
+      generatedTileContext.drawImage(
+        generatedImage,
+        generationCropCoordinate(result.generationFrame.sourceLeft, result.generationFrame.width, generatedImage.naturalWidth),
+        generationCropCoordinate(result.generationFrame.sourceTop, result.generationFrame.height, generatedImage.naturalHeight),
+        generationCropCoordinate(result.generationFrame.sourceWidth, result.generationFrame.width, generatedImage.naturalWidth),
+        generationCropCoordinate(result.generationFrame.sourceHeight, result.generationFrame.height, generatedImage.naturalHeight),
+        0,
+        0,
+        tileWidth,
+        tileHeight,
+      );
+      const stabilized = colorStabilizedRoomLayer(originalTile, generatedTile, tileWidth, tileHeight);
       const fullPatch = document.createElement('canvas');
       const sharpMask = document.createElement('canvas');
       const softMask = document.createElement('canvas');
@@ -2177,6 +2258,7 @@ export function RoomStudio() {
       results.push({
         bounds: prepared.bounds,
         pixelRect: prepared.pixelRect,
+        generationFrame: prepared.generationFrame,
         sourceSize: prepared.sourceSize,
         envelope: prepared.envelope,
         regions: prepared.regions,

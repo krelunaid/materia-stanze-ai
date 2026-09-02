@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CLEANUP_MAX_TILE_AREA_RATIO,
+  cleanupGenerationFrame,
   cleanupTileBoundsFromRect,
   cleanupTileEdgeIsInternal,
   cleanupTileMaskEnvelope,
@@ -111,7 +112,7 @@ describe('cleanup tile planning', () => {
       .toEqual({ left: 0, top: 0, right: 2560, bottom: 1708, width: 2560, height: 1708 });
   });
 
-  it('splits a furnished room when the source ratio is unsupported by the image editor', () => {
+  it('keeps an unsupported-ratio furnished room in one coherent pass', () => {
     const input = [
       region('cassettiera', .02, .45, .25, .93),
       region('letto', .36, .43, .88, .95),
@@ -121,17 +122,24 @@ describe('cleanup tile planning', () => {
     const size = { width: 1400, height: 1120 }; // 5:4 is not an editor output ratio.
     const plans = planRoomCleanupPass(input, 12, size);
 
-    expect(plans.length).toBeGreaterThan(1);
-    expect(plans.every((plan) => (
-      plan.bounds.left !== 0 || plan.bounds.top !== 0 || plan.bounds.right !== 1 || plan.bounds.bottom !== 1
-    ))).toBe(true);
-    expect(plans.flatMap((plan) => plan.regions).map((item) => item.label).sort())
-      .toEqual(input.map((item) => item.label).sort());
-    for (const plan of plans) {
-      const rect = snapCleanupTileRect(plan.bounds, size);
-      expect(cleanupTileRatioMatches(rect.width, rect.height, rect.width, rect.height)).toBe(true);
-      expect(rect.width * rect.height / (size.width * size.height)).toBeLessThanOrEqual(CLEANUP_MAX_TILE_AREA_RATIO);
-    }
+    expect(plans).toHaveLength(1);
+    expect(plans[0].bounds).toEqual({ left: 0, top: 0, right: 1, bottom: 1 });
+    expect(plans[0].regions).toEqual(input);
+  });
+
+  it('pads 5:4 to the smallest supported frame without cropping or scaling it', () => {
+    const frame = cleanupGenerationFrame(1400, 1120);
+    expect(frame).toEqual({
+      width: 1496,
+      height: 1122,
+      sourceLeft: 48,
+      sourceTop: 1,
+      sourceWidth: 1400,
+      sourceHeight: 1120,
+    });
+    expect(cleanupTileRatioMatches(frame.width, frame.height, 4, 3)).toBe(true);
+    expect(frame.sourceLeft + frame.sourceWidth).toBeLessThanOrEqual(frame.width);
+    expect(frame.sourceTop + frame.sourceHeight).toBeLessThanOrEqual(frame.height);
   });
 
   it('keeps a small cleanup as a detail crop', () => {
