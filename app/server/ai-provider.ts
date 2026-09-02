@@ -47,6 +47,7 @@ export type DetectedRoomSurface = {
   slot?: GeometrySlot;
   parentId?: string;
   audited?: boolean;
+  thresholdInferred?: boolean;
 };
 
 export type DetectedObjectRegion = {
@@ -1579,7 +1580,9 @@ function repairAuditedArchedDoorThreshold(
     { x: curve[curve.length - 1].x, y: rightFloor },
     { x: curve[0].x, y: leftFloor },
   ];
-  return isSimpleRoomPolygon(repaired) ? { ...surface, points: repaired } : surface;
+  return isSimpleRoomPolygon(repaired)
+    ? { ...surface, points: repaired, thresholdInferred: true }
+    : surface;
 }
 
 function isValidAuditedArchedDoorThreshold(

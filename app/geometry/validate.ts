@@ -11,6 +11,7 @@ export type GeometryCandidate = {
   slot?: GeometrySlot;
   parentId?: string;
   audited?: boolean;
+  thresholdInferred?: boolean;
 };
 
 export type GeometryRejection = {

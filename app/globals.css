@@ -165,11 +165,13 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .simple-mode.step-3 .surface-overlay>.is-selected-surface>polygon { fill:rgba(215,240,92,.09)!important; opacity:.9; }
 .surface-overlay.hide-product-guides>g,.surface-overlay.hide-product-guides>polyline,.surface-overlay.hide-product-guides>.draft-vertex { display:none; }
 .simple-mode.step-2 .surface-overlay:not(.is-correcting) polygon { fill:transparent!important; opacity:.2; }
-.simple-mode.step-2 .surface-overlay:not(.is-correcting) .is-selected-surface polygon { opacity:.62; }
+.simple-mode.step-2 .surface-overlay:not(.is-correcting) .is-selected-surface polygon { fill:rgba(215,240,92,.13)!important; opacity:.86!important; pointer-events:auto; stroke:#d7f05c!important; }
 .simple-mode.step-2 .surface-overlay:not(.is-correcting) g:not(.is-selected-surface) polygon { opacity:0; pointer-events:none; }
-.simple-mode.step-2 .surface-overlay:not(.is-correcting) g.surface-kind-window polygon,
-.simple-mode.step-2 .surface-overlay:not(.is-correcting) g.surface-kind-door polygon { opacity:.82; pointer-events:auto; stroke-dasharray:8 5; }
-.simple-mode.step-2 .surface-overlay:not(.is-correcting) g:not(.surface-kind-window):not(.surface-kind-door) polygon { opacity:0!important; pointer-events:all; stroke:transparent!important; }
+.simple-mode.step-2 .surface-overlay:not(.is-correcting) g.surface-kind-window:not(.is-selected-surface) polygon,
+.simple-mode.step-2 .surface-overlay:not(.is-correcting) g.surface-kind-door:not(.is-selected-surface) polygon { opacity:.22; pointer-events:auto; stroke-dasharray:8 5; }
+.simple-mode.step-2 .surface-overlay:not(.is-correcting) g.surface-kind-window.is-selected-surface polygon,
+.simple-mode.step-2 .surface-overlay:not(.is-correcting) g.surface-kind-door.is-selected-surface polygon { stroke-dasharray:8 5; }
+.simple-mode.step-2 .surface-overlay:not(.is-correcting) g:not(.surface-kind-window):not(.surface-kind-door):not(.is-selected-surface) polygon { opacity:0!important; pointer-events:all; stroke:transparent!important; }
 .simple-mode.step-2 .surface-overlay.is-correcting polygon { opacity:.78; }
 .simple-mode.step-2 .surface-overlay.is-correcting g:not(.is-selected-surface) polygon { opacity:.1; pointer-events:none; }
 .simple-mode.step-2 .canvas:has(.surface-overlay.is-correcting) { outline:3px solid #9bc7bd; outline-offset:-3px; }

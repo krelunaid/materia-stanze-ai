@@ -134,6 +134,25 @@ describe('room geometry with an independent opening audit', () => {
     expect(result.openingAuditStatus).toBe('geometry-invalid');
   });
 
+  it('blocks an opening whose hidden threshold had to be inferred from the floor', async () => {
+    mocks.mergeArchitecturalOpeningAudit.mockReturnValue([
+      ...primarySurfaces,
+      { ...auditedOpenings[0], kind: 'door', thresholdInferred: true },
+    ]);
+
+    const response = await POST(photoRequest());
+    const result = await response.json() as {
+      openingAuditStatus?: string;
+      acceptedOpenings?: number;
+      inferredOpeningThresholds?: number;
+    };
+
+    expect(response.ok).toBe(true);
+    expect(result.acceptedOpenings).toBe(1);
+    expect(result.inferredOpeningThresholds).toBe(1);
+    expect(result.openingAuditStatus).toBe('geometry-invalid');
+  });
+
   it('reports a blocking shell failure when wall, floor and ceiling do not share their junctions', async () => {
     mocks.roomShellTopologyStatus.mockReturnValue('geometry-invalid');
 

@@ -728,6 +728,7 @@ describe('getAiProvider', () => {
     ]);
     const arch = result.find((surface) => surface.kind === 'door');
     expect(arch?.name).toBe('Arco');
+    expect(arch?.thresholdInferred).toBe(true);
     expect(arch?.points).toHaveLength(11);
     expect(arch?.points.at(-2)).toEqual(expect.objectContaining({ x: .983, y: expect.closeTo(.82, 2) }));
     expect(arch?.points.at(-1)).toEqual(expect.objectContaining({ x: .727, y: expect.closeTo(.72, 2) }));

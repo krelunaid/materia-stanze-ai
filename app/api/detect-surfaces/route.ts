@@ -78,6 +78,9 @@ export async function POST(request: Request) {
       ? mergeArchitecturalOpeningAudit(primaryResult.value, auditedOpenings)
       : primaryResult.value;
     const acceptedOpenings = surfaces.filter((surface) => surface.kind === 'door' || surface.kind === 'window').length;
+    const inferredOpeningThresholds = surfaces.filter((surface) => (
+      (surface.kind === 'door' || surface.kind === 'window') && surface.thresholdInferred
+    )).length;
     const shellGeometryStatus = roomShellTopologyStatus(surfaces);
     return json({
       surfaces,
@@ -86,10 +89,15 @@ export async function POST(request: Request) {
       auditorModel: auditor?.model ?? null,
       auditedOpenings: auditedOpenings.length,
       acceptedOpenings,
+      inferredOpeningThresholds,
       shellGeometryStatus,
       openingAuditAttempts,
       openingAuditStatus: auditor
-        ? acceptedOpenings ? 'verified' : auditedOpenings.length ? 'geometry-invalid' : seedOpenings.length ? 'candidate-unverified' : 'none-found'
+        ? inferredOpeningThresholds ? 'geometry-invalid'
+          : acceptedOpenings ? 'verified'
+            : auditedOpenings.length ? 'geometry-invalid'
+              : seedOpenings.length ? 'candidate-unverified'
+                : 'none-found'
         : 'unavailable',
     }, headers);
   } catch (caught) {
