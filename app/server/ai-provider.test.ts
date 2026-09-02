@@ -97,6 +97,10 @@ describe('getAiProvider', () => {
           wallRevealSillOrThreshold: true,
           showsOpeningInteriorOrGlazing: true,
           furniturePanelMirrorOrAppliance: false,
+          lowerBoundaryDirectlyVisible: true,
+          leftSideDirectlyVisibleToLowerBoundary: true,
+          rightSideDirectlyVisibleToLowerBoundary: true,
+          occludedByFurniture: false,
           points: arch,
         }],
       }) }] }],
@@ -107,7 +111,36 @@ describe('getAiProvider', () => {
       new File([new Uint8Array([1, 2, 3])], 'arched-kitchen.jpg', { type: 'image/jpeg' }),
     );
 
-    expect(result).toEqual([expect.objectContaining({ kind: 'door', points: arch })]);
+    expect(result).toEqual([expect.objectContaining({ kind: 'door', points: arch, thresholdInferred: false })]);
+  });
+
+  it('marks an arch threshold as inferred when furniture hides its lower jambs', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({
+        openings: [{
+          type: 'door', confidence: .94, evidence: 'Arco visibile ma soglia nascosta dal tavolo',
+          architecturalFrame: true,
+          wallRevealSillOrThreshold: true,
+          showsOpeningInteriorOrGlazing: true,
+          furniturePanelMirrorOrAppliance: false,
+          lowerBoundaryDirectlyVisible: false,
+          leftSideDirectlyVisibleToLowerBoundary: false,
+          rightSideDirectlyVisibleToLowerBoundary: false,
+          occludedByFurniture: true,
+          points: [
+            { x: .72, y: .3 }, { x: .75, y: .18 }, { x: .85, y: .1 }, { x: .95, y: .18 },
+            { x: .98, y: .3 }, { x: .98, y: .72 }, { x: .72, y: .72 },
+          ],
+        }],
+      }) }] }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    const result = await detectArchitecturalOpenings(
+      { id: 'openai', label: 'OpenAI', apiKey: 'openai-test', model: 'gpt-5.6-terra' },
+      new File([new Uint8Array([1, 2, 3])], 'occluded-arch.jpg', { type: 'image/jpeg' }),
+    );
+
+    expect(result).toEqual([expect.objectContaining({ kind: 'door', thresholdInferred: true })]);
   });
 
   it('uses tentative inner rectangles only as seeds for targeted outer-opening recovery', async () => {

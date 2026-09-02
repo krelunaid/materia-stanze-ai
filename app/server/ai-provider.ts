@@ -422,8 +422,12 @@ const architecturalOpeningAuditSchema = {
           wallRevealSillOrThreshold: { type: 'boolean' },
           showsOpeningInteriorOrGlazing: { type: 'boolean' },
           furniturePanelMirrorOrAppliance: { type: 'boolean' },
+          lowerBoundaryDirectlyVisible: { type: 'boolean' },
+          leftSideDirectlyVisibleToLowerBoundary: { type: 'boolean' },
+          rightSideDirectlyVisibleToLowerBoundary: { type: 'boolean' },
+          occludedByFurniture: { type: 'boolean' },
         },
-        required: ['type', 'points', 'confidence', 'evidence', 'architecturalFrame', 'wallRevealSillOrThreshold', 'showsOpeningInteriorOrGlazing', 'furniturePanelMirrorOrAppliance'],
+        required: ['type', 'points', 'confidence', 'evidence', 'architecturalFrame', 'wallRevealSillOrThreshold', 'showsOpeningInteriorOrGlazing', 'furniturePanelMirrorOrAppliance', 'lowerBoundaryDirectlyVisible', 'leftSideDirectlyVisibleToLowerBoundary', 'rightSideDirectlyVisibleToLowerBoundary', 'occludedByFurniture'],
       },
     },
   },
@@ -1875,6 +1879,7 @@ export async function detectArchitecturalOpenings(
     'For a straight rectangular opening use exactly four perspective-correct outer corners. For a round, segmental or pointed arch use 5 to 16 clockwise vertices that follow the complete visible masonry arch and both jambs. Coordinates are normalized to the complete source image: x=0 left, x=1 right, y=0 top, y=1 bottom.',
     'An arched doorway containing a smaller rectangular wooden door is one door opening: trace the OUTER wall opening, including the full brick or stone arch, reveals, jambs and floor threshold. Never trace only the inner door leaf or its rectangular frame.',
     'When a table, chair, cabinet or appliance hides the lower jambs, continue both jamb edges behind that furniture to the local wall-floor junction and close the polygon at the inferred floor threshold. Never use the top of foreground furniture as the bottom edge of a doorway.',
+    'For every opening report lowerBoundaryDirectlyVisible, leftSideDirectlyVisibleToLowerBoundary, rightSideDirectlyVisibleToLowerBoundary and occludedByFurniture independently from the proposed coordinates. A geometrically completed line behind furniture is inferred, not directly visible. Do not mark a threshold or jamb visible merely because you estimated its position.',
     'Use type=door only when the opening reaches a passable floor threshold. Use type=window when a sill or wall remains below it. A full-height glazed wall or French window that reaches the floor is a door.',
     'Do not classify mirrors, pictures, televisions, air conditioners, cabinets, kitchen wall units, cupboard doors, furniture panels, niches, shadows, reflections or bright wall patches as openings.',
     'For every candidate, explicitly decide whether its outer frame is integrated into the architectural wall, whether a wall reveal plus sill or floor threshold is visible, whether the interior shows glazing/outdoors/a passable doorway, and whether it could instead be a furniture panel, mirror or appliance. A closed solid door is still a real opening: return it when an operable door leaf and handle are visibly enclosed by architectural jambs and a threshold, even though showsOpeningInteriorOrGlazing is false.',
@@ -1920,6 +1925,10 @@ export async function detectArchitecturalOpenings(
       wallRevealSillOrThreshold?: boolean;
       showsOpeningInteriorOrGlazing?: boolean;
       furniturePanelMirrorOrAppliance?: boolean;
+      lowerBoundaryDirectlyVisible?: boolean;
+      leftSideDirectlyVisibleToLowerBoundary?: boolean;
+      rightSideDirectlyVisibleToLowerBoundary?: boolean;
+      occludedByFurniture?: boolean;
     }>;
   };
   return (parsed.openings ?? []).slice(0, 16).filter((opening) => (
@@ -1936,6 +1945,10 @@ export async function detectArchitecturalOpenings(
     })),
     confidence: finiteUnit(opening.confidence),
     audited: true,
+    thresholdInferred: opening.lowerBoundaryDirectlyVisible !== true
+      || opening.leftSideDirectlyVisibleToLowerBoundary !== true
+      || opening.rightSideDirectlyVisibleToLowerBoundary !== true
+      || opening.occludedByFurniture === true,
   })).filter((surface) => surface.points.length >= 4 && surface.points.length <= 16
     && surface.confidence >= .72 && isSimpleRoomPolygon(surface.points));
 }
