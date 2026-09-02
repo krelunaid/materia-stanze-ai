@@ -1533,6 +1533,68 @@ export function RoomStudio() {
     setDragEdge(activeDrag);
   }
 
+  function beginMidpointDrag(event: ReactPointerEvent<Element>, surfaceId: string, edgeIndex: number) {
+    if (geometryDragRef.current) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    const surface = surfaces.find((item) => item.id === surfaceId);
+    if (!surface || surface.frozen || !isCorrectingEdges || surface.points.length >= 24) return;
+    const first = surface.points[edgeIndex];
+    const second = surface.points[(edgeIndex + 1) % surface.points.length];
+    const midpoint = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
+    const overlay = surfaceOverlayRef.current?.getBoundingClientRect();
+    const width = overlay?.width || 1000;
+    const height = overlay?.height || 625;
+    const samePoint = (left: Point, right: Point) => (
+      Math.hypot((left.x - right.x) * width, (left.y - right.y) * height) <= 8
+    );
+    const insertions = surfaces.flatMap((candidate) => {
+      if (candidate.frozen || candidate.points.length >= 24) return [];
+      return candidate.points.flatMap((point, index) => {
+        const next = candidate.points[(index + 1) % candidate.points.length];
+        return (samePoint(point, first) && samePoint(next, second))
+          || (samePoint(point, second) && samePoint(next, first))
+          ? [{ surfaceId: candidate.id, afterIndex: index }]
+          : [];
+      });
+    });
+    const selectedInsertion = insertions.find((item) => item.surfaceId === surfaceId && item.afterIndex === edgeIndex);
+    if (!selectedInsertion) return;
+    const sharedFrozen = surfaces.some((candidate) => candidate.frozen && candidate.points.some((point, index) => {
+      const next = candidate.points[(index + 1) % candidate.points.length];
+      return (samePoint(point, first) && samePoint(next, second))
+        || (samePoint(point, second) && samePoint(next, first));
+    }));
+    if (sharedFrozen) {
+      setNotice('Questa linea tocca una superficie Freeze. Sbloccala prima di aggiungere un punto condiviso.');
+      return;
+    }
+
+    const next = surfaces.map((candidate) => {
+      const insertion = insertions.find((item) => item.surfaceId === candidate.id);
+      if (!insertion) return candidate;
+      const points = [...candidate.points];
+      points.splice(insertion.afterIndex + 1, 0, midpoint);
+      return { ...candidate, points };
+    });
+    if (!next.every((candidate) => isValidPolygon(candidate.points))) return;
+    const linked = insertions.map((item) => ({ surfaceId: item.surfaceId, vertexIndex: item.afterIndex + 1 }));
+    event.preventDefault(); event.stopPropagation();
+    const activeDrag: DragVertex = {
+      kind: 'vertex', surfaceId, vertexIndex: edgeIndex + 1,
+      pointerId: event.pointerId, origin: midpoint, linked,
+    };
+    geometryDragRef.current = activeDrag;
+    geometryCaptureTargetRef.current = event.currentTarget;
+    try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { /* Global listeners keep the drag active. */ }
+    shellRef.current?.classList.add('is-moving-vertex');
+    dragStartRef.current = surfaces;
+    syncGeometrySnapshots(next);
+    setSurfaces(next);
+    setDragEdge(null);
+    setDragVertex(activeDrag);
+    setNotice('Nuovo punto creato: trascinalo per formare una punta.');
+  }
+
   function toggleEdgeCorrection() {
     if (isCorrectingEdges) {
       if (geometryDragRef.current) finishGeometryDrag(geometryDragRef.current.pointerId);
@@ -3645,7 +3707,7 @@ export function RoomStudio() {
                     const edgeLength = Math.hypot((next.x - point.x) * canvasCssSize.width, (next.y - point.y) * canvasCssSize.height);
                     if (edgeLength < 28) return null;
                     const midpointX = (point.x + next.x) * 500; const midpointY = (point.y + next.y) * 312.5;
-                    return <circle key={`${selected.id}-midpoint-${index}`} cx={midpointX} cy={midpointY} r="13" className="surface-edge-grip" aria-hidden="true" onPointerDown={(event) => { setNotice('Tieni premuto e trascina il cerchietto: si sposta tutta la linea.'); beginEdgeDrag(event, selected.id, index); }} />;
+                    return <circle key={`${selected.id}-midpoint-${index}`} cx={midpointX} cy={midpointY} r="13" className="surface-edge-grip" aria-hidden="true" onPointerDown={(event) => beginMidpointDrag(event, selected.id, index)} />;
                   })}
                   {selected.points.map((point, index) => <g key={`${selected.id}-vertex-${index}`}><circle cx={point.x * 1000} cy={point.y * 625} r="34" className="surface-vertex-hit" aria-label={`Sposta punto ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginVertexDrag(event, selected.id, index)} /><circle cx={point.x * 1000} cy={point.y * 625} r="16" className="surface-vertex" aria-hidden="true" /></g>)}
                 </g>}
@@ -3670,8 +3732,8 @@ export function RoomStudio() {
                       top: `clamp(${hitInset}px, ${((point.y + next.y) / 2) * 100}%, calc(100% - ${hitInset}px))`,
                       touchAction: 'none',
                     }}
-                    aria-label={`Sposta punto centrale linea ${index + 1} di ${selected.name}`}
-                    onPointerDown={(event) => { setNotice('Tieni premuto e trascina il cerchietto: si sposta tutta la linea.'); beginEdgeDrag(event, selected.id, index); }}
+                    aria-label={`Crea e sposta un nuovo punto sulla linea ${index + 1} di ${selected.name}`}
+                    onPointerDown={(event) => beginMidpointDrag(event, selected.id, index)}
                     onPointerMove={handleGeometryPointerMove}
                     onPointerUp={handleGeometryPointerEnd}
                     onPointerCancel={handleGeometryPointerEnd}

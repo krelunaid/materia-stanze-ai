@@ -98,6 +98,39 @@ describe('room geometry with an independent opening audit', () => {
     expect(mocks.mergeArchitecturalOpeningAudit).toHaveBeenCalledWith([...primarySurfaces, innerDoor], [outerArch]);
   });
 
+  it('re-audits a window label beside a tentative door leaf and keeps the corrected outer arch', async () => {
+    const innerDoor = {
+      name: 'Anta interna', kind: 'door', confidence: .88,
+      points: [{ x: .78, y: .3 }, { x: .88, y: .3 }, { x: .88, y: .7 }, { x: .78, y: .7 }],
+    };
+    const wrongWindow = {
+      name: 'Finestra verificata', kind: 'window', confidence: .9,
+      points: [{ x: .72, y: .2 }, { x: .96, y: .2 }, { x: .96, y: .72 }, { x: .72, y: .72 }],
+    };
+    const outerArch = {
+      name: 'Arco verificato', kind: 'door', confidence: .95, openingHead: 'arched',
+      points: [{ x: .72, y: .3 }, { x: .75, y: .2 }, { x: .84, y: .14 }, { x: .94, y: .2 }, { x: .97, y: .3 }, { x: .97, y: .74 }, { x: .72, y: .72 }],
+    };
+    mocks.detectRoomSurfaces.mockResolvedValue([...primarySurfaces, innerDoor]);
+    mocks.detectArchitecturalOpenings
+      .mockResolvedValueOnce([wrongWindow])
+      .mockResolvedValueOnce([outerArch]);
+    mocks.mergeArchitecturalOpeningAudit.mockReturnValue([...primarySurfaces, outerArch]);
+
+    const response = await POST(photoRequest());
+    const result = await response.json() as { acceptedOpenings?: number; openingAuditAttempts?: number };
+
+    expect(response.ok).toBe(true);
+    expect(result.acceptedOpenings).toBe(1);
+    expect(result.openingAuditAttempts).toBe(2);
+    expect(mocks.detectArchitecturalOpenings).toHaveBeenNthCalledWith(
+      2, expect.anything(), expect.any(File), [innerDoor, wrongWindow], { recovery: false },
+    );
+    expect(mocks.mergeArchitecturalOpeningAudit).toHaveBeenCalledWith(
+      [...primarySurfaces, innerDoor], [wrongWindow, outerArch],
+    );
+  });
+
   it('runs a forced zone-by-zone recovery when both primary and first audit find no opening', async () => {
     const recoveredArch = {
       name: 'Arco verificato', kind: 'door', confidence: .94,

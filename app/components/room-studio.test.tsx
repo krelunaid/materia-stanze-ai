@@ -424,14 +424,14 @@ describe('RoomStudio', () => {
     expect(midpoint).toHaveStyle({ touchAction: 'none' });
   });
 
-  it('also drags a whole edge from the visible centre circle', () => {
+  it('creates and drags a new vertex from the visible centre circle', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
     fireEvent.click(screen.getByRole('button', { name: 'Correggi i bordi' }));
     const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
     vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
     const polygon = document.querySelector('.is-selected-surface polygon') as SVGPolygonElement;
-    const before = polygon.getAttribute('points');
+    const before = (polygon.getAttribute('points') as string).split(' ');
     const circle = document.querySelector('.surface-correction-controls .surface-edge-grip') as SVGCircleElement;
     const x = Number(circle.getAttribute('cx'));
     const y = Number(circle.getAttribute('cy'));
@@ -442,8 +442,12 @@ describe('RoomStudio', () => {
     fireEvent.pointerUp(circle, { pointerId: 23, pointerType: 'touch' });
 
     expect(capture.setPointerCapture).toHaveBeenCalledWith(23);
-    expect(polygon.getAttribute('points')).not.toBe(before);
-    expect(screen.getByText('Tieni premuto e trascina il cerchietto: si sposta tutta la linea.')).toBeInTheDocument();
+    const after = (polygon.getAttribute('points') as string).split(' ');
+    expect(after).toHaveLength(before.length + 1);
+    expect(after[0]).toBe(before[0]);
+    expect(after[2]).toBe(before[1]);
+    expect(Number(after[1].split(',')[1])).toBeGreaterThan(Number(before[0].split(',')[1]));
+    expect(screen.getByText('Nuovo punto creato: trascinalo per formare una punta.')).toBeInTheDocument();
   });
 
   it('captures touch on the real vertex handle, moves it and restores it with undo', () => {
@@ -1046,7 +1050,7 @@ describe('RoomStudio', () => {
     expect(floorPolygon).toHaveAttribute('points', floorBefore);
   });
 
-  it('drags the floor side from its small midpoint handle with Apple Pencil', () => {
+  it('creates a floor vertex from its small midpoint handle with Apple Pencil', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
     fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
@@ -1054,7 +1058,7 @@ describe('RoomStudio', () => {
 
     const guideActions = document.querySelector('.surface-guide-actions') as HTMLDivElement;
     fireEvent.click(within(guideActions).getByRole('button', { name: '↔ Sposta linee' }));
-    const midpoint = screen.getByLabelText('Sposta punto centrale linea 1 di Pavimento') as HTMLButtonElement;
+    const midpoint = screen.getByLabelText('Crea e sposta un nuovo punto sulla linea 1 di Pavimento') as HTMLButtonElement;
     expect(midpoint).toHaveClass('surface-edge-grip-hit');
     expect(midpoint).toHaveStyle({ touchAction: 'none' });
     expect(midpoint.style.left).toContain('clamp(26px');
@@ -1082,9 +1086,10 @@ describe('RoomStudio', () => {
 
     const floorAfter = parsePoints(floorPolygon.getAttribute('points') as string);
     const floorOriginal = parsePoints(floorBefore);
-    expect(floorAfter[0][1]).toBeGreaterThan(floorOriginal[0][1]);
-    expect(floorAfter[1][1]).toBeGreaterThan(floorOriginal[1][1]);
-    expect(floorAfter[0][1] - floorOriginal[0][1]).toBe(floorAfter[1][1] - floorOriginal[1][1]);
+    expect(floorAfter).toHaveLength(floorOriginal.length + 1);
+    expect(floorAfter[0]).toEqual(floorOriginal[0]);
+    expect(floorAfter[2]).toEqual(floorOriginal[1]);
+    expect(floorAfter[1][1]).toBeGreaterThan(floorOriginal[0][1]);
 
     const sharedWallPoints = wallPolygons.flatMap((polygon) => parsePoints(polygon.getAttribute('points') as string));
     expect(sharedWallPoints).toContainEqual(floorAfter[0]);

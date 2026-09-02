@@ -58,10 +58,11 @@ export async function POST(request: Request) {
     if (auditor && (seedOpenings.length || auditedOpenings.length === 0)) {
       try {
         openingAuditAttempts += 1;
+        const refinementSeeds = [...seedOpenings, ...auditedOpenings].slice(0, 8);
         const refinedOpenings = await detectArchitecturalOpenings(
           auditor,
           image,
-          seedOpenings,
+          refinementSeeds,
           { recovery: auditedOpenings.length === 0 },
         );
         auditedOpenings = [...auditedOpenings, ...refinedOpenings];

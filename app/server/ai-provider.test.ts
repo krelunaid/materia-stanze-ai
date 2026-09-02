@@ -64,6 +64,13 @@ describe('getAiProvider', () => {
           wallRevealSillOrThreshold: true,
           showsOpeningInteriorOrGlazing: true,
           furniturePanelMirrorOrAppliance: false,
+          lowerBoundaryDirectlyVisible: true,
+          leftSideDirectlyVisibleToLowerBoundary: true,
+          rightSideDirectlyVisibleToLowerBoundary: true,
+          occludedByFurniture: false,
+          openingHead: 'straight',
+          passableFloorOpening: false,
+          visibleSillAboveFloor: true,
           points: [{ x: .2, y: .2 }, { x: .4, y: .2 }, { x: .4, y: .55 }, { x: .2, y: .55 }],
         }],
       }) }] }],
@@ -79,8 +86,12 @@ describe('getAiProvider', () => {
     expect(payload.model).toBe('gpt-5.6-terra');
     expect(payload.input[0].content[0]).toMatchObject({ type: 'input_image', detail: 'original' });
     expect(payload.text.format.schema.properties.openings.items.properties.points).toMatchObject({ minItems: 4, maxItems: 16 });
+    expect(payload.text.format.schema.properties.openings.items.required).toEqual(expect.arrayContaining([
+      'openingHead', 'passableFloorOpening', 'visibleSillAboveFloor',
+    ]));
     expect(payload.input[0].content[1].text).toContain('full brick or stone arch');
     expect(payload.input[0].content[1].text).toContain('Never trace only the inner door leaf');
+    expect(payload.input[0].content[1].text).toContain('NON-NEGOTIABLE CLASSIFICATION CHECK');
     expect(payload.store).toBe(false);
   });
 
@@ -101,6 +112,9 @@ describe('getAiProvider', () => {
           leftSideDirectlyVisibleToLowerBoundary: true,
           rightSideDirectlyVisibleToLowerBoundary: true,
           occludedByFurniture: false,
+          openingHead: 'arched',
+          passableFloorOpening: true,
+          visibleSillAboveFloor: false,
           points: arch,
         }],
       }) }] }],
@@ -112,6 +126,69 @@ describe('getAiProvider', () => {
     );
 
     expect(result).toEqual([expect.objectContaining({ kind: 'door', points: arch, thresholdInferred: false })]);
+  });
+
+  it('corrects an audited masonry arch even when the model initially calls it a window', async () => {
+    const arch = [
+      { x: .72, y: .3 }, { x: .75, y: .2 }, { x: .84, y: .14 }, { x: .94, y: .2 },
+      { x: .97, y: .3 }, { x: .97, y: .74 }, { x: .72, y: .72 },
+    ];
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({
+        openings: [{
+          type: 'window', confidence: .94, evidence: 'Arco in mattoni aperto fino al pavimento',
+          architecturalFrame: true,
+          wallRevealSillOrThreshold: true,
+          showsOpeningInteriorOrGlazing: true,
+          furniturePanelMirrorOrAppliance: false,
+          lowerBoundaryDirectlyVisible: false,
+          leftSideDirectlyVisibleToLowerBoundary: false,
+          rightSideDirectlyVisibleToLowerBoundary: false,
+          occludedByFurniture: true,
+          openingHead: 'arched',
+          passableFloorOpening: true,
+          visibleSillAboveFloor: false,
+          points: arch,
+        }],
+      }) }] }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    const result = await detectArchitecturalOpenings(
+      { id: 'openai', label: 'OpenAI', apiKey: 'openai-test', model: 'gpt-5.6-terra' },
+      new File([new Uint8Array([1, 2, 3])], 'mislabelled-arch.jpg', { type: 'image/jpeg' }),
+    );
+
+    expect(result).toEqual([expect.objectContaining({
+      name: 'Arco verificato 1', kind: 'door', openingHead: 'arched',
+      passableFloorOpening: true, visibleSillAboveFloor: false, points: arch,
+    })]);
+  });
+
+  it('rejects a flattened four-corner contour for an audited arch', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({
+        openings: [{
+          type: 'window', confidence: .94, evidence: 'Arco in mattoni aperto fino al pavimento',
+          architecturalFrame: true,
+          wallRevealSillOrThreshold: true,
+          showsOpeningInteriorOrGlazing: true,
+          furniturePanelMirrorOrAppliance: false,
+          lowerBoundaryDirectlyVisible: false,
+          leftSideDirectlyVisibleToLowerBoundary: false,
+          rightSideDirectlyVisibleToLowerBoundary: false,
+          occludedByFurniture: true,
+          openingHead: 'arched',
+          passableFloorOpening: true,
+          visibleSillAboveFloor: false,
+          points: [{ x: .72, y: .2 }, { x: .97, y: .2 }, { x: .97, y: .74 }, { x: .72, y: .72 }],
+        }],
+      }) }] }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await expect(detectArchitecturalOpenings(
+      { id: 'openai', label: 'OpenAI', apiKey: 'openai-test', model: 'gpt-5.6-terra' },
+      new File([new Uint8Array([1, 2, 3])], 'flattened-arch.jpg', { type: 'image/jpeg' }),
+    )).resolves.toEqual([]);
   });
 
   it('marks an arch threshold as inferred when furniture hides its lower jambs', async () => {
@@ -127,6 +204,9 @@ describe('getAiProvider', () => {
           leftSideDirectlyVisibleToLowerBoundary: false,
           rightSideDirectlyVisibleToLowerBoundary: false,
           occludedByFurniture: true,
+          openingHead: 'arched',
+          passableFloorOpening: true,
+          visibleSillAboveFloor: false,
           points: [
             { x: .72, y: .3 }, { x: .75, y: .18 }, { x: .85, y: .1 }, { x: .95, y: .18 },
             { x: .98, y: .3 }, { x: .98, y: .72 }, { x: .72, y: .72 },
