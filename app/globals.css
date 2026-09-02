@@ -93,9 +93,10 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .surface-vertex-hit { fill:rgba(255,255,255,.01); cursor:grab; pointer-events:all; touch-action:none; }
 .surface-edge-hit { stroke:rgba(255,255,255,.01); stroke-width:48; cursor:move; pointer-events:all; touch-action:none; }
 .surface-edge { stroke:var(--lime); stroke-width:7; stroke-linecap:round; pointer-events:none; filter:drop-shadow(0 2px 3px rgba(15,37,32,.32)); }
-.surface-edge-grip { fill:var(--lime); stroke:#fff; stroke-width:4; vector-effect:non-scaling-stroke; pointer-events:none; filter:drop-shadow(0 2px 3px rgba(15,37,32,.32)); }
+.surface-edge-grip { fill:var(--lime); stroke:#fff; stroke-width:4; vector-effect:non-scaling-stroke; pointer-events:all; cursor:move; touch-action:none; filter:drop-shadow(0 2px 3px rgba(15,37,32,.32)); }
 .surface-correction-hit-layer { position:absolute; z-index:13; inset:0; overflow:visible; pointer-events:none; touch-action:none; }
 .surface-edge-grip-hit { position:absolute; width:56px; height:56px; padding:0; border:0; border-radius:50%; background:rgba(255,255,255,.01); transform:translate(-50%,-50%); cursor:move; pointer-events:auto; touch-action:none; -webkit-touch-callout:none; user-select:none; }
+.surface-edge-grip-hit:active { background:rgba(215,240,92,.22); }
 .is-frozen .surface-vertex { fill:#293633; cursor:not-allowed; }
 .draft-vertex { fill:var(--lime); }
 .before-after-toggle { position:absolute; z-index:5; top:10px; right:10px; display:flex; gap:3px; padding:3px; border-radius:10px; background:rgba(255,255,255,.9); box-shadow:0 4px 16px rgba(15,35,30,.16); backdrop-filter:blur(8px); }

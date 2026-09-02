@@ -3645,7 +3645,7 @@ export function RoomStudio() {
                     const edgeLength = Math.hypot((next.x - point.x) * canvasCssSize.width, (next.y - point.y) * canvasCssSize.height);
                     if (edgeLength < 28) return null;
                     const midpointX = (point.x + next.x) * 500; const midpointY = (point.y + next.y) * 312.5;
-                    return <circle key={`${selected.id}-midpoint-${index}`} cx={midpointX} cy={midpointY} r="10" className="surface-edge-grip" aria-hidden="true" />;
+                    return <circle key={`${selected.id}-midpoint-${index}`} cx={midpointX} cy={midpointY} r="13" className="surface-edge-grip" aria-hidden="true" onPointerDown={(event) => { setNotice('Tieni premuto e trascina il cerchietto: si sposta tutta la linea.'); beginEdgeDrag(event, selected.id, index); }} />;
                   })}
                   {selected.points.map((point, index) => <g key={`${selected.id}-vertex-${index}`}><circle cx={point.x * 1000} cy={point.y * 625} r="34" className="surface-vertex-hit" aria-label={`Sposta punto ${index + 1} di ${selected.name}`} onPointerDown={(event) => beginVertexDrag(event, selected.id, index)} /><circle cx={point.x * 1000} cy={point.y * 625} r="16" className="surface-vertex" aria-hidden="true" /></g>)}
                 </g>}
@@ -3671,7 +3671,7 @@ export function RoomStudio() {
                       touchAction: 'none',
                     }}
                     aria-label={`Sposta punto centrale linea ${index + 1} di ${selected.name}`}
-                    onPointerDown={(event) => beginEdgeDrag(event, selected.id, index)}
+                    onPointerDown={(event) => { setNotice('Tieni premuto e trascina il cerchietto: si sposta tutta la linea.'); beginEdgeDrag(event, selected.id, index); }}
                     onPointerMove={handleGeometryPointerMove}
                     onPointerUp={handleGeometryPointerEnd}
                     onPointerCancel={handleGeometryPointerEnd}

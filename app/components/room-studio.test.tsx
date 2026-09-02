@@ -424,6 +424,28 @@ describe('RoomStudio', () => {
     expect(midpoint).toHaveStyle({ touchAction: 'none' });
   });
 
+  it('also drags a whole edge from the visible centre circle', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Correggi i bordi' }));
+    const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+    const polygon = document.querySelector('.is-selected-surface polygon') as SVGPolygonElement;
+    const before = polygon.getAttribute('points');
+    const circle = document.querySelector('.surface-correction-controls .surface-edge-grip') as SVGCircleElement;
+    const x = Number(circle.getAttribute('cx'));
+    const y = Number(circle.getAttribute('cy'));
+    const capture = mockPointerCapture(circle);
+
+    fireEvent.pointerDown(circle, { pointerId: 23, pointerType: 'touch', clientX: x, clientY: y });
+    fireEvent.pointerMove(circle, { pointerId: 23, pointerType: 'touch', clientX: x, clientY: y + 35 });
+    fireEvent.pointerUp(circle, { pointerId: 23, pointerType: 'touch' });
+
+    expect(capture.setPointerCapture).toHaveBeenCalledWith(23);
+    expect(polygon.getAttribute('points')).not.toBe(before);
+    expect(screen.getByText('Tieni premuto e trascina il cerchietto: si sposta tutta la linea.')).toBeInTheDocument();
+  });
+
   it('captures touch on the real vertex handle, moves it and restores it with undo', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
