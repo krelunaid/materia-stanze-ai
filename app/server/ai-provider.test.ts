@@ -55,7 +55,7 @@ describe('getAiProvider', () => {
     expect(getVisionAuditor(environment, { id: 'openai', label: 'OpenAI', apiKey: 'openai-test' })).toBeNull();
   });
 
-  it('asks the independent auditor for original-detail four-corner openings', async () => {
+  it('asks the independent auditor for original-detail outer opening contours', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       output: [{ content: [{ type: 'output_text', text: JSON.stringify({
         openings: [{
@@ -108,6 +108,28 @@ describe('getAiProvider', () => {
     );
 
     expect(result).toEqual([expect.objectContaining({ kind: 'door', points: arch })]);
+  });
+
+  it('uses tentative inner rectangles only as seeds for targeted outer-opening recovery', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({ openings: [] }) }] }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    const seed = {
+      name: 'Anta interna', kind: 'door' as const, confidence: .9,
+      points: [{ x: .78, y: .3 }, { x: .88, y: .3 }, { x: .88, y: .7 }, { x: .78, y: .7 }],
+    };
+
+    await detectArchitecturalOpenings(
+      { id: 'openai', label: 'OpenAI', apiKey: 'openai-test', model: 'gpt-5.6-terra' },
+      new File([new Uint8Array([1, 2, 3])], 'seeded-door.jpg', { type: 'image/jpeg' }),
+      [seed],
+    );
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(payload.reasoning).toEqual({ effort: 'low' });
+    expect(payload.max_output_tokens).toBe(1800);
+    expect(payload.input[0].content[1].text).toContain('Targeted recovery');
+    expect(payload.input[0].content[1].text).toContain('Do not return the seed unchanged');
   });
 
   it('keeps a closed solid architectural door without requiring visible interior', async () => {

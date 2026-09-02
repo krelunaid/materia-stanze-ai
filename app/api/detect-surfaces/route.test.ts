@@ -56,6 +56,7 @@ describe('room geometry with an independent opening audit', () => {
 
   it('keeps the primary geometry when the independent audit times out', async () => {
     mocks.detectArchitecturalOpenings.mockRejectedValueOnce(new Error('timeout'));
+    mocks.mergeArchitecturalOpeningAudit.mockReturnValue(primarySurfaces);
 
     const response = await POST(photoRequest());
     const result = await response.json() as { surfaces?: unknown[]; auditedOpenings?: number };
@@ -63,6 +64,50 @@ describe('room geometry with an independent opening audit', () => {
     expect(response.ok).toBe(true);
     expect(result.surfaces).toEqual(primarySurfaces);
     expect(result.auditedOpenings).toBe(0);
+    expect(mocks.mergeArchitecturalOpeningAudit).toHaveBeenCalledWith(primarySurfaces, []);
+  });
+
+  it('runs a targeted outer-opening recovery around a tentative door leaf', async () => {
+    const innerDoor = {
+      name: 'Anta interna', kind: 'door', confidence: .88,
+      points: [{ x: .78, y: .3 }, { x: .88, y: .3 }, { x: .88, y: .7 }, { x: .78, y: .7 }],
+    };
+    const outerArch = {
+      name: 'Arco verificato', kind: 'door', confidence: .91,
+      points: [{ x: .82, y: .1 }, { x: .94, y: .2 }, { x: .94, y: .72 }, { x: .7, y: .72 }, { x: .7, y: .2 }],
+    };
+    mocks.detectRoomSurfaces.mockResolvedValue([...primarySurfaces, innerDoor]);
+    mocks.detectArchitecturalOpenings
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([outerArch]);
+    mocks.mergeArchitecturalOpeningAudit.mockReturnValue([...primarySurfaces, outerArch]);
+
+    const response = await POST(photoRequest());
+    const result = await response.json() as { auditedOpenings?: number };
+
+    expect(response.ok).toBe(true);
+    expect(result.auditedOpenings).toBe(1);
+    expect(mocks.detectArchitecturalOpenings).toHaveBeenNthCalledWith(2, expect.anything(), expect.any(File), [innerDoor]);
+    expect(mocks.mergeArchitecturalOpeningAudit).toHaveBeenCalledWith([...primarySurfaces, innerDoor], [outerArch]);
+  });
+
+  it('drops an unconfirmed primary opening when the auditor returns none', async () => {
+    const falseWindow = {
+      name: 'Pensile luminoso', kind: 'window', confidence: .92,
+      points: [{ x: .01, y: .08 }, { x: .12, y: .08 }, { x: .12, y: .42 }, { x: .01, y: .42 }],
+    };
+    mocks.detectRoomSurfaces.mockResolvedValue([...primarySurfaces, falseWindow]);
+    mocks.detectArchitecturalOpenings.mockResolvedValue([]);
+    mocks.mergeArchitecturalOpeningAudit.mockReturnValue(primarySurfaces);
+
+    const response = await POST(photoRequest());
+    const result = await response.json() as { surfaces?: unknown[]; auditedOpenings?: number };
+
+    expect(response.ok).toBe(true);
+    expect(result.surfaces).toEqual(primarySurfaces);
+    expect(result.auditedOpenings).toBe(0);
+    expect(mocks.detectArchitecturalOpenings).toHaveBeenCalledTimes(2);
+    expect(mocks.mergeArchitecturalOpeningAudit).toHaveBeenCalledWith([...primarySurfaces, falseWindow], []);
   });
 
   it('retries the primary geometry once after a transient abort', async () => {

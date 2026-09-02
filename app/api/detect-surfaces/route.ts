@@ -51,8 +51,22 @@ export async function POST(request: Request) {
       auditor ? detectArchitecturalOpenings(auditor, image) : Promise.resolve([]),
     ]);
     if (primaryResult.status === 'rejected') throw primaryResult.reason;
-    const auditedOpenings = auditResult.status === 'fulfilled' ? auditResult.value : [];
-    const surfaces = auditedOpenings.length
+    let auditedOpenings = auditResult.status === 'fulfilled' ? auditResult.value : [];
+    const seedOpenings = primaryResult.value.filter((surface) => surface.kind === 'door' || surface.kind === 'window');
+    if (auditor && seedOpenings.length) {
+      try {
+        const refinedOpenings = await detectArchitecturalOpenings(auditor, image, seedOpenings);
+        auditedOpenings = [...auditedOpenings, ...refinedOpenings];
+      } catch {
+        // The first independent audit still controls whether primary
+        // rectangles are trusted. A failed refinement never turns a cabinet
+        // or an inner door leaf into protected architecture.
+      }
+    }
+    // When an independent auditor is configured it is authoritative even
+    // when it returns no opening: this intentionally drops an unconfirmed
+    // cabinet/window rectangle instead of preserving a false positive.
+    const surfaces = auditor
       ? mergeArchitecturalOpeningAudit(primaryResult.value, auditedOpenings)
       : primaryResult.value;
     return json({

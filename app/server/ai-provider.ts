@@ -1317,6 +1317,10 @@ function floorQuality(surface: DetectedRoomSurface, peers: DetectedRoomSurface[]
 }
 
 function normalizeOpeningKind(surface: DetectedRoomSurface, floor: DetectedRoomSurface | undefined) {
+  // An independent opening audit has inspected the frame, jambs and
+  // threshold at original detail. Do not override its door/window decision
+  // from a floor boundary that may be hidden by furniture.
+  if (surface.audited) return surface;
   const bounds = surfaceBounds(surface);
   const centerX = (bounds.left + bounds.right) / 2;
   const floorY = floorBoundaryAtX(floor, centerX);
@@ -1334,6 +1338,7 @@ function openingQuality(surface: DetectedRoomSurface, floor: DetectedRoomSurface
   // masonry arch needs extra vertices. Audited contours are more trustworthy
   // than a primary rectangle around only the inner door leaf.
   let score = surface.confidence + (surface.audited ? 1.5 : surface.points.length === 4 ? 1 : 0);
+  if (surface.audited && surface.points.length > 4) score += .35;
   if (floorY !== null) {
     const isAboveFloor = bounds.bottom <= floorY - .045;
     if (surface.kind === 'window') score += isAboveFloor ? 1 : -1.5;
@@ -1526,7 +1531,11 @@ export function mergeArchitecturalOpeningAudit(
   return normalizeRoomSurfaces([...structural, ...audited]);
 }
 
-export async function detectArchitecturalOpenings(auditor: VisionAuditor, image: File) {
+export async function detectArchitecturalOpenings(
+  auditor: VisionAuditor,
+  image: File,
+  seedCandidates: DetectedRoomSurface[] = [],
+) {
   const imageUrl = await fileToDataUri(image);
   const prompt = [
     'You are an independent architectural-opening auditor. Inspect the complete uncropped interior photograph before answering.',
@@ -1540,9 +1549,12 @@ export async function detectArchitecturalOpenings(auditor: VisionAuditor, image:
     'A bright vertical rectangle beside or inside kitchen cabinetry is not a window without visible architectural jambs, a real sill or threshold and glazing/outdoor depth. Glass-front cabinet doors remain furniture and must be rejected.',
     'For windows, return a candidate only when architecturalFrame, wallRevealSillOrThreshold and showsOpeningInteriorOrGlazing are all true and furniturePanelMirrorOrAppliance is false. For doors, architecturalFrame plus wallRevealSillOrThreshold plus a real leaf/handle or passable doorway are sufficient; do not reject a closed solid door merely because no interior is visible. If the frame or threshold is uncertain, omit it.',
     'Inspect left wall, back wall, right wall, ceiling and every image edge separately. Low contrast, overexposure, curtains and perspective foreshortening are not reasons to omit a real frame.',
+    seedCandidates.length
+      ? `Targeted recovery: another pass proposed these tentative inner rectangles: ${JSON.stringify(seedCandidates.slice(0, 8).map((candidate) => ({ type: candidate.kind, points: candidate.points })))}. Each seed may be a door leaf, only the glass, furniture, or a false detection; it is not an accepted contour. Inspect a generous area around every seed, reject furniture, and when real architecture exists replace the seed with the complete OUTER opening. Do not return the seed unchanged when a larger arch, reveal, frame, jamb or threshold surrounds it.`
+      : '',
     'confidence measures the accuracy of the complete outer-opening contour. evidence is one short factual Italian phrase describing the visible frame, arch, glass, sill or threshold.',
     'Return only the structured result. You are an auditor: never invent, edit or repair pixels.',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
   const response = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: { Authorization: `Bearer ${auditor.apiKey}`, 'Content-Type': 'application/json' },
@@ -1555,12 +1567,12 @@ export async function detectArchitecturalOpenings(auditor: VisionAuditor, image:
           { type: 'input_text', text: prompt },
         ],
       }],
-      max_output_tokens: 2400,
-      reasoning: { effort: 'medium' },
+      max_output_tokens: seedCandidates.length ? 1800 : 2400,
+      reasoning: { effort: seedCandidates.length ? 'low' : 'medium' },
       text: { format: { type: 'json_schema', name: 'architectural_opening_audit', schema: architecturalOpeningAuditSchema, strict: true } },
       store: false,
     }),
-    signal: AbortSignal.timeout(65000),
+    signal: AbortSignal.timeout(seedCandidates.length ? 45000 : 65000),
   });
   const payload = await response.json() as ResponsesPayload;
   if (!response.ok) throw new Error(payload.error?.message ?? 'Controllo indipendente delle aperture non disponibile.');
@@ -1590,7 +1602,7 @@ export async function detectArchitecturalOpenings(auditor: VisionAuditor, image:
     confidence: finiteUnit(opening.confidence),
     audited: true,
   })).filter((surface) => surface.points.length >= 4 && surface.points.length <= 16
-    && surface.confidence >= .82 && isSimpleRoomPolygon(surface.points));
+    && surface.confidence >= .72 && isSimpleRoomPolygon(surface.points));
 }
 
 export async function auditRoomEmptyingNeed(auditor: VisionAuditor, image: File): Promise<RoomEmptyingAudit> {
