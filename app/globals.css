@@ -466,6 +466,7 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .simple-mode .stage { grid-template-rows:minmax(420px,1fr) 74px; }
 .simple-mode.step-1 .workspace,.simple-mode.step-4 .workspace { grid-template-columns:minmax(0,1fr); }
 .simple-mode.step-1 .surface-panel,.simple-mode.step-1 .properties-panel,.simple-mode.step-4 .surface-panel,.simple-mode.step-4 .properties-panel { display:none; }
+.simple-mode.step-1 .surface-overlay { display:none; }
 .simple-mode.step-2 .workspace { grid-template-columns:260px minmax(0,1fr); }
 .simple-mode.step-2 .properties-panel { display:none; }
 .simple-mode.step-2 .detect-button,.simple-mode.step-2 .panel-note { display:none; }
@@ -480,10 +481,10 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
    dentro metri di spazio vuoto. L'anteprima mantiene la propria altezza e
    resta visibile mentre si scorre il catalogo laterale. */
 @media (min-width:901px) {
-  .simple-mode.step-3 .workspace { align-items:start; grid-template-columns:minmax(0,1fr) minmax(360px,390px); }
-  .simple-mode.step-3 .stage { position:sticky; top:12px; width:100%; min-height:calc(100dvh - 146px); max-height:calc(100dvh - 24px); align-self:start; grid-template-rows:minmax(0,1fr) 74px; }
+  .simple-mode.step-3 .workspace { height:calc(100dvh - 135px); min-height:0; align-items:start; grid-template-columns:minmax(0,1fr) minmax(360px,390px); overflow:hidden; }
+  .simple-mode.step-3 .stage { position:static; top:auto; width:100%; height:100%; min-height:0; max-height:none; align-self:start; grid-template-rows:minmax(0,1fr) 74px; }
   .simple-mode.step-3 .canvas-wrap { min-height:0; place-items:start center; padding:12px; }
-  .simple-mode.step-3 .properties-panel { width:100%; align-self:start; padding:16px 18px 28px; }
+  .simple-mode.step-3 .properties-panel { width:100%; height:100%; max-height:100%; align-self:start; padding:16px 18px 28px; overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; }
 }
 
 @media (max-width:760px) {
@@ -551,7 +552,7 @@ html,body { height:100%; overflow:hidden; overscroll-behavior:none; }
   button,a,label,input,select,textarea { touch-action:manipulation; }
   .topbar { position:sticky; z-index:30; top:0; min-height:68px; padding-right:max(18px,env(safe-area-inset-right,0px)); padding-left:max(18px,env(safe-area-inset-left,0px)); }
   .simple-steps { position:sticky; z-index:29; top:68px; min-height:60px; padding:7px 14px; }
-  .simple-mode.step-3 .workspace { min-height:calc(100dvh - 128px); align-items:start; grid-template-columns:minmax(0,1fr) minmax(350px,410px); }
+  .simple-mode.step-3 .workspace { height:calc(100dvh - 128px); min-height:0; align-items:start; grid-template-columns:minmax(0,1fr) minmax(350px,410px); }
   .simple-mode.step-3 .stage { position:sticky; top:128px; width:100%; height:calc(100dvh - 128px); align-self:start; grid-template-rows:minmax(0,1fr) 74px; }
   .simple-mode.step-3 .canvas-wrap { place-items:start center; padding:12px; }
   .simple-mode.step-3 .canvas { width:100%; max-width:none; }
