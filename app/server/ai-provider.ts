@@ -1536,9 +1536,9 @@ export async function detectArchitecturalOpenings(auditor: VisionAuditor, image:
     'An arched doorway containing a smaller rectangular wooden door is one door opening: trace the OUTER wall opening, including the full brick or stone arch, reveals, jambs and floor threshold. Never trace only the inner door leaf or its rectangular frame.',
     'Use type=door only when the opening reaches a passable floor threshold. Use type=window when a sill or wall remains below it. A full-height glazed wall or French window that reaches the floor is a door.',
     'Do not classify mirrors, pictures, televisions, air conditioners, cabinets, kitchen wall units, cupboard doors, furniture panels, niches, shadows, reflections or bright wall patches as openings.',
-    'For every candidate, explicitly decide whether its outer frame is integrated into the architectural wall, whether a wall reveal plus sill or floor threshold is visible, whether the interior shows glazing/outdoors/a passable doorway, and whether it could instead be a furniture panel, mirror or appliance. For a closed solid door, showsOpeningInteriorOrGlazing is true only when a real operable door leaf and handle are visibly enclosed by architectural jambs and a threshold.',
+    'For every candidate, explicitly decide whether its outer frame is integrated into the architectural wall, whether a wall reveal plus sill or floor threshold is visible, whether the interior shows glazing/outdoors/a passable doorway, and whether it could instead be a furniture panel, mirror or appliance. A closed solid door is still a real opening: return it when an operable door leaf and handle are visibly enclosed by architectural jambs and a threshold, even though showsOpeningInteriorOrGlazing is false.',
     'A bright vertical rectangle beside or inside kitchen cabinetry is not a window without visible architectural jambs, a real sill or threshold and glazing/outdoor depth. Glass-front cabinet doors remain furniture and must be rejected.',
-    'Return a candidate only when architecturalFrame, wallRevealSillOrThreshold and showsOpeningInteriorOrGlazing are all true, and furniturePanelMirrorOrAppliance is false. If any of those tests is uncertain, omit it; the editor lets the user add a missing opening manually.',
+    'For windows, return a candidate only when architecturalFrame, wallRevealSillOrThreshold and showsOpeningInteriorOrGlazing are all true and furniturePanelMirrorOrAppliance is false. For doors, architecturalFrame plus wallRevealSillOrThreshold plus a real leaf/handle or passable doorway are sufficient; do not reject a closed solid door merely because no interior is visible. If the frame or threshold is uncertain, omit it.',
     'Inspect left wall, back wall, right wall, ceiling and every image edge separately. Low contrast, overexposure, curtains and perspective foreshortening are not reasons to omit a real frame.',
     'confidence measures the accuracy of the complete outer-opening contour. evidence is one short factual Italian phrase describing the visible frame, arch, glass, sill or threshold.',
     'Return only the structured result. You are an auditor: never invent, edit or repair pixels.',
@@ -1578,7 +1578,7 @@ export async function detectArchitecturalOpenings(auditor: VisionAuditor, image:
   return (parsed.openings ?? []).slice(0, 16).filter((opening) => (
     opening.architecturalFrame === true
     && opening.wallRevealSillOrThreshold === true
-    && opening.showsOpeningInteriorOrGlazing === true
+    && (opening.type === 'door' || opening.showsOpeningInteriorOrGlazing === true)
     && opening.furniturePanelMirrorOrAppliance === false
   )).map((opening, index) => ({
     name: opening.type === 'door' ? `Porta verificata ${index + 1}` : `Finestra verificata ${index + 1}`,
@@ -1721,7 +1721,7 @@ export async function detectRoomSurfaces(
     'Verify that each side wall covers its full receding plane between the image edge and the far-wall corner. A thin edge band or a polygon that merely surrounds windows is not a wall.',
     'Audit topology numerically before returning: adjoining floor and wall polygons must repeat identical coordinates for their shared junction vertices, as must adjoining side and far walls.',
     'Audit perspective numerically: extend the left and right wall-floor edges and compare their horizontal vanishing point with reliable architectural depth edges. If the angular disagreement exceeds 0.3 degrees, refit in the floor plane or lower confidence instead of returning two independently fitted image lines.',
-    'For each door or window return exactly four tight outer-frame corners in clockwise order. A door must terminate at its real threshold and must not include adjacent wall, corridor or furniture. A window must terminate at its sill.',
+    'For each straight rectangular door or window return exactly four tight outer-frame corners in clockwise order. For a curved or arched opening use 5 to 16 clockwise points along the complete outer masonry/frame contour. A door must terminate at its real threshold and must not include adjacent wall, corridor or furniture.',
     'Check the left and right image edges and every visible room corner at high zoom. Coordinates must be normalized to the complete source image, not a crop.',
     'Return the entire surface list and no comments.',
   ].join('\n');
@@ -1745,9 +1745,10 @@ export async function detectRoomSurfaces(
     'Classify each opening from visual evidence before drawing its polygon. An opening showing glass, outdoor foliage, daylight or window panes is a window when any sill or wall remains below it, even on a strongly foreshortened side wall. It is not a door merely because the perspective makes it tall.',
     'Never use the complete side-wall outline as a door or window. The four opening corners must follow its own frame; compare its lower edge with the local wall-floor junction. If the lower edge is visibly above that junction, return window. Only a real passable threshold touching the floor is a door.',
     'After counting, verify that every distinct glazed rectangle still has one result. In a room with a large side window plus smaller frontal windows, preserve all of them separately even when their apparent sizes differ greatly.',
-    'Repeated windows receding in perspective remain separate physical openings even when only the nearest frame is large. Count the distant frames one by one. For an arched window, trace the tight four-corner outer bounding quadrilateral around the complete architectural frame, including the arch, without merging it with the wall.',
+    'Repeated windows receding in perspective remain separate physical openings even when only the nearest frame is large. Count the distant frames one by one. For an arched window or doorway, trace the complete outer architectural curve and both jambs with 5 to 16 points, without merging it with the wall.',
+    'When a smaller rectangular wooden door sits inside a larger brick or stone arch, the opening polygon is the OUTER arch, reveals, jambs and threshold—not the inner door leaf or its frame.',
     'Depth audit: inspect all structural vertical edges, columns, projections, wall returns and alcoves before returning the wall list. A front wall and a recessed or projecting right-hand face are separate wall planes even when furniture hides their floor junction; infer the junction behind the furniture.',
-    'Return one separate four-corner polygon for every complete or partially cropped architectural frame. Keep several similar windows as several windows; never merge distant openings.',
+    'Return one separate 4-to-16-point polygon for every complete or partially cropped architectural frame. Keep several similar windows as several windows; never merge distant openings.',
     'After the opening count, return the complete floor and wall geometry as well so each opening can be attached to its real wall. Return the full surface list and no comments.',
   ].join('\n\n');
   const requests = [

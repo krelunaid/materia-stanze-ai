@@ -110,6 +110,26 @@ describe('getAiProvider', () => {
     expect(result).toEqual([expect.objectContaining({ kind: 'door', points: arch })]);
   });
 
+  it('keeps a closed solid architectural door without requiring visible interior', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({
+        openings: [{
+          type: 'door', confidence: .94, evidence: 'Anta con maniglia dentro stipiti e soglia',
+          architecturalFrame: true,
+          wallRevealSillOrThreshold: true,
+          showsOpeningInteriorOrGlazing: false,
+          furniturePanelMirrorOrAppliance: false,
+          points: [{ x: .7, y: .2 }, { x: .9, y: .2 }, { x: .9, y: .72 }, { x: .7, y: .72 }],
+        }],
+      }) }] }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await expect(detectArchitecturalOpenings(
+      { id: 'openai', label: 'OpenAI', apiKey: 'openai-test', model: 'gpt-5.6-terra' },
+      new File([new Uint8Array([1, 2, 3])], 'closed-door.jpg', { type: 'image/jpeg' }),
+    )).resolves.toEqual([expect.objectContaining({ kind: 'door', confidence: .94 })]);
+  });
+
   it('unions an auditor-only opening with the primary room geometry', () => {
     const merged = mergeArchitecturalOpeningAudit([
       { name: 'Muro', kind: 'wall', confidence: .9, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .7 }, { x: 0, y: .7 }] },
@@ -536,6 +556,7 @@ describe('getAiProvider', () => {
     expect(auditPayload.input[0].content[1].text).toContain('sunlit patch, reflection, shadow');
     expect(auditPayload.input[0].content[1].text).toContain('shared junction vertices');
     expect(auditPayload.input[0].content[1].text).toContain('full receding plane');
+    expect(auditPayload.input[0].content[1].text).toContain('curved or arched opening');
   });
 
   it('merges false wall strips and drops a ceiling sliver from a furnished frontal room', () => {
