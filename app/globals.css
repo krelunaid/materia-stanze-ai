@@ -161,8 +161,9 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .surface-overlay .surface-vertex-hit,.surface-overlay .surface-edge-hit,.surface-overlay .surface-edge-grip-hit,.surface-overlay.is-drawing,.surface-overlay.is-correcting { touch-action:none; -webkit-touch-callout:none; user-select:none; }
 .surface-overlay.is-correcting { overscroll-behavior:contain; }
 .surface-opening-verified,.surface-opening-inferred { fill:none; pointer-events:none; stroke:#8c6da8; stroke-width:3; }
-.surface-opening-inferred { stroke-dasharray:10 7; opacity:.68; }
+.surface-opening-inferred { stroke:#f0a54a!important; stroke-dasharray:18 12; opacity:.9; }
 .is-selected-surface .surface-opening-verified,.is-selected-surface .surface-opening-inferred { stroke:#d7f05c; stroke-width:6; opacity:1; }
+.is-selected-surface .surface-opening-inferred { stroke:#f0a54a!important; stroke-dasharray:18 12; }
 .simple-mode.step-3 .surface-overlay>g:not(.is-selected-surface)>polygon { opacity:0; }
 .simple-mode.step-3 .surface-overlay>g:not(.is-selected-surface)>.surface-name { display:none; }
 .simple-mode.step-3 .surface-overlay>.is-selected-surface>polygon { fill:rgba(215,240,92,.09)!important; opacity:.9; }

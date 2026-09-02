@@ -242,6 +242,15 @@ describe('RoomStudio', () => {
     expect(inferredArch.querySelector('.surface-opening-inferred')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '⌂ Svuota la stanza' })).toBeDisabled();
 
+    fireEvent.click(screen.getByRole('button', { name: /^ArcoTocca per selezionare/ }));
+    fireEvent.click(screen.getByRole('button', { name: '✓ Conferma soglia stimata' }));
+
+    expect(screen.queryByText('Apertura non sicura')).not.toBeInTheDocument();
+    expect(screen.getByText('Geometria stanza non sicura')).toBeInTheDocument();
+    expect(document.querySelector('.surface-kind-door[data-threshold="verified"]')).toBeInTheDocument();
+    expect(document.querySelector('.surface-opening-inferred')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '⌂ Svuota la stanza' })).toBeDisabled();
+
     fireEvent.click(screen.getByRole('button', { name: '＋ Arco' }));
     const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
     vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
