@@ -4,6 +4,7 @@ import {
   getAiProvider,
   getVisionAuditor,
   mergeArchitecturalOpeningAudit,
+  roomShellTopologyStatus,
 } from '../../server/ai-provider';
 import { guardAiRequest, handleAiOptions } from '../../server/ai-api-guard';
 
@@ -76,15 +77,19 @@ export async function POST(request: Request) {
     const surfaces = auditor
       ? mergeArchitecturalOpeningAudit(primaryResult.value, auditedOpenings)
       : primaryResult.value;
+    const acceptedOpenings = surfaces.filter((surface) => surface.kind === 'door' || surface.kind === 'window').length;
+    const shellGeometryStatus = roomShellTopologyStatus(surfaces);
     return json({
       surfaces,
       provider: provider.id,
       auditor: auditor?.id ?? null,
       auditorModel: auditor?.model ?? null,
       auditedOpenings: auditedOpenings.length,
+      acceptedOpenings,
+      shellGeometryStatus,
       openingAuditAttempts,
       openingAuditStatus: auditor
-        ? auditedOpenings.length ? 'verified' : seedOpenings.length ? 'candidate-unverified' : 'none-found'
+        ? acceptedOpenings ? 'verified' : auditedOpenings.length ? 'geometry-invalid' : seedOpenings.length ? 'candidate-unverified' : 'none-found'
         : 'unavailable',
     }, headers);
   } catch (caught) {

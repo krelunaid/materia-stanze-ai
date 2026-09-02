@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { acceptsFurnitureRender, acceptsRoomCleanup, auditRoomEmptyingNeed, chooseSupportedImageAspectRatio, classifyProductPhoto, detectArchitecturalOpenings, detectMovableObjectRegions, detectObjectRegion, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, getVisionAuditor, knownRetailerProductImage, mergeArchitecturalOpeningAudit, normalizeCleanupRegions, normalizeMaterialProductCategory, normalizeProductPhotoClassification, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, searchMaterials } from './ai-provider';
+import { acceptsFurnitureRender, acceptsRoomCleanup, auditRoomEmptyingNeed, chooseSupportedImageAspectRatio, classifyProductPhoto, detectArchitecturalOpenings, detectMovableObjectRegions, detectObjectRegion, detectRoomSurfaces, editImage, enrichFurnitureProductImages, getAiProvider, getProductCleaner, getRenderProvider, getVisionAuditor, knownRetailerProductImage, mergeArchitecturalOpeningAudit, normalizeCleanupRegions, normalizeMaterialProductCategory, normalizeProductPhotoClassification, normalizeRoomSurfaces, orderQuadClockwise, readProductPage, reconcileRoomSurfaceCandidates, removeFurnitureBackgroundWithBria, roomShellTopologyStatus, searchMaterials } from './ai-provider';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -633,6 +633,28 @@ describe('getAiProvider', () => {
     expect(result.find((surface) => surface.kind === 'door')).toBeTruthy();
   });
 
+  it('rebuilds the real kitchen shell as straight shared plane junctions instead of following cabinets and chairs', () => {
+    const source = [
+      { name: 'left', kind: 'wall', confidence: .9, points: [{ x: 0, y: .12 }, { x: .245, y: .22 }, { x: .245, y: .695 }, { x: .165, y: .72 }, { x: 0, y: .78 }] },
+      { name: 'back', kind: 'wall', confidence: .94, points: [{ x: .245, y: .22 }, { x: .78, y: .18 }, { x: .78, y: .72 }, { x: .575, y: .688 }, { x: .395, y: .688 }, { x: .38, y: .695 }, { x: .245, y: .695 }] },
+      { name: 'right', kind: 'wall', confidence: .9, points: [{ x: .78, y: .18 }, { x: .92, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .82 }, { x: .92, y: .78 }, { x: .78, y: .72 }] },
+      { name: 'floor', kind: 'floor', confidence: .95, points: [{ x: 0, y: .78 }, { x: .165, y: .72 }, { x: .245, y: .695 }, { x: .38, y: .695 }, { x: .395, y: .688 }, { x: .575, y: .688 }, { x: .78, y: .72 }, { x: .92, y: .78 }, { x: 1, y: .82 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+      { name: 'ceiling', kind: 'ceiling', confidence: .9, points: [{ x: 0, y: 0 }, { x: .92, y: 0 }, { x: .78, y: .18 }, { x: .42, y: .22 }, { x: 0, y: .12 }] },
+    ] as Parameters<typeof normalizeRoomSurfaces>[0];
+    expect(roomShellTopologyStatus(source)).toBe('geometry-invalid');
+    const result = normalizeRoomSurfaces(source);
+    const floor = result.find((surface) => surface.kind === 'floor');
+    const ceiling = result.find((surface) => surface.kind === 'ceiling');
+    expect(floor?.points).toEqual([
+      { x: 0, y: .78 }, { x: .245, y: .695 }, { x: .78, y: .72 }, { x: 1, y: .82 }, { x: 1, y: 1 }, { x: 0, y: 1 },
+    ]);
+    expect(ceiling?.points).toEqual(expect.arrayContaining([
+      { x: .245, y: .22 }, { x: .78, y: .18 },
+    ]));
+    expect(result.filter((surface) => surface.kind === 'wall').every((wall) => wall.points.length <= 5)).toBe(true);
+    expect(roomShellTopologyStatus(result)).toBe('verified');
+  });
+
   it('labels a traced masonry arch as Arco while keeping it an architectural doorway', () => {
     const outerArch = [
       { x: .7, y: .72 }, { x: .7, y: .2 }, { x: .74, y: .13 },
@@ -664,6 +686,49 @@ describe('getAiProvider', () => {
     const arch = result.find((surface) => surface.kind === 'door');
     expect(arch?.name).toBe('Arco');
     expect(arch?.points).toEqual(expect.arrayContaining([{ x: .7, y: .72 }, { x: .96, y: .72 }]));
+  });
+
+  it('discards table and chair vertices from a recovered arch and rebuilds both jambs on the perspective floor', () => {
+    const result = normalizeRoomSurfaces([
+      { name: 'Muro', kind: 'wall', confidence: .9, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: 0, y: .72 }] },
+      {
+        name: 'Pavimento', kind: 'floor', confidence: .95,
+        points: [
+          { x: 0, y: .78 }, { x: .165, y: .72 }, { x: .245, y: .695 }, { x: .38, y: .695 },
+          { x: .395, y: .688 }, { x: .575, y: .688 }, { x: .78, y: .72 }, { x: .92, y: .78 },
+          { x: 1, y: .82 }, { x: 1, y: 1 }, { x: 0, y: 1 },
+        ],
+      },
+      {
+        name: 'Arco verificato', kind: 'door', confidence: .94, audited: true,
+        points: [
+          { x: .727, y: .301 }, { x: .738, y: .242 }, { x: .766, y: .194 }, { x: .808, y: .157 },
+          { x: .856, y: .139 }, { x: .906, y: .151 }, { x: .949, y: .187 }, { x: .975, y: .238 },
+          { x: .983, y: .297 }, { x: .947, y: .303 }, { x: .878, y: .777 }, { x: .806, y: .724 },
+          { x: .751, y: .538 },
+        ],
+      },
+    ]);
+    const arch = result.find((surface) => surface.kind === 'door');
+    expect(arch?.name).toBe('Arco');
+    expect(arch?.points).toHaveLength(11);
+    expect(arch?.points.at(-2)).toEqual(expect.objectContaining({ x: .983, y: expect.closeTo(.82, 2) }));
+    expect(arch?.points.at(-1)).toEqual(expect.objectContaining({ x: .727, y: expect.closeTo(.72, 2) }));
+    expect(arch?.points.some((point) => point.x > .79 && point.x < .93 && point.y > .4)).toBe(false);
+  });
+
+  it('rejects an audited arch when its jambs cannot be verified against a floor boundary', () => {
+    const result = normalizeRoomSurfaces([
+      { name: 'Muro', kind: 'wall', confidence: .9, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: 0, y: .72 }] },
+      {
+        name: 'Arco verificato', kind: 'door', confidence: .94, audited: true,
+        points: [
+          { x: .7, y: .3 }, { x: .74, y: .18 }, { x: .84, y: .12 }, { x: .94, y: .18 },
+          { x: .98, y: .3 }, { x: .9, y: .62 }, { x: .82, y: .55 }, { x: .76, y: .44 },
+        ],
+      },
+    ]);
+    expect(result.some((surface) => surface.kind === 'door')).toBe(false);
   });
 
   it('uses the surrounding floor trace when an occluder creates a notch below one arch jamb', () => {

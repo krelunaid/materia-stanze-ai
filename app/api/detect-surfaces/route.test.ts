@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   detectArchitecturalOpenings: vi.fn(),
   detectRoomSurfaces: vi.fn(),
   mergeArchitecturalOpeningAudit: vi.fn(),
+  roomShellTopologyStatus: vi.fn(),
 }));
 
 vi.mock('../../server/ai-api-guard.ts', () => ({
@@ -17,6 +18,7 @@ vi.mock('../../server/ai-provider.ts', () => ({
   getAiProvider: vi.fn(() => ({ id: 'grok', label: 'Grok', apiKey: 'grok-test' })),
   getVisionAuditor: vi.fn(() => ({ id: 'openai', label: 'OpenAI', apiKey: 'openai-test', model: 'gpt-5.6-terra' })),
   mergeArchitecturalOpeningAudit: mocks.mergeArchitecturalOpeningAudit,
+  roomShellTopologyStatus: mocks.roomShellTopologyStatus,
 }));
 
 import { POST } from './route';
@@ -40,6 +42,7 @@ beforeEach(() => {
   mocks.detectRoomSurfaces.mockReset().mockResolvedValue(primarySurfaces);
   mocks.detectArchitecturalOpenings.mockReset().mockResolvedValue(auditedOpenings);
   mocks.mergeArchitecturalOpeningAudit.mockReset().mockReturnValue([...primarySurfaces, ...auditedOpenings]);
+  mocks.roomShellTopologyStatus.mockReset().mockReturnValue('verified');
 });
 
 describe('room geometry with an independent opening audit', () => {
@@ -113,6 +116,32 @@ describe('room geometry with an independent opening audit', () => {
     expect(result.openingAuditStatus).toBe('verified');
     expect(result.openingAuditAttempts).toBe(2);
     expect(mocks.detectArchitecturalOpenings).toHaveBeenNthCalledWith(2, expect.anything(), expect.any(File), [], { recovery: true });
+  });
+
+  it('reports a blocking geometry failure when an audited opening is rejected after normalization', async () => {
+    mocks.mergeArchitecturalOpeningAudit.mockReturnValue(primarySurfaces);
+
+    const response = await POST(photoRequest());
+    const result = await response.json() as {
+      openingAuditStatus?: string;
+      auditedOpenings?: number;
+      acceptedOpenings?: number;
+    };
+
+    expect(response.ok).toBe(true);
+    expect(result.auditedOpenings).toBe(1);
+    expect(result.acceptedOpenings).toBe(0);
+    expect(result.openingAuditStatus).toBe('geometry-invalid');
+  });
+
+  it('reports a blocking shell failure when wall, floor and ceiling do not share their junctions', async () => {
+    mocks.roomShellTopologyStatus.mockReturnValue('geometry-invalid');
+
+    const response = await POST(photoRequest());
+    const result = await response.json() as { shellGeometryStatus?: string };
+
+    expect(response.ok).toBe(true);
+    expect(result.shellGeometryStatus).toBe('geometry-invalid');
   });
 
   it('drops an unconfirmed primary opening when the auditor returns none', async () => {

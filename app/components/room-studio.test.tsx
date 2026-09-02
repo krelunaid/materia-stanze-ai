@@ -155,6 +155,51 @@ describe('RoomStudio', () => {
     expect(screen.getByRole('button', { name: '⌂ Svuota la stanza' })).toBeInTheDocument();
   });
 
+  it('blocks automatic emptying when the independent opening audit rejects the geometry', async () => {
+    mockMaterialPhotoCrop();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/capabilities')) {
+        return new Response(JSON.stringify({ aiReady: true, providerLabel: 'Grok', auditorReady: true }), { status: 200 });
+      }
+      if (url.includes('/api/detect-surfaces')) {
+        return new Response(JSON.stringify({
+          surfaces: [
+            { name: 'Muro', kind: 'wall', confidence: .9, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: 0, y: .72 }] },
+            { name: 'Pavimento', kind: 'floor', confidence: .94, points: [{ x: 0, y: .72 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+          ],
+          openingAuditStatus: 'geometry-invalid',
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<RoomStudio />);
+    fireEvent.change(document.querySelector('#room-file') as HTMLInputElement, {
+      target: { files: [new File(['room'], 'cucina-con-arco.jpg', { type: 'image/jpeg' })] },
+    });
+    const image = screen.getByAltText('Originale importato: cucina-con-arco.jpg') as HTMLImageElement;
+    Object.defineProperties(image, {
+      naturalWidth: { configurable: true, value: 1200 },
+      naturalHeight: { configurable: true, value: 800 },
+    });
+    fireEvent.load(image);
+
+    expect(await screen.findByText('Apertura non sicura')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '⌂ Svuota la stanza' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: '＋ Arco' }));
+    const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+    [
+      [700, 560], [700, 260], [820, 130], [940, 260], [940, 560],
+    ].forEach(([clientX, clientY]) => fireEvent.pointerDown(overlay, { clientX, clientY }));
+    fireEvent.click(screen.getByRole('button', { name: '✓ Conferma arco' }));
+
+    expect(screen.queryByText('Apertura non sicura')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '⌂ Svuota la stanza' })).toBeEnabled();
+  });
+
   it('skips optional cleanup immediately while automatic geometry is still pending', () => {
     render(<RoomStudio />);
     fireEvent.change(document.querySelector('#room-file') as HTMLInputElement, {

@@ -104,7 +104,7 @@ type CleanupTileResult = {
   image: string;
 };
 type AiStatus = 'checking' | 'ready' | 'missing' | 'unreachable';
-type GeometryDetectionStatus = 'ai' | 'fallback' | null;
+type GeometryDetectionStatus = 'ai' | 'fallback' | 'opening-invalid' | 'shell-invalid' | null;
 type ManualOpeningMode = 'rectangle' | 'arch' | null;
 type DetectedSurface = {
   id?: string;
@@ -1207,6 +1207,7 @@ export function RoomStudio() {
     dragStartRef.current = null;
     setDragVertex(null);
     setDragEdge(null);
+    setGeometryDetectionStatus((current) => current === 'shell-invalid' ? 'ai' : current);
     shellRef.current?.classList.remove('is-moving-vertex');
   }, []);
 
@@ -1426,6 +1427,7 @@ export function RoomStudio() {
       source: isOpening ? 'manual' : undefined,
     };
     commitSurfaces([...surfaces, surface]); setSelectedId(id); setRenameDraft(surface.name); setDraft([]); setDrawKind(null); setQuickDraw(false); setManualOpeningMode(null); setLineWallDraw(false); setError(null); setIsCorrectingEdges(isOpening);
+    if (isOpening && geometryDetectionStatus === 'opening-invalid') setGeometryDetectionStatus('ai');
     manualOpeningParentRef.current = null;
     setNotice(`${surface.name} creata${parentId ? ` e collegata a ${surfaces.find((item) => item.id === parentId)?.name ?? 'un muro'}` : ''}. Trascina i punti per correggerla.`);
   }
@@ -2829,14 +2831,23 @@ export function RoomStudio() {
     const inputImage = await createGeometryInput(source);
     const form = new FormData();
     form.append('image', inputImage, fileName.replace(/\.(heic|heif|png)$/i, '.jpg'));
-    const { response, result } = await requestJson<{ surfaces?: DetectedSurface[]; message?: string }>(
+    const { response, result } = await requestJson<{
+      surfaces?: DetectedSurface[];
+      openingAuditStatus?: 'verified' | 'geometry-invalid' | 'candidate-unverified' | 'none-found' | 'unavailable';
+      shellGeometryStatus?: 'verified' | 'geometry-invalid';
+      message?: string;
+    }>(
       endpoint('/api/detect-surfaces'),
       { method: 'POST', body: form },
       150000,
     );
     if (!response.ok || !result.surfaces?.length) throw new Error(result.message ?? 'Grok non ha trovato superfici affidabili.');
     geometryDetectionIdRef.current += 1;
-    return clientValidatedSurfaces(result.surfaces, `grok-${geometryDetectionIdRef.current}`);
+    return {
+      surfaces: clientValidatedSurfaces(result.surfaces, `grok-${geometryDetectionIdRef.current}`),
+      openingAuditStatus: result.openingAuditStatus,
+      shellGeometryStatus: result.shellGeometryStatus,
+    };
   }
 
   async function autoFitSurfaces() {
@@ -2853,10 +2864,15 @@ export function RoomStudio() {
       let detected: Surface[] | null = null;
       let usedGrok = false;
       let grokError: Error | null = null;
+      let openingAuditStatus: string | undefined;
+      let shellGeometryStatus: string | undefined;
 
       if (aiStatus === 'ready' || aiStatus === 'checking') {
         try {
-          detected = await detectSurfacesForPreview(room.previewUrl, room.file.name);
+          const recognition = await detectSurfacesForPreview(room.previewUrl, room.file.name);
+          detected = recognition.surfaces;
+          openingAuditStatus = recognition.openingAuditStatus;
+          shellGeometryStatus = recognition.shellGeometryStatus;
           usedGrok = detected.length > 0;
         } catch (caught) {
           grokError = caught instanceof Error ? caught : new Error('Grok non ha completato il riconoscimento.');
@@ -2877,11 +2893,17 @@ export function RoomStudio() {
       commitSurfaces(nextSurfaces);
       const first = adjusted[0] ?? frozenSurfaces[0] ?? null;
       setSelectedId(first?.id ?? null); setRenameDraft(first?.name ?? '');
-      setGeometryDetectionStatus(usedGrok ? 'ai' : 'fallback');
-      setIsCorrectingEdges(!usedGrok);
+      const openingInvalid = usedGrok && openingAuditStatus === 'geometry-invalid';
+      const shellInvalid = usedGrok && shellGeometryStatus === 'geometry-invalid';
+      setGeometryDetectionStatus(shellInvalid ? 'shell-invalid' : openingInvalid ? 'opening-invalid' : usedGrok ? 'ai' : 'fallback');
+      setIsCorrectingEdges(!usedGrok || openingInvalid || shellInvalid);
       setShowSurfaceGuides(true);
-      setNotice(usedGrok
-        ? `${nextSurfaces.length} superfici proposte da controllare sulla foto originale.${nextSurfaces.some((surface) => surface.kind === 'door') ? '' : ' La porta non è sicura: aggiungila con “＋ Porta” e quattro tocchi.'}`
+      setNotice(shellInvalid
+        ? `${nextSurfaces.length} superfici trovate, ma pareti, soffitto e pavimento non condividono gli stessi confini. Correggi le linee oppure riprova; prodotti, misure e svuotamento restano bloccati.`
+        : openingInvalid
+        ? `${nextSurfaces.length} superfici riconosciute, ma l’apertura è stata rifiutata: gli stipiti non arrivano al pavimento o seguono un mobile. Correggi con “＋ Arco” oppure riprova; lo svuotamento resta bloccato.`
+        : usedGrok
+          ? `${nextSurfaces.length} superfici proposte da controllare sulla foto originale.${nextSurfaces.some((surface) => surface.kind === 'door') ? '' : ' La porta non è sicura: aggiungila con “＋ Porta” e quattro tocchi.'}`
         : `${grokError ? 'Grok non ha completato il riconoscimento. ' : ''}Questi sono contorni provvisori: trascina direttamente una linea intera o i pallini prima di applicare un prodotto.`);
     } catch {
       if (surfaces.length === 0) seedGuidedSurfaces();
@@ -2949,6 +2971,13 @@ export function RoomStudio() {
 
   async function emptyRoom() {
     if (!room?.previewUrl || room.sourceType !== 'photo' || isEmptyingRoom) return;
+    if (geometryDetectionStatus === 'opening-invalid' || geometryDetectionStatus === 'shell-invalid') {
+      setError(geometryDetectionStatus === 'opening-invalid'
+        ? 'L’apertura non ha ancora un contorno sicuro. Rifai il riconoscimento oppure traccia l’arco fino al pavimento prima di svuotare la stanza.'
+        : 'I piani della stanza non condividono ancora confini sicuri. Rifai il riconoscimento oppure correggi le linee prima di svuotare la stanza.');
+      setNotice(null);
+      return;
+    }
     const baselineSurfaces = processedLabel === 'Stanza vuota' && processedPreview && originalSurfacesRef.current.length
       ? originalSurfacesRef.current
       : surfaces;
@@ -3233,6 +3262,11 @@ export function RoomStudio() {
 
   function skipEmptyRoom() {
     if (!room) return;
+    if (geometryDetectionStatus === 'opening-invalid' || geometryDetectionStatus === 'shell-invalid') {
+      setError('Prima correggi o rifai i contorni della stanza. Con una geometria non sicura non posso applicare prodotti in modo affidabile.');
+      setNotice(null);
+      return;
+    }
     // Skipping the optional cleanup must never be blocked by the slower
     // automatic geometry request. Give the product step a safe local base
     // immediately; Grok may refine it when its in-flight request completes.
@@ -3464,6 +3498,12 @@ export function RoomStudio() {
       setNotice('Prima crea o disegna almeno una superficie.');
       return;
     }
+    if (step > 2 && (geometryDetectionStatus === 'opening-invalid' || geometryDetectionStatus === 'shell-invalid')) {
+      setActiveStep(2); setRenderSummaryOpen(false);
+      setError('Pareti o aperture non hanno ancora confini sicuri. Correggi le linee oppure riprova il riconoscimento prima di usare prodotti e render.');
+      setNotice(null);
+      return;
+    }
     if (isClassifyingProduct && step !== 3) {
       setActiveStep(3); setRenderSummaryOpen(false);
       setError('Attendi il riconoscimento della foto prodotto prima di cambiare passaggio.');
@@ -3515,7 +3555,7 @@ export function RoomStudio() {
 
       <nav className="simple-steps" aria-label="Passaggi del progetto">{[
         ['1', 'Foto'], ['2', 'Prepara'], ['3', 'Prodotti'], ['4', 'Render'],
-      ].map(([number, label], index) => <button type="button" key={number} className={activeStep === index + 1 ? 'is-active' : activeStep > index + 1 ? 'is-done' : ''} onClick={() => goToStep(index + 1)} disabled={(index > 0 && !room) || (index > 1 && surfaces.length === 0)}><span>{activeStep > index + 1 ? '✓' : number}</span><strong>{label}</strong></button>)}</nav>
+      ].map(([number, label], index) => <button type="button" key={number} className={activeStep === index + 1 ? 'is-active' : activeStep > index + 1 ? 'is-done' : ''} onClick={() => goToStep(index + 1)} disabled={(index > 0 && !room) || (index > 1 && (surfaces.length === 0 || geometryDetectionStatus === 'opening-invalid' || geometryDetectionStatus === 'shell-invalid'))}><span>{activeStep > index + 1 ? '✓' : number}</span><strong>{label}</strong></button>)}</nav>
 
       <div className="workspace">
         <aside className="surface-panel" aria-label="Superfici della stanza">
@@ -3628,9 +3668,11 @@ export function RoomStudio() {
             {(isImportingRoom || isCreatingFloorplanRoom) && <div className="processing-overlay" role="status"><span className="processing-spinner" /><strong>{isCreatingFloorplanRoom ? 'Creo la stanza dalla planimetria…' : 'Preparo la foto…'}</strong><small>{isCreatingFloorplanRoom ? 'Riconosco pareti, porte e finestre. Può richiedere circa un minuto.' : 'Le immagini grandi vengono ottimizzate per evitare blocchi.'}</small></div>}
           </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span>{activeStep === 4 && <button className="file-error-retry" type="button" onClick={() => void createFinalRender()} disabled={isRendering}>{isRendering ? 'Riprovo…' : 'Riprova render'}</button>}<button className="file-error-close" type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
           <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif,.webp" onChange={onRoomInput} /><input ref={cameraInputRef} id="camera-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" capture="environment" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif,.webp" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onMaterialInput} /><input ref={furnitureInputRef} id="furniture-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onFurnitureInput} />
-          {room?.sourceType === 'photo' && activeStep === 2 && <section className="empty-room-choice" aria-label="Svuota la stanza oppure continua"><div><strong>Vuoi svuotare la stanza?</strong><span>È facoltativo: puoi mantenere la foto originale e andare subito ai prodotti.</span></div><div className="empty-room-actions"><button className="skip-empty-room" type="button" onClick={skipEmptyRoom} disabled={isEmptyingRoom || isCleaningRegion}>Salta · usa foto originale →</button><button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom || isCleaningRegion}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button>{!cleanupRegion && <button type="button" className={isPickingCleanup ? 'is-active' : ''} onClick={() => { setIsPickingCleanup((current) => !current); setError(null); setNotice(isPickingCleanup ? 'Selezione annullata.' : processedPreview ? 'Tocca il centro dell’oggetto rimasto nella foto.' : 'Tocca il centro di un mobile nella foto: lo delimito e lo rimuovo.'); }} disabled={isDetectingCleanup || isCleaningRegion}>{isDetectingCleanup ? 'Riconosco…' : isPickingCleanup ? 'Annulla selezione' : processedPreview ? '◎ Pulisci un residuo' : '◎ Indica un mobile'}</button>}{cleanupRegion && <><button type="button" className="cleanup-confirm" onClick={() => void cleanResidualRegion()} disabled={isCleaningRegion}>{isCleaningRegion ? 'Pulisco…' : 'Pulisci selezione'}</button><button type="button" onClick={() => setCleanupRegion(null)} disabled={isCleaningRegion}>Annulla</button></>}</div></section>}
+          {room?.sourceType === 'photo' && activeStep === 2 && <section className="empty-room-choice" aria-label="Svuota la stanza oppure continua"><div><strong>Vuoi svuotare la stanza?</strong><span>È facoltativo: puoi mantenere la foto originale e andare subito ai prodotti.</span></div><div className="empty-room-actions"><button className="skip-empty-room" type="button" onClick={skipEmptyRoom} disabled={isEmptyingRoom || isCleaningRegion || geometryDetectionStatus === 'opening-invalid' || geometryDetectionStatus === 'shell-invalid'}>Salta · usa foto originale →</button><button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom || isCleaningRegion || geometryDetectionStatus === 'opening-invalid' || geometryDetectionStatus === 'shell-invalid'}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button>{!cleanupRegion && <button type="button" className={isPickingCleanup ? 'is-active' : ''} onClick={() => { setIsPickingCleanup((current) => !current); setError(null); setNotice(isPickingCleanup ? 'Selezione annullata.' : processedPreview ? 'Tocca il centro dell’oggetto rimasto nella foto.' : 'Tocca il centro di un mobile nella foto: lo delimito e lo rimuovo.'); }} disabled={isDetectingCleanup || isCleaningRegion}>{isDetectingCleanup ? 'Riconosco…' : isPickingCleanup ? 'Annulla selezione' : processedPreview ? '◎ Pulisci un residuo' : '◎ Indica un mobile'}</button>}{cleanupRegion && <><button type="button" className="cleanup-confirm" onClick={() => void cleanResidualRegion()} disabled={isCleaningRegion}>{isCleaningRegion ? 'Pulisco…' : 'Pulisci selezione'}</button><button type="button" onClick={() => setCleanupRegion(null)} disabled={isCleaningRegion}>Annulla</button></>}</div></section>}
           {geometryDetectionStatus === 'fallback' && room?.sourceType === 'photo' && (activeStep === 2 || activeStep === 3) && <div className="geometry-fallback-warning" role="status"><div><strong>Contorni provvisori</strong><span>Il riconoscimento IA di questa foto non è riuscito. Non li presento come misure automatiche: correggili trascinando linee o pallini, oppure riprova.</span></div><button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview}>{isAutoFitting ? 'Riconosco…' : '✦ Riprova IA'}</button></div>}
-          <div className={`status-bar ${activeStep === 2 ? 'prepare-status' : ''}`}><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.'}</p>{drawKind && <button className="opening-undo-inline" type="button" onClick={undoDraftPoint} disabled={draft.length === 0}>↶ Ultimo punto</button>}{drawKind && !quickDraw && <button className="opening-confirm-inline" type="button" onClick={() => completeSurface(draft, drawKind)} disabled={draft.length < (manualOpeningMode === 'arch' ? 5 : 3)}>✓ Conferma {activeDrawingLabel.toLowerCase()}</button>}{room && (activeStep === 2 || activeStep === 3) && !drawKind && <button className={`edge-edit-button ${isCorrectingEdges ? 'is-active' : ''}`} type="button" onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine correzione' : activeStep === 3 ? '↔ Sposta linee' : room.sourceType === 'floorplan' ? 'Correggi il perimetro' : 'Correggi i bordi'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && <><button className={`opening-draw-button ${drawKind === 'door' && manualOpeningMode !== 'arch' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'door' && manualOpeningMode !== 'arch' ? cancelDrawing() : startDrawing('door', true, 'rectangle')}>{drawKind === 'door' && manualOpeningMode !== 'arch' ? '✕ Cancella porta' : '＋ Porta'}</button><button className={`opening-draw-button ${drawKind === 'door' && manualOpeningMode === 'arch' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'door' && manualOpeningMode === 'arch' ? cancelDrawing() : startDrawing('door', false, 'arch')}>{drawKind === 'door' && manualOpeningMode === 'arch' ? '✕ Cancella arco' : '＋ Arco'}</button><button className={`opening-draw-button ${drawKind === 'window' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'window' ? cancelDrawing() : startDrawing('window', true, 'rectangle')}>{drawKind === 'window' ? '✕ Cancella finestra' : '＋ Finestra'}</button></>}{activeStep === 2 && !drawKind && selected && (selected.kind === 'door' || selected.kind === 'window') && <button className="opening-delete-inline" type="button" onClick={deleteSelected} disabled={selected.frozen}>⌫ Elimina {selected.name}</button>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && !drawKind && <button className="continue-products-button" type="button" onClick={() => goToStep(3)}>Continua ai prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
+          {geometryDetectionStatus === 'opening-invalid' && room?.sourceType === 'photo' && (activeStep === 2 || activeStep === 3) && <div className="geometry-fallback-warning opening-invalid-warning" role="alert"><div><strong>Apertura non sicura</strong><span>Il contorno seguiva mobili o non arrivava al pavimento: l’ho rifiutato e lo svuotamento è bloccato. Premi “＋ Arco” per tracciare arco, stipiti e soglia, oppure riprova l’IA.</span></div><button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview}>{isAutoFitting ? 'Riconosco…' : '✦ Riprova IA'}</button></div>}
+          {geometryDetectionStatus === 'shell-invalid' && room?.sourceType === 'photo' && (activeStep === 2 || activeStep === 3) && <div className="geometry-fallback-warning opening-invalid-warning" role="alert"><div><strong>Geometria stanza non sicura</strong><span>I confini tra muri, soffitto e pavimento non coincidono oppure seguono gli arredi. Misure, prodotti e svuotamento restano bloccati finché non rifai o correggi i contorni.</span></div><button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview}>{isAutoFitting ? 'Riconosco…' : '✦ Riprova IA'}</button></div>}
+          <div className={`status-bar ${activeStep === 2 ? 'prepare-status' : ''}`}><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.'}</p>{drawKind && <button className="opening-undo-inline" type="button" onClick={undoDraftPoint} disabled={draft.length === 0}>↶ Ultimo punto</button>}{drawKind && !quickDraw && <button className="opening-confirm-inline" type="button" onClick={() => completeSurface(draft, drawKind)} disabled={draft.length < (manualOpeningMode === 'arch' ? 5 : 3)}>✓ Conferma {activeDrawingLabel.toLowerCase()}</button>}{room && (activeStep === 2 || activeStep === 3) && !drawKind && <button className={`edge-edit-button ${isCorrectingEdges ? 'is-active' : ''}`} type="button" onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine correzione' : activeStep === 3 ? '↔ Sposta linee' : room.sourceType === 'floorplan' ? 'Correggi il perimetro' : 'Correggi i bordi'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && <><button className={`opening-draw-button ${drawKind === 'door' && manualOpeningMode !== 'arch' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'door' && manualOpeningMode !== 'arch' ? cancelDrawing() : startDrawing('door', true, 'rectangle')}>{drawKind === 'door' && manualOpeningMode !== 'arch' ? '✕ Cancella porta' : '＋ Porta'}</button><button className={`opening-draw-button ${drawKind === 'door' && manualOpeningMode === 'arch' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'door' && manualOpeningMode === 'arch' ? cancelDrawing() : startDrawing('door', false, 'arch')}>{drawKind === 'door' && manualOpeningMode === 'arch' ? '✕ Cancella arco' : '＋ Arco'}</button><button className={`opening-draw-button ${drawKind === 'window' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'window' ? cancelDrawing() : startDrawing('window', true, 'rectangle')}>{drawKind === 'window' ? '✕ Cancella finestra' : '＋ Finestra'}</button></>}{activeStep === 2 && !drawKind && selected && (selected.kind === 'door' || selected.kind === 'window') && <button className="opening-delete-inline" type="button" onClick={deleteSelected} disabled={selected.frozen}>⌫ Elimina {selected.name}</button>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)} disabled={geometryDetectionStatus === 'opening-invalid' || geometryDetectionStatus === 'shell-invalid'}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && !drawKind && <button className="continue-products-button" type="button" onClick={() => goToStep(3)} disabled={geometryDetectionStatus === 'opening-invalid' || geometryDetectionStatus === 'shell-invalid'}>Continua ai prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)} disabled={geometryDetectionStatus === 'opening-invalid' || geometryDetectionStatus === 'shell-invalid'}>Continua: crea render</button>}</div>
         </section>
 
         <aside className="properties-panel" aria-label="Proprietà">
@@ -3638,7 +3680,7 @@ export function RoomStudio() {
           {room && <div className="asset-card"><span>{room.sourceType === 'floorplan' ? 'PLAN' : 'IMG'}</span><div><strong>{room.file.name}</strong><small>{room.sourceType === 'floorplan' ? 'Planimetria originale' : importedCaption}</small></div><label htmlFor={room.sourceType === 'floorplan' ? 'floorplan-file' : 'room-file'}>Sostituisci</label></div>}
           {selected ? <><div className="property-section"><div className="property-title"><span>Nome superficie</span><span className="editable-badge">Personalizzabile</span></div><div className="rename-control"><input aria-label="Nome superficie" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} /><button type="button" onClick={renameSelected} disabled={!renameDraft.trim() || renameDraft.trim() === selected.name}>Salva</button></div></div><div className="property-section"><div className="property-title"><span>Protezione superficie</span><span className={`editable-badge ${selected.frozen ? 'frozen' : ''}`}>{selected.frozen ? 'Frozen' : 'Modificabile'}</span></div><button className={`freeze-button ${selected.frozen ? 'is-active' : ''}`} type="button" aria-label={selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'} onClick={toggleFreeze}><span>{selected.frozen ? '◆' : '◇'}</span>{selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'}<small>{selected.frozen ? 'Protetta' : 'Attivo subito'}</small></button><button className="freeze-others-button" type="button" onClick={freezeAllExceptSelected}>Blocca tutto tranne {selected.name}</button></div>
             <div className="property-section product-search-section">
-              {activeStep === 3 && <div className="room-measurement-card">
+              {activeStep === 3 && geometryDetectionStatus !== 'opening-invalid' && geometryDetectionStatus !== 'shell-invalid' && <div className="room-measurement-card">
                 <div className="room-measurement-heading"><div><span>{manualRoomWidth ? 'Confermate' : 'Automatiche'}</span><strong>Misure della stanza</strong></div><b>{Math.round(roomMeasurement.confidence * 100)}% affidabile</b></div>
                 <div className="room-measurement-values"><div><span>Larghezza</span><strong>{roomMeasurement.widthMeters.toLocaleString('it-IT')} m</strong></div><div><span>Profondità</span><strong>{roomMeasurement.depthMeters.toLocaleString('it-IT')} m</strong></div><div><span>Altezza</span><strong>{roomMeasurement.heightMeters.toLocaleString('it-IT')} m</strong></div></div>
                 <p>Calcolate da {roomMeasurement.referenceLabel}. I mobili con dimensioni trovate nel prodotto cambiano scala automaticamente mentre li sposti.</p>

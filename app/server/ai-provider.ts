@@ -1060,6 +1060,101 @@ function extendSingleFrontalWallToImageTop(surfaces: DetectedRoomSurface[]) {
   } : surface);
 }
 
+function dedupeShellPoints(points: DetectedRoomSurface['points']) {
+  return points.filter((point, index) => index === 0 || Math.hypot(
+    point.x - points[index - 1].x,
+    point.y - points[index - 1].y,
+  ) >= .004);
+}
+
+function reconstructRoomShellFromWallPlanes(surfaces: DetectedRoomSurface[]) {
+  const floor = surfaces.find((surface) => surface.kind === 'floor');
+  const ceiling = surfaces.find((surface) => surface.kind === 'ceiling');
+  const walls = surfaces.filter((surface) => surface.kind === 'wall')
+    .sort((left, right) => surfaceBounds(left).left - surfaceBounds(right).left);
+  // This deterministic box reconstruction is intentionally limited to the
+  // three-wall + visible-ceiling case. A single frontal wall or a room whose
+  // ceiling is outside the crop does not provide enough shared planes to
+  // replace its original floor trace safely.
+  if (!floor || !ceiling || walls.length !== 3 || surfaceBounds(floor).bottom < .985) return surfaces;
+  const bounds = walls.map(surfaceBounds);
+  const coversRoom = bounds[0].left <= .035
+    && (bounds.at(-1)?.right ?? 0) >= .965
+    && bounds.slice(1).every((box, index) => (
+      Math.abs(box.left - bounds[index].right) <= .04
+    ));
+  if (!coversRoom) return surfaces;
+
+  const reconstructedWalls: DetectedRoomSurface[] = [];
+  const floorJunctions: DetectedRoomSurface['points'] = [];
+  const ceilingJunctions: DetectedRoomSurface['points'] = [];
+  for (const wall of walls) {
+    const box = surfaceBounds(wall);
+    const candidateXs = wall.points.filter((point) => {
+      const top = wallTopBoundaryAtX(wall, point.x);
+      const bottom = wallBoundaryAtX(wall, point.x);
+      return top !== null && bottom !== null && Math.abs(point.y - top) <= .008 && bottom - top >= .12;
+    }).map((point) => point.x)
+      .filter((x, index, all) => index === 0 || all.slice(0, index).every((other) => Math.abs(other - x) >= .004))
+      .sort((left, right) => left - right);
+    const topChain = candidateXs.map((x) => {
+      const top = wallTopBoundaryAtX(wall, x);
+      const bottom = wallBoundaryAtX(wall, x);
+      return top !== null && bottom !== null && bottom - top >= .12 ? { x, y: top } : null;
+    }).filter((point): point is { x: number; y: number } => point !== null);
+    const leftX = box.left;
+    const rightX = box.right;
+    const leftFloor = floorBoundaryAtX(floor, leftX);
+    const rightFloor = floorBoundaryAtX(floor, rightX);
+    if (topChain.length < 2 || leftFloor === null || rightFloor === null) return surfaces;
+    const polygon = dedupeShellPoints([
+      ...topChain,
+      { x: rightX, y: rightFloor },
+      { x: leftX, y: leftFloor },
+    ]);
+    if (!isSimpleRoomPolygon(polygon)) return surfaces;
+    reconstructedWalls.push({ ...wall, points: polygon });
+    floorJunctions.push({ x: leftX, y: leftFloor }, { x: rightX, y: rightFloor });
+    ceilingJunctions.push(...topChain);
+  }
+
+  const uniqueFloorJunctions = floorJunctions.sort((left, right) => left.x - right.x)
+    .filter((point, index, all) => index === 0 || Math.abs(point.x - all[index - 1].x) >= .004);
+  const reconstructedFloorPoints = dedupeShellPoints([
+    ...uniqueFloorJunctions,
+    { x: 1, y: 1 },
+    { x: 0, y: 1 },
+  ]);
+  if (!isSimpleRoomPolygon(reconstructedFloorPoints)) return surfaces;
+
+  let reconstructedCeiling: DetectedRoomSurface | null = null;
+  if (ceiling) {
+    const uniqueCeilingJunctions = ceilingJunctions.sort((left, right) => left.x - right.x)
+      .filter((point, index, all) => index === 0 || Math.abs(point.x - all[index - 1].x) >= .004);
+    const left = uniqueCeilingJunctions[0];
+    const right = uniqueCeilingJunctions.at(-1);
+    const touchesTopCrop = surfaceBounds(ceiling).top <= .015;
+    const ceilingPoints = left && right && touchesTopCrop
+      ? dedupeShellPoints([
+        { x: left.x, y: 0 },
+        { x: right.x, y: 0 },
+        ...[...uniqueCeilingJunctions].reverse(),
+      ])
+      : [];
+    if (ceilingPoints.length >= 3 && isSimpleRoomPolygon(ceilingPoints)) {
+      reconstructedCeiling = { ...ceiling, points: ceilingPoints };
+    } else return surfaces;
+  }
+
+  const wallSet = new Set(walls);
+  return [
+    ...reconstructedWalls,
+    { ...floor, points: reconstructedFloorPoints },
+    ...(reconstructedCeiling ? [reconstructedCeiling] : []),
+    ...surfaces.filter((surface) => !wallSet.has(surface) && surface !== floor && surface !== ceiling),
+  ];
+}
+
 export function normalizeRoomSurfaces(surfaces: DetectedRoomSurface[]) {
   const validKinds = new Set<DetectedRoomSurface['kind']>(['wall', 'floor', 'ceiling', 'door', 'window', 'other']);
   const cleaned = surfaces.slice(0, 16).map((surface) => ({
@@ -1080,13 +1175,19 @@ export function normalizeRoomSurfaces(surfaces: DetectedRoomSurface[]) {
     const ys = surface.points.map((point) => point.y);
     return Math.max(...ys) - Math.min(...ys) >= .08;
   });
-  const merged = extendSingleFrontalWallToImageTop(mergeFrontalWallStrips(withoutFalseCeiling));
+  const merged = reconstructRoomShellFromWallPlanes(
+    extendSingleFrontalWallToImageTop(mergeFrontalWallStrips(withoutFalseCeiling)),
+  );
   const detectedFloor = merged.find((surface) => surface.kind === 'floor');
   const typed = merged.map((surface) => surface.kind === 'door' || surface.kind === 'window'
     ? normalizeOpeningKind(surface, detectedFloor)
     : surface);
-  const thresholdAligned = typed.map((surface) => alignAuditedDoorToFloorThreshold(surface, detectedFloor));
-  const validated = validateRoomGeometry(thresholdAligned).surfaces;
+  const repairedArches = typed.map((surface) => repairAuditedArchedDoorThreshold(surface, detectedFloor));
+  const thresholdAligned = repairedArches.map((surface) => alignAuditedDoorToFloorThreshold(surface, detectedFloor));
+  const physicallyPlausible = thresholdAligned.filter((surface) => (
+    isValidAuditedArchedDoorThreshold(surface, detectedFloor)
+  ));
+  const validated = validateRoomGeometry(physicallyPlausible).surfaces;
   const kindOrder: Record<DetectedRoomSurface['kind'], number> = { wall: 0, floor: 1, ceiling: 2, door: 3, window: 4, other: 5 };
   validated.sort((a, b) => kindOrder[a.kind] - kindOrder[b.kind]);
   const counters: Partial<Record<DetectedRoomSurface['kind'], number>> = {};
@@ -1150,6 +1251,67 @@ function wallBoundaryAtX(wall: DetectedRoomSurface, x: number) {
     if (ratio >= 0 && ratio <= 1) intersections.push(point.y + (next.y - point.y) * ratio);
   });
   return intersections.length ? Math.max(...intersections) : null;
+}
+
+function wallTopBoundaryAtX(wall: DetectedRoomSurface, x: number) {
+  const intersections: number[] = [];
+  wall.points.forEach((point, index) => {
+    const next = wall.points[(index + 1) % wall.points.length];
+    const minimum = Math.min(point.x, next.x) - .0001;
+    const maximum = Math.max(point.x, next.x) + .0001;
+    if (x < minimum || x > maximum) return;
+    if (Math.abs(next.x - point.x) < .0001) {
+      intersections.push(Math.min(point.y, next.y));
+      return;
+    }
+    const ratio = (x - point.x) / (next.x - point.x);
+    if (ratio >= 0 && ratio <= 1) intersections.push(point.y + (next.y - point.y) * ratio);
+  });
+  return intersections.length ? Math.min(...intersections) : null;
+}
+
+export function roomShellTopologyStatus(surfaces: DetectedRoomSurface[]) {
+  const floor = surfaces.find((surface) => surface.kind === 'floor');
+  const walls = surfaces.filter((surface) => surface.kind === 'wall')
+    .sort((left, right) => surfaceBounds(left).left - surfaceBounds(right).left);
+  if (!floor || !walls.length || surfaceBounds(floor).bottom < .985) return 'geometry-invalid' as const;
+
+  const floorJunctions = floor.points.filter((point) => point.y < .985);
+  if (floorJunctions.length < 2 || floorJunctions.some((point) => {
+    const wallYs = walls.map((wall) => wallBoundaryAtX(wall, point.x))
+      .filter((value): value is number => value !== null);
+    return !wallYs.length || Math.min(...wallYs.map((value) => Math.abs(value - point.y))) > .02;
+  })) return 'geometry-invalid' as const;
+
+  if (walls.length > 1) {
+    for (let index = 0; index < walls.length - 1; index += 1) {
+      const left = walls[index];
+      const right = walls[index + 1];
+      const leftBox = surfaceBounds(left);
+      const rightBox = surfaceBounds(right);
+      if (Math.abs(leftBox.right - rightBox.left) > .04) return 'geometry-invalid' as const;
+      const shared = left.points.filter((point) => right.points.some((candidate) => (
+        Math.hypot(point.x - candidate.x, point.y - candidate.y) <= .02
+      )));
+      if (shared.length < 2) return 'geometry-invalid' as const;
+    }
+  }
+
+  const ceiling = surfaces.find((surface) => surface.kind === 'ceiling');
+  if (ceiling) {
+    for (const wall of walls) {
+      const box = surfaceBounds(wall);
+      const differences: number[] = [];
+      for (let sample = 0; sample <= 6; sample += 1) {
+        const x = box.left + (box.right - box.left) * sample / 6;
+        const wallY = wallTopBoundaryAtX(wall, x);
+        const ceilingY = wallBoundaryAtX(ceiling, x);
+        if (wallY !== null && ceilingY !== null) differences.push(Math.abs(wallY - ceilingY));
+      }
+      if (differences.length < 4 || Math.max(...differences) > .025) return 'geometry-invalid' as const;
+    }
+  }
+  return 'verified' as const;
 }
 
 function snapFloorToWallJunctions(surfaces: DetectedRoomSurface[]) {
@@ -1333,6 +1495,116 @@ function normalizeOpeningKind(surface: DetectedRoomSurface, floor: DetectedRoomS
   return surface;
 }
 
+function localFloorThresholdAtX(floor: DetectedRoomSurface, x: number) {
+  const samples = Array.from({ length: 7 }, (_, index) => (
+    Math.min(1, Math.max(0, x + (index - 3) * .012))
+  )).map((sampleX) => floorBoundaryAtX(floor, sampleX))
+    .filter((value): value is number => value !== null);
+  return samples.length ? Math.max(...samples) : null;
+}
+
+function circularPointPath(points: DetectedRoomSurface['points'], start: number, end: number, direction: 1 | -1) {
+  const path: DetectedRoomSurface['points'] = [];
+  let index = start;
+  for (let count = 0; count <= points.length; count += 1) {
+    path.push(points[index]);
+    if (index === end) return path;
+    index = (index + direction + points.length) % points.length;
+  }
+  return [];
+}
+
+function repairAuditedArchedDoorThreshold(
+  surface: DetectedRoomSurface,
+  floor: DetectedRoomSurface | undefined,
+) {
+  if (!surface.audited || surface.kind !== 'door' || surface.points.length <= 4 || !floor) return surface;
+  const bounds = surfaceBounds(surface);
+  const height = bounds.bottom - bounds.top;
+  if (height < .18) return surface;
+
+  // Vision can trace the visible masonry curve accurately and then follow a
+  // chair or table that hides the jambs. Recover the two spring points from
+  // the upper arc only, preserve that verified curve, and continue both
+  // jambs vertically to the independently detected floor boundary.
+  const upperLimit = bounds.top + Math.min(.28, Math.max(.14, height * .42));
+  const upper = surface.points.map((point, index) => ({ point, index }))
+    .filter(({ point }) => point.y <= upperLimit);
+  if (upper.length < 3) return surface;
+  const left = [...upper].sort((a, b) => a.point.x - b.point.x || b.point.y - a.point.y)[0];
+  const right = [...upper].sort((a, b) => b.point.x - a.point.x || b.point.y - a.point.y)[0];
+  if (left.index === right.index || right.point.x - left.point.x < .08 || Math.abs(left.point.y - right.point.y) > .18) return surface;
+  const leftFloor = localFloorThresholdAtX(floor, left.point.x);
+  const rightFloor = localFloorThresholdAtX(floor, right.point.x);
+  if (leftFloor === null || rightFloor === null || Math.abs(leftFloor - rightFloor) > .2) return surface;
+  const centerX = (left.point.x + right.point.x) / 2;
+  const lowestLeft = surface.points.filter((point) => point.x <= centerX)
+    .sort((a, b) => b.y - a.y)[0];
+  const lowestRight = surface.points.filter((point) => point.x >= centerX)
+    .sort((a, b) => b.y - a.y)[0];
+  const alreadyHasTrueJambs = lowestLeft && lowestRight
+    && Math.abs(lowestLeft.x - left.point.x) <= .035
+    && Math.abs(lowestRight.x - right.point.x) <= .035
+    && Math.abs(lowestLeft.y - leftFloor) <= .035
+    && Math.abs(lowestRight.y - rightFloor) <= .035;
+  if (alreadyHasTrueJambs) return surface;
+
+  const apexIndex = surface.points.reduce((best, point, index) => (
+    point.y < surface.points[best].y ? index : best
+  ), 0);
+  const forward = circularPointPath(surface.points, left.index, right.index, 1);
+  const backward = circularPointPath(surface.points, left.index, right.index, -1);
+  let curve = forward.some((_, index) => ((left.index + index) % surface.points.length) === apexIndex)
+    ? forward
+    : backward;
+  // The chosen path must remain the upper architectural curve. If a model
+  // placed a low occluder point on that path, drop it instead of freezing it.
+  curve = curve.filter((point) => point.y <= upperLimit + .025);
+  if (curve.length < 3 || !curve.some((point) => Math.abs(point.y - bounds.top) <= .015)) return surface;
+  if (curve[0].x > curve[curve.length - 1].x) curve = [...curve].reverse();
+
+  if (leftFloor <= curve[0].y + .08 || rightFloor <= curve[curve.length - 1].y + .08) return surface;
+  const repaired = [
+    ...curve,
+    { x: curve[curve.length - 1].x, y: rightFloor },
+    { x: curve[0].x, y: leftFloor },
+  ];
+  return isSimpleRoomPolygon(repaired) ? { ...surface, points: repaired } : surface;
+}
+
+function isValidAuditedArchedDoorThreshold(
+  surface: DetectedRoomSurface,
+  floor: DetectedRoomSurface | undefined,
+) {
+  if (!surface.audited || surface.kind !== 'door' || surface.points.length <= 4) return true;
+  if (!floor || !isSimpleRoomPolygon(surface.points)) return false;
+  const bounds = surfaceBounds(surface);
+  const height = bounds.bottom - bounds.top;
+  if (height < .18) return false;
+  const upperLimit = bounds.top + Math.min(.28, Math.max(.14, height * .42));
+  const upper = surface.points.filter((point) => point.y <= upperLimit);
+  if (upper.length < 3) return false;
+  const leftSpring = [...upper].sort((a, b) => a.x - b.x || b.y - a.y)[0];
+  const rightSpring = [...upper].sort((a, b) => b.x - a.x || b.y - a.y)[0];
+  if (!leftSpring || !rightSpring || rightSpring.x - leftSpring.x < .08) return false;
+  const leftFloor = localFloorThresholdAtX(floor, leftSpring.x);
+  const rightFloor = localFloorThresholdAtX(floor, rightSpring.x);
+  if (leftFloor === null || rightFloor === null || Math.abs(leftFloor - rightFloor) > .2) return false;
+
+  const centerX = (leftSpring.x + rightSpring.x) / 2;
+  const leftBase = surface.points.filter((point) => point.x <= centerX)
+    .sort((a, b) => b.y - a.y)[0];
+  const rightBase = surface.points.filter((point) => point.x >= centerX)
+    .sort((a, b) => b.y - a.y)[0];
+  if (!leftBase || !rightBase) return false;
+  const jambTolerance = .045;
+  const floorTolerance = .04;
+  return Math.abs(leftBase.x - leftSpring.x) <= jambTolerance
+    && Math.abs(rightBase.x - rightSpring.x) <= jambTolerance
+    && Math.abs(leftBase.y - leftFloor) <= floorTolerance
+    && Math.abs(rightBase.y - rightFloor) <= floorTolerance;
+}
+
 function alignAuditedDoorToFloorThreshold(
   surface: DetectedRoomSurface,
   floor: DetectedRoomSurface | undefined,
@@ -1350,15 +1622,8 @@ function alignAuditedDoorToFloorThreshold(
   const left = lowest(leftCandidates);
   const right = lowest(rightCandidates);
   if (!left || !right || left.index === right.index) return surface;
-  const localFloor = (x: number) => {
-    const samples = Array.from({ length: 7 }, (_, index) => (
-      Math.min(1, Math.max(0, x + (index - 3) * .012))
-    )).map((sampleX) => floorBoundaryAtX(floor, sampleX))
-      .filter((value): value is number => value !== null);
-    return samples.length ? Math.max(...samples) : null;
-  };
-  const leftFloor = localFloor(left.point.x);
-  const rightFloor = localFloor(right.point.x);
+  const leftFloor = localFloorThresholdAtX(floor, left.point.x);
+  const rightFloor = localFloorThresholdAtX(floor, right.point.x);
   if (leftFloor === null || rightFloor === null || Math.abs(leftFloor - rightFloor) > .16) return surface;
   const needsLeftExtension = leftFloor - left.point.y >= .035;
   const needsRightExtension = rightFloor - right.point.y >= .035;
