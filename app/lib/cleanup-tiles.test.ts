@@ -6,6 +6,7 @@ import {
   cleanupTileMaskEnvelope,
   cleanupTileRatioMatches,
   planCleanupTiles,
+  planRoomCleanupPass,
   pointInCleanupTile,
   snapCleanupTileBounds,
   snapCleanupTileRect,
@@ -85,6 +86,27 @@ describe('cleanup tile planning', () => {
       const rect = snapCleanupTileRect(plan.bounds, size);
       expect(rect.width * rect.height / (size.width * size.height)).toBeLessThanOrEqual(CLEANUP_MAX_TILE_AREA_RATIO);
     }
+  });
+
+  it('uses one coherent full-room pass for a heavily furnished room', () => {
+    const input = [
+      region('pensili', .03, .08, .31, .43),
+      region('basi', .02, .46, .36, .95),
+      region('forno', .41, .5, .58, .9),
+      region('tavolo e sedie', .72, .53, .99, .98),
+    ];
+    const plans = planRoomCleanupPass(input, 12, { width: 2560, height: 1708 });
+    expect(plans).toHaveLength(1);
+    expect(plans[0].bounds).toEqual({ left: 0, top: 0, right: 1, bottom: 1 });
+    expect(plans[0].regions).toEqual(input);
+    expect(snapCleanupTileRect(plans[0].bounds, { width: 2560, height: 1708 }))
+      .toEqual({ left: 0, top: 0, right: 2560, bottom: 1708, width: 2560, height: 1708 });
+  });
+
+  it('keeps a small cleanup as a detail crop', () => {
+    const plans = planRoomCleanupPass([region('sedia', .4, .5, .58, .86)], 12, { width: 1600, height: 900 });
+    expect(plans).toHaveLength(1);
+    expect(plans[0].bounds).not.toEqual({ left: 0, top: 0, right: 1, bottom: 1 });
   });
 
   it('maps a known tile corner exactly', () => {

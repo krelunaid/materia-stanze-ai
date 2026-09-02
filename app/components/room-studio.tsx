@@ -27,6 +27,7 @@ import {
   CleanupTilePlan,
   CleanupTileSplitEdge,
   planCleanupTiles,
+  planRoomCleanupPass,
   pointInCleanupTile,
   snapCleanupTileRect,
 } from '../lib/cleanup-tiles';
@@ -1980,7 +1981,9 @@ export function RoomStudio() {
     // A furnished kitchen can legitimately contain more than twenty distinct
     // detections spread across the frame. Keep every edit local, group nearby
     // connected targets and use the full safe request budget when needed.
-    const plans = planCleanupTiles(regions, mode === 'local' ? 4 : 12, sourceSize);
+    const plans = mode === 'local'
+      ? planCleanupTiles(regions, 4, sourceSize)
+      : planRoomCleanupPass(regions, 12, sourceSize);
     const results: CleanupTileResult[] = [];
     for (let index = 0; index < plans.length; index += 1) {
       const plan = plans[index];
@@ -1992,8 +1995,10 @@ export function RoomStudio() {
       form.append('image', prepared.inputImage, `room-tile-${index + 1}.jpg`);
       form.append('mask', prepared.mask, `room-tile-mask-${index + 1}.png`);
       form.append('maskReference', prepared.maskReference, `room-tile-guide-${index + 1}.png`);
-      form.append('contextImage', globalContext, 'room-global-context.jpg');
-      form.append('localCrop', 'true');
+      const wholeRoomPass = plan.bounds.left === 0 && plan.bounds.top === 0
+        && plan.bounds.right === 1 && plan.bounds.bottom === 1;
+      if (!wholeRoomPass) form.append('contextImage', globalContext, 'room-global-context.jpg');
+      form.append('localCrop', wholeRoomPass ? 'false' : 'true');
       const hasMultipleTargets = prepared.normalizedRegions.length > 1;
       let route = endpoint('/api/empty-room');
       if (mode === 'local' && !hasMultipleTargets) {

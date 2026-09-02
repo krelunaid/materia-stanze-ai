@@ -42,6 +42,8 @@ export type CleanupTilePlan = {
   normalizedRegions: CleanupTileRegion[];
 };
 
+export const COHERENT_ROOM_PASS_MIN_REGIONS = 4;
+
 const supportedRatios = [
   { width: 1, height: 1 }, { width: 16, height: 9 }, { width: 9, height: 16 },
   { width: 4, height: 3 }, { width: 3, height: 4 }, { width: 3, height: 2 },
@@ -109,6 +111,17 @@ export function cleanupTileBoundsFromRect(rect: CleanupTilePixelRect, size: Clea
 }
 
 export function snapCleanupTileRect(bounds: CleanupTileBounds, size: CleanupTileImageSize): CleanupTilePixelRect {
+  if (bounds.left <= .000001 && bounds.top <= .000001
+    && bounds.right >= .999999 && bounds.bottom >= .999999) {
+    return {
+      left: 0,
+      top: 0,
+      right: size.width,
+      bottom: size.height,
+      width: size.width,
+      height: size.height,
+    };
+  }
   const left = Math.floor(bounds.left * size.width);
   const top = Math.floor(bounds.top * size.height);
   const right = Math.ceil(bounds.right * size.width);
@@ -135,6 +148,31 @@ export function snapCleanupTileRect(bounds: CleanupTileBounds, size: CleanupTile
     width: chosen.width,
     height: chosen.height,
   };
+}
+
+/**
+ * A furnished room needs one coherent reconstruction.  The image service may
+ * see the complete photograph, while the client still composites only the
+ * authorized object polygons and restores protected architecture afterwards.
+ * Small edits keep using tighter crops because they benefit from more local
+ * detail.
+ */
+export function planRoomCleanupPass(
+  regions: CleanupTileRegion[],
+  maximumTiles = 12,
+  imageSize?: CleanupTileImageSize,
+): CleanupTilePlan[] {
+  if (regions.length >= COHERENT_ROOM_PASS_MIN_REGIONS) {
+    return [{
+      bounds: { left: 0, top: 0, right: 1, bottom: 1 },
+      regions,
+      normalizedRegions: regions.map((region) => ({
+        ...region,
+        points: region.points.map((point) => ({ x: clamp(point.x), y: clamp(point.y) })),
+      })),
+    }];
+  }
+  return planCleanupTiles(regions, maximumTiles, imageSize);
 }
 
 export function cleanupTileMaskEnvelope(

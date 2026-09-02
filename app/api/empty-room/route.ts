@@ -34,7 +34,7 @@ export async function POST(request: Request) {
     let targetAreas = '';
     try {
       const parsed = JSON.parse(targetAreasInput) as Array<{ label?: unknown; points?: Array<{ x?: unknown; y?: unknown }> }>;
-      const safe = Array.isArray(parsed) ? parsed.slice(0, 12).map((region) => ({
+      const safe = Array.isArray(parsed) ? parsed.slice(0, 24).map((region) => ({
         label: String(region.label ?? 'oggetto').replace(/[^\p{L}\p{N} .,'’-]/gu, '').slice(0, 80),
         points: Array.isArray(region.points) ? region.points.slice(0, 16).map((point) => ({
           x: Math.min(1, Math.max(0, Number(point.x))), y: Math.min(1, Math.max(0, Number(point.y))),
