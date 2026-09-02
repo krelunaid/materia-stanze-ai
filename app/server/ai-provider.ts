@@ -2130,6 +2130,8 @@ export async function detectRoomSurfaces(
     'Reject any proposed floor boundary that follows a sunlit patch, reflection, shadow, timber-board seam, tile-grout line, rug or color transition. Compare it against the bottom boundary of every visible wall and keep only the physical shared junction.',
     'Verify that each side wall covers its full receding plane between the image edge and the far-wall corner. A thin edge band or a polygon that merely surrounds windows is not a wall.',
     'Audit topology numerically before returning: adjoining floor and wall polygons must repeat identical coordinates for their shared junction vertices, as must adjoining side and far walls.',
+    'Audit every wall-ceiling junction against the actual visible change of plane, not merely against the proposed ceiling polygon. Sample at least seven positions along each junction. At every sample the line must sit on the physical crease where ceiling pixels end and wall pixels begin; if it floats inside the wall or ceiling, refit it before returning.',
+    'For a receding side wall, trace its sloping ceiling crease from the image edge to the far-wall corner. Never replace that crease with the top of a door, curtain, cabinet, picture, light halo, shadow or an arbitrary band of wall paint.',
     'Audit perspective numerically: extend the left and right wall-floor edges and compare their horizontal vanishing point with reliable architectural depth edges. If the angular disagreement exceeds 0.3 degrees, refit in the floor plane or lower confidence instead of returning two independently fitted image lines.',
     'For each straight rectangular door or window return exactly four tight outer-frame corners in clockwise order. For a curved or arched opening use 5 to 16 clockwise points along the complete outer masonry/frame contour. A door must terminate at its real threshold and must not include adjacent wall, corridor or furniture.',
     'If foreground furniture occludes a doorway, infer the two jambs continuously down to the wall-floor junction; the furniture edge is never the threshold.',
@@ -2144,6 +2146,8 @@ export async function detectRoomSurfaces(
     'Trace every plane continuously behind furniture. Use the true wall-wall, wall-floor and wall-ceiling junctions, never furniture edges, shadows, sunlight, rugs, tile seams or color changes.',
     'Include the complete skirting/baseboard inside each wall plane. Its upper trim edge is not the floor junction. Wall bottoms and the floor top must share the LOWER edge where skirting physically meets the walkable floor.',
     'The floor upper boundary and every wall lower boundary must use exactly the same normalized vertices. The ceiling lower boundary and wall upper boundaries must also share exact vertices. Leave no gaps and no overlaps.',
+    'Locate each wall-ceiling crease from image evidence before closing any polygon. Zoom into the complete seam and sample it at least seven times: the proposed edge must remain on the physical change of plane at every sample, not just meet the correct corner endpoints.',
+    'On a side wall in perspective, the ceiling boundary normally slopes from the image edge toward the back-wall corner. Follow that real crease exactly. Do not follow a nearby shadow, color band, curtain rail, door head, cabinet top, picture edge or lighting gradient, and never place the edge through plain wall pixels.',
     'A side wall must extend from the image edge to the far-wall corner; never return only a narrow strip. The floor must reach the lower image border and both side borders wherever it leaves the crop.',
     'Return normalized x/y coordinates on the complete uncropped source image, clockwise, using up to 24 points. Return the full structural surface list and no comments.',
   ].join('\n');
@@ -2163,7 +2167,7 @@ export async function detectRoomSurfaces(
     'After the opening count, return the complete floor and wall geometry as well so each opening can be attached to its real wall. Return the full surface list and no comments.',
   ].join('\n\n');
   const requests = [
-    requestGeometry(structuralPassPrompt, 'medium', 3200, 60000),
+    requestGeometry(structuralPassPrompt, 'high', 3600, 75000),
     requestGeometry(`${prompt}\n\n${auditPrompt}`, 'medium', 3600, 65000),
   ];
   if (options.openingAudit || options.source === 'floorplan-render') {

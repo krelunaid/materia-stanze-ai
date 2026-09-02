@@ -710,12 +710,14 @@ describe('getAiProvider', () => {
     const payload = JSON.parse(String(request?.body));
     expect(payload).toMatchObject({
       model: 'grok-4.6',
-      max_output_tokens: 3200,
-      reasoning: { effort: 'medium' },
+      max_output_tokens: 3600,
+      reasoning: { effort: 'high' },
       text: { format: { type: 'json_schema', name: 'room_surface_geometry', strict: true } },
     });
     expect(payload.input[0].content[0]).toMatchObject({ type: 'input_image', detail: 'high' });
     expect(payload.input[0].content[1].text).toContain('structural-only pass');
+    expect(payload.input[0].content[1].text).toContain('sample it at least seven times');
+    expect(payload.input[0].content[1].text).toContain('never place the edge through plain wall pixels');
     expect(payload.text.format.schema.properties.surfaces.items.properties.points.maxItems).toBe(24);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const auditPayload = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
@@ -725,6 +727,7 @@ describe('getAiProvider', () => {
     expect(auditPayload.input[0].content[1].text).toContain('shared junction vertices');
     expect(auditPayload.input[0].content[1].text).toContain('full receding plane');
     expect(auditPayload.input[0].content[1].text).toContain('curved or arched opening');
+    expect(auditPayload.input[0].content[1].text).toContain('actual visible change of plane');
   });
 
   it('merges false wall strips and drops a ceiling sliver from a furnished frontal room', () => {
