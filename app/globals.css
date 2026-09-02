@@ -124,6 +124,10 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .status-bar p { min-width:0; flex:1; margin:0; color:#64706b; font-size:10px; line-height:1.4; }
 .status-icon { display:grid; place-items:center; width:22px; height:22px; flex:0 0 auto; border-radius:7px; background:var(--accent-soft); color:var(--accent); font-size:10px; font-weight:800; }
 .status-bar button { min-height:30px; padding:0 10px; background:var(--ink); color:white; white-space:nowrap; }
+.prepare-status { flex-wrap:wrap; }
+.prepare-status>.status-icon { flex:0 0 22px; }
+.prepare-status>p { flex:1 0 calc(100% - 40px); }
+.prepare-status>button { flex:1 1 112px; }
 .geometry-fallback-warning { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:12px 18px 0; padding:11px 12px; border:1px solid #e4c26c; border-radius:13px; background:#fff8db; color:#6c5421; box-shadow:0 4px 14px rgba(86,67,24,.07); }
 .geometry-fallback-warning>div { display:grid; gap:3px; min-width:0; }
 .geometry-fallback-warning strong { font-size:10px; }
