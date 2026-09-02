@@ -1,4 +1,4 @@
-import { Point } from '../domain/editor';
+import { Point, SurfaceKind } from '../domain/editor';
 
 export type CleanupTileRegion = {
   label: string;
@@ -41,6 +41,12 @@ export type CleanupTilePlan = {
   regions: CleanupTileRegion[];
   normalizedRegions: CleanupTileRegion[];
 };
+
+export function cleanupProtectionMode(surface: { kind: SurfaceKind; frozen: boolean }) {
+  return !surface.frozen && (surface.kind === 'door' || surface.kind === 'window')
+    ? 'outline' as const
+    : 'fill' as const;
+}
 
 export const COHERENT_ROOM_PASS_MIN_REGIONS = 4;
 

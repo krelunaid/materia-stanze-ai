@@ -19,6 +19,7 @@ import {
   cleanupTileBoundsFromRect,
   cleanupTileEdgeIsInternal,
   cleanupTileMaskEnvelope,
+  cleanupProtectionMode,
   cleanupTileRatioMatches,
   CleanupTileBounds,
   CleanupTileImageSize,
@@ -1802,16 +1803,33 @@ export function RoomStudio() {
     // Apertures and explicit Freeze regions are protected twice: they are
     // excluded from the model's editable mask here and copied back from the
     // original again after compositing.
-    const protectedRegions: CleanupRegion[] = protectedSurfaces.map((surface) => ({
-      label: surface.name,
-      confidence: 1,
-      points: surface.points.map((point) => pointInCleanupTile(point, bounds)),
+    const protectedRegions = protectedSurfaces.map((surface) => ({
+      surface,
+      region: {
+        label: surface.name,
+        confidence: 1,
+        points: surface.points.map((point) => pointInCleanupTile(point, bounds)),
+      } satisfies CleanupRegion,
     }));
     maskContext.fillStyle = '#ffffff';
+    maskContext.strokeStyle = '#ffffff';
     maskReferenceContext.fillStyle = '#000000';
-    for (const region of protectedRegions) {
-      traceRegion(maskContext, region); maskContext.fill();
-      traceRegion(maskReferenceContext, region); maskReferenceContext.fill();
+    maskReferenceContext.strokeStyle = '#000000';
+    const openingOutline = Math.max(4, Math.min(width, height) * .012);
+    maskContext.lineWidth = openingOutline;
+    maskReferenceContext.lineWidth = openingOutline;
+    maskContext.lineJoin = maskReferenceContext.lineJoin = 'round';
+    for (const { surface, region } of protectedRegions) {
+      const protection = cleanupProtectionMode(surface);
+      traceRegion(maskContext, region);
+      traceRegion(maskReferenceContext, region);
+      if (protection === 'fill') {
+        maskContext.fill();
+        maskReferenceContext.fill();
+      } else {
+        maskContext.stroke();
+        maskReferenceContext.stroke();
+      }
     }
     const [inputImage, mask, maskReference] = await Promise.all([
       new Promise<Blob | null>((resolve) => imageCanvas.toBlob(resolve, 'image/jpeg', .94)),
@@ -1955,12 +1973,30 @@ export function RoomStudio() {
       }
     }
 
-    // Doors, windows and user-frozen architecture always win over generated
-    // pixels, even when a furniture mask touches their border.
+    // User Freeze protects the full selected surface.  Automatic door/window
+    // protection restores only the architectural outline: furniture may sit
+    // in front of an opening and must remain removable instead of being copied
+    // back with the whole interior of the opening.
+    const restoreMask = document.createElement('canvas');
+    const restorePatch = document.createElement('canvas');
+    restoreMask.width = restorePatch.width = width;
+    restoreMask.height = restorePatch.height = height;
+    const restoreMaskContext = restoreMask.getContext('2d');
+    const restorePatchContext = restorePatch.getContext('2d');
+    if (!restoreMaskContext || !restorePatchContext) throw new Error('Non posso ripristinare le aperture protette.');
+    restoreMaskContext.fillStyle = '#ffffff';
+    restoreMaskContext.strokeStyle = '#ffffff';
+    restoreMaskContext.lineJoin = 'round';
+    restoreMaskContext.lineWidth = Math.max(5, Math.min(width, height) * .012);
     for (const surface of protectedSurfaces) {
-      context.save(); traceNormalized(context, surface.points); context.clip();
-      context.drawImage(original, 0, 0, width, height); context.restore();
+      traceNormalized(restoreMaskContext, surface.points);
+      if (cleanupProtectionMode(surface) === 'fill') restoreMaskContext.fill();
+      else restoreMaskContext.stroke();
     }
+    restorePatchContext.drawImage(original, 0, 0, width, height);
+    restorePatchContext.globalCompositeOperation = 'destination-in';
+    restorePatchContext.drawImage(restoreMask, 0, 0);
+    context.drawImage(restorePatch, 0, 0);
     const [blob, authorizationReference] = await Promise.all([
       new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png')),
       new Promise<Blob | null>((resolve) => authorizationCanvas.toBlob(resolve, 'image/png')),
@@ -2009,7 +2045,8 @@ export function RoomStudio() {
         form.append('targetAreas', JSON.stringify(prepared.normalizedRegions.map((region) => ({
           label: region.label, points: region.points,
         }))));
-        form.append('protectedAreas', protectedSurfaces.map((surface) => surface.name).join(', '));
+        form.append('protectedAreas', protectedSurfaces.filter((surface) => surface.frozen)
+          .map((surface) => surface.name).join(', '));
       }
       const { response, result } = await requestJson<{ image?: string; message?: string }>(
         route, { method: 'POST', body: form }, 210000,

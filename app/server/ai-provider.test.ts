@@ -616,6 +616,23 @@ describe('getAiProvider', () => {
     }));
   });
 
+  it('extends audited arch jambs through furniture occlusion to the floor threshold', () => {
+    const result = normalizeRoomSurfaces([
+      { name: 'Muro', kind: 'wall', confidence: .9, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: 0, y: .72 }] },
+      { name: 'Pavimento', kind: 'floor', confidence: .95, points: [{ x: 0, y: .72 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+      {
+        name: 'Arco esterno verificato', kind: 'door', confidence: .93, audited: true,
+        points: [
+          { x: .7, y: .5 }, { x: .7, y: .2 }, { x: .74, y: .13 },
+          { x: .82, y: .09 }, { x: .9, y: .12 }, { x: .96, y: .2 }, { x: .96, y: .48 },
+        ],
+      },
+    ]);
+    const arch = result.find((surface) => surface.kind === 'door');
+    expect(arch?.name).toBe('Arco');
+    expect(arch?.points).toEqual(expect.arrayContaining([{ x: .7, y: .72 }, { x: .96, y: .72 }]));
+  });
+
   it('rejects self-intersecting and microscopic detected polygons', () => {
     const result = normalizeRoomSurfaces([
       { name: 'bow tie', kind: 'wall', confidence: .99, points: [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 1, y: 0 }, { x: 0, y: 1 }] },

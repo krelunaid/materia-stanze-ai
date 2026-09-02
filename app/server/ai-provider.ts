@@ -1085,7 +1085,8 @@ export function normalizeRoomSurfaces(surfaces: DetectedRoomSurface[]) {
   const typed = merged.map((surface) => surface.kind === 'door' || surface.kind === 'window'
     ? normalizeOpeningKind(surface, detectedFloor)
     : surface);
-  const validated = validateRoomGeometry(typed).surfaces;
+  const thresholdAligned = typed.map((surface) => alignAuditedDoorToFloorThreshold(surface, detectedFloor));
+  const validated = validateRoomGeometry(thresholdAligned).surfaces;
   const kindOrder: Record<DetectedRoomSurface['kind'], number> = { wall: 0, floor: 1, ceiling: 2, door: 3, window: 4, other: 5 };
   validated.sort((a, b) => kindOrder[a.kind] - kindOrder[b.kind]);
   const counters: Partial<Record<DetectedRoomSurface['kind'], number>> = {};
@@ -1332,6 +1333,39 @@ function normalizeOpeningKind(surface: DetectedRoomSurface, floor: DetectedRoomS
   return surface;
 }
 
+function alignAuditedDoorToFloorThreshold(
+  surface: DetectedRoomSurface,
+  floor: DetectedRoomSurface | undefined,
+) {
+  if (!surface.audited || surface.kind !== 'door' || !floor) return surface;
+  const bounds = surfaceBounds(surface);
+  const centerX = (bounds.left + bounds.right) / 2;
+  const leftCandidates = surface.points.map((point, index) => ({ point, index }))
+    .filter(({ point }) => point.x <= centerX);
+  const rightCandidates = surface.points.map((point, index) => ({ point, index }))
+    .filter(({ point }) => point.x >= centerX);
+  const lowest = (candidates: Array<{ point: { x: number; y: number }; index: number }>) => (
+    [...candidates].sort((left, right) => right.point.y - left.point.y)[0]
+  );
+  const left = lowest(leftCandidates);
+  const right = lowest(rightCandidates);
+  if (!left || !right || left.index === right.index) return surface;
+  const leftFloor = floorBoundaryAtX(floor, left.point.x);
+  const rightFloor = floorBoundaryAtX(floor, right.point.x);
+  if (leftFloor === null || rightFloor === null || Math.abs(leftFloor - rightFloor) > .16) return surface;
+  const needsLeftExtension = leftFloor - left.point.y >= .035;
+  const needsRightExtension = rightFloor - right.point.y >= .035;
+  if (!needsLeftExtension && !needsRightExtension) return surface;
+  return {
+    ...surface,
+    points: surface.points.map((point, index) => {
+      if (index === left.index && needsLeftExtension) return { ...point, y: leftFloor };
+      if (index === right.index && needsRightExtension) return { ...point, y: rightFloor };
+      return point;
+    }),
+  };
+}
+
 function openingQuality(surface: DetectedRoomSurface, floor: DetectedRoomSurface | undefined) {
   const bounds = surfaceBounds(surface);
   const centerX = (bounds.left + bounds.right) / 2;
@@ -1545,6 +1579,7 @@ export async function detectArchitecturalOpenings(
     'Return one item per physical opening. A multi-pane or full-height glazed assembly is one opening bounded by its complete outer architectural frame.',
     'For a straight rectangular opening use exactly four perspective-correct outer corners. For a round, segmental or pointed arch use 5 to 16 clockwise vertices that follow the complete visible masonry arch and both jambs. Coordinates are normalized to the complete source image: x=0 left, x=1 right, y=0 top, y=1 bottom.',
     'An arched doorway containing a smaller rectangular wooden door is one door opening: trace the OUTER wall opening, including the full brick or stone arch, reveals, jambs and floor threshold. Never trace only the inner door leaf or its rectangular frame.',
+    'When a table, chair, cabinet or appliance hides the lower jambs, continue both jamb edges behind that furniture to the local wall-floor junction and close the polygon at the inferred floor threshold. Never use the top of foreground furniture as the bottom edge of a doorway.',
     'Use type=door only when the opening reaches a passable floor threshold. Use type=window when a sill or wall remains below it. A full-height glazed wall or French window that reaches the floor is a door.',
     'Do not classify mirrors, pictures, televisions, air conditioners, cabinets, kitchen wall units, cupboard doors, furniture panels, niches, shadows, reflections or bright wall patches as openings.',
     'For every candidate, explicitly decide whether its outer frame is integrated into the architectural wall, whether a wall reveal plus sill or floor threshold is visible, whether the interior shows glazing/outdoors/a passable doorway, and whether it could instead be a furniture panel, mirror or appliance. A closed solid door is still a real opening: return it when an operable door leaf and handle are visibly enclosed by architectural jambs and a threshold, even though showsOpeningInteriorOrGlazing is false.',
@@ -1736,6 +1771,7 @@ export async function detectRoomSurfaces(
     'Audit topology numerically before returning: adjoining floor and wall polygons must repeat identical coordinates for their shared junction vertices, as must adjoining side and far walls.',
     'Audit perspective numerically: extend the left and right wall-floor edges and compare their horizontal vanishing point with reliable architectural depth edges. If the angular disagreement exceeds 0.3 degrees, refit in the floor plane or lower confidence instead of returning two independently fitted image lines.',
     'For each straight rectangular door or window return exactly four tight outer-frame corners in clockwise order. For a curved or arched opening use 5 to 16 clockwise points along the complete outer masonry/frame contour. A door must terminate at its real threshold and must not include adjacent wall, corridor or furniture.',
+    'If foreground furniture occludes a doorway, infer the two jambs continuously down to the wall-floor junction; the furniture edge is never the threshold.',
     'Check the left and right image edges and every visible room corner at high zoom. Coordinates must be normalized to the complete source image, not a crop.',
     'Return the entire surface list and no comments.',
   ].join('\n');

@@ -4,6 +4,7 @@ import {
   cleanupTileBoundsFromRect,
   cleanupTileEdgeIsInternal,
   cleanupTileMaskEnvelope,
+  cleanupProtectionMode,
   cleanupTileRatioMatches,
   planCleanupTiles,
   planRoomCleanupPass,
@@ -19,6 +20,13 @@ const region = (label: string, left: number, top: number, right: number, bottom:
 });
 
 describe('cleanup tile planning', () => {
+  it('protects only an automatic opening outline while keeping explicit Freeze solid', () => {
+    expect(cleanupProtectionMode({ kind: 'door', frozen: false })).toBe('outline');
+    expect(cleanupProtectionMode({ kind: 'window', frozen: false })).toBe('outline');
+    expect(cleanupProtectionMode({ kind: 'door', frozen: true })).toBe('fill');
+    expect(cleanupProtectionMode({ kind: 'wall', frozen: true })).toBe('fill');
+  });
+
   it('keeps every region while limiting a room cleanup to three local crops', () => {
     const input = [
       region('poltrona', .04, .42, .2, .82),
