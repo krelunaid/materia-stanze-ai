@@ -1445,7 +1445,10 @@ function hasStrongRepeatedOpeningEvidence(
   });
 }
 
-export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[][]) {
+export function reconcileRoomSurfaceCandidates(
+  candidates: DetectedRoomSurface[][],
+  options: { retainOpeningSeeds?: boolean } = {},
+) {
   const normalized = candidates.map(normalizeRoomSurfaces).filter((candidate) => candidate.length > 0);
   if (!normalized.length) return [];
   const ranked = [...normalized].sort((left, right) => geometryScore(right) - geometryScore(left));
@@ -1522,6 +1525,12 @@ export function reconcileRoomSurfaceCandidates(candidates: DetectedRoomSurface[]
     .filter((group) => (
       new Set(group.map((item) => item.pass)).size >= minimumSupport
       || hasStrongRepeatedOpeningEvidence(group, normalized, floor)
+      // The independent aperture auditor needs the strongest single-pass
+      // candidates as search seeds. They are still tentative here: the route
+      // drops them unless the auditor confirms real wall architecture.
+      || (options.retainOpeningSeeds && group.some(({ surface }) => (
+        surface.confidence >= .7 && openingQuality(surface, floor) >= 1.65
+      )))
     ))
     .map((group) => consensusOpening(group.map((item) => item.surface), floor));
 
@@ -1578,6 +1587,7 @@ export async function detectArchitecturalOpenings(
   auditor: VisionAuditor,
   image: File,
   seedCandidates: DetectedRoomSurface[] = [],
+  options: { recovery?: boolean } = {},
 ) {
   const imageUrl = await fileToDataUri(image);
   const prompt = [
@@ -1596,6 +1606,9 @@ export async function detectArchitecturalOpenings(
     seedCandidates.length
       ? `Targeted recovery: another pass proposed these tentative inner rectangles: ${JSON.stringify(seedCandidates.slice(0, 8).map((candidate) => ({ type: candidate.kind, points: candidate.points })))}. Each seed may be a door leaf, only the glass, furniture, or a false detection; it is not an accepted contour. Inspect a generous area around every seed, reject furniture, and when real architecture exists replace the seed with the complete OUTER opening. Do not return the seed unchanged when a larger arch, reveal, frame, jamb or threshold surrounds it.`
       : '',
+    options.recovery
+      ? 'ZERO-OPENING RECOVERY SWEEP: a previous full-image audit returned no accepted openings. Do not repeat that answer before inspecting the image again in five explicit zones: left edge, left half, centre, right half and right edge. In each zone search for masonry arches, brick or stone rings, jambs, wall reveals, passable depth, door leaves and handles, glazing, outdoor light and real sills or floor thresholds. A brick or stone arch surrounding a smaller rectangular wooden leaf is strong architectural evidence and must be returned as one OUTER arched door contour. Still reject cupboards, mirrors, niches, pictures and bright furniture panels; an empty list is allowed only after the complete zone-by-zone sweep finds no architectural frame or passable opening.'
+      : '',
     'confidence measures the accuracy of the complete outer-opening contour. evidence is one short factual Italian phrase describing the visible frame, arch, glass, sill or threshold.',
     'Return only the structured result. You are an auditor: never invent, edit or repair pixels.',
   ].filter(Boolean).join('\n');
@@ -1611,12 +1624,12 @@ export async function detectArchitecturalOpenings(
           { type: 'input_text', text: prompt },
         ],
       }],
-      max_output_tokens: seedCandidates.length ? 1800 : 2400,
-      reasoning: { effort: seedCandidates.length ? 'low' : 'medium' },
+      max_output_tokens: options.recovery ? 3000 : seedCandidates.length ? 1800 : 2400,
+      reasoning: { effort: options.recovery ? 'high' : seedCandidates.length ? 'low' : 'medium' },
       text: { format: { type: 'json_schema', name: 'architectural_opening_audit', schema: architecturalOpeningAuditSchema, strict: true } },
       store: false,
     }),
-    signal: AbortSignal.timeout(seedCandidates.length ? 45000 : 65000),
+    signal: AbortSignal.timeout(options.recovery ? 75000 : seedCandidates.length ? 45000 : 65000),
   });
   const payload = await response.json() as ResponsesPayload;
   if (!response.ok) throw new Error(payload.error?.message ?? 'Controllo indipendente delle aperture non disponibile.');
@@ -1695,7 +1708,7 @@ export async function auditRoomEmptyingNeed(auditor: VisionAuditor, image: File)
 export async function detectRoomSurfaces(
   provider: AiProvider,
   image: File,
-  options: { openingAudit?: boolean; source?: 'photo' | 'floorplan-render' } = {},
+  options: { openingAudit?: boolean; source?: 'photo' | 'floorplan-render'; retainOpeningSeeds?: boolean } = {},
 ) {
   const prompt = [
     'Act as a precise architectural image-plane segmentation engine for an interior-design application.',
@@ -1832,7 +1845,9 @@ export async function detectRoomSurfaces(
       throw failure?.reason instanceof Error ? failure.reason : new Error('Riconoscimento della stanza non disponibile.');
     }
   }
-  const surfaces = reconcileRoomSurfaceCandidates(candidates);
+  const surfaces = reconcileRoomSurfaceCandidates(candidates, {
+    retainOpeningSeeds: options.retainOpeningSeeds,
+  });
   if (!surfaces.length) throw new Error('Non ho riconosciuto superfici affidabili in questa foto.');
   return surfaces;
 }

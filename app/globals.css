@@ -143,6 +143,7 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .simple-freeze-actions p { grid-column:1/-1; margin:0; color:#6d7873; font-size:8px; line-height:1.4; }
 .opening-draw-button { min-width:84px; background:#fff; color:var(--accent); border:1px solid #9bc7bd!important; }
 .opening-draw-button.is-active { background:var(--accent); color:#fff; }
+.opening-confirm-inline { border-color:var(--accent)!important; background:var(--accent)!important; color:#fff!important; }
 .mobile-surface-actions { display:none; }
 .ai-status { display:inline-flex; align-items:center; gap:6px; padding:6px 8px; border-radius:999px; background:#fff2dc; color:#765a2d; font-size:9px; font-weight:800; white-space:nowrap; }
 .ai-status i { width:7px; height:7px; border-radius:50%; background:#d99b43; }
@@ -475,6 +476,16 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .simple-mode.step-4 .surface-overlay { display:none; }
 .simple-mode .canvas-wrap { padding:18px; }
 
+/* Prodotti: la colonna lunga non deve stirare l'editor e centrare la foto
+   dentro metri di spazio vuoto. L'anteprima mantiene la propria altezza e
+   resta visibile mentre si scorre il catalogo laterale. */
+@media (min-width:901px) {
+  .simple-mode.step-3 .workspace { align-items:start; grid-template-columns:minmax(0,1fr) minmax(360px,390px); }
+  .simple-mode.step-3 .stage { position:sticky; top:12px; width:100%; min-height:calc(100dvh - 146px); max-height:calc(100dvh - 24px); align-self:start; grid-template-rows:minmax(0,1fr) 74px; }
+  .simple-mode.step-3 .canvas-wrap { min-height:0; place-items:start center; padding:12px; }
+  .simple-mode.step-3 .properties-panel { width:100%; align-self:start; padding:16px 18px 28px; }
+}
+
 @media (max-width:760px) {
   .simple-steps { position:sticky; z-index:9; top:64px; grid-template-columns:repeat(4,1fr); gap:4px; padding:7px; }
   .simple-steps button { flex-direction:column; justify-content:center; min-width:0; min-height:48px; gap:2px; padding:3px; }
@@ -521,6 +532,7 @@ html,body { height:100%; overflow:hidden; overscroll-behavior:none; }
   .app-shell.has-mobile-surface-actions { padding-bottom:calc(82px + env(safe-area-inset-bottom,0px)); }
   .mobile-surface-actions { position:fixed; z-index:45; right:max(10px,env(safe-area-inset-right,0px)); bottom:max(10px,env(safe-area-inset-bottom,0px)); left:max(10px,env(safe-area-inset-left,0px)); display:grid; grid-template-columns:minmax(70px,1fr) repeat(3,minmax(58px,86px)); align-items:stretch; gap:6px; padding:7px; border:1px solid rgba(111,139,131,.35); border-radius:16px; background:rgba(250,252,251,.96); box-shadow:0 14px 38px rgba(18,38,33,.24); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); }
   .mobile-surface-actions.is-drawing { grid-template-columns:minmax(80px,1fr) repeat(2,minmax(82px,108px)); }
+  .mobile-surface-actions.is-drawing.has-finish { grid-template-columns:minmax(76px,1fr) repeat(3,minmax(70px,96px)); }
   .mobile-surface-action-state { display:flex; min-width:0; flex-direction:column; justify-content:center; padding:0 5px; }
   .mobile-surface-action-state strong,.mobile-surface-action-state span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .mobile-surface-action-state strong { color:var(--ink); font-size:12px; }

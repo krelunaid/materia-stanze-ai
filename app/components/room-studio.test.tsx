@@ -401,6 +401,42 @@ describe('RoomStudio', () => {
     expect(door.querySelector('polygon')).toHaveAttribute('points', expect.stringContaining('0,220'));
     expect(door.querySelector('polygon')).toHaveAttribute('points', expect.stringContaining('220,220'));
     expect(document.querySelectorAll('.surface-kind-window')).toHaveLength(1);
+    expect(document.querySelector('.surface-correction-controls')).toBeInTheDocument();
+    expect(document.querySelectorAll('.surface-correction-controls .surface-vertex-hit')).toHaveLength(4);
+    expect(screen.getByRole('button', { name: '✓ Fine correzione' })).toBeInTheDocument();
+  });
+
+  it('orders four door points and immediately exposes the real editable contour', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: '＋ Porta' }));
+    const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+    fireEvent.pointerDown(overlay, { clientX: 300, clientY: 550 });
+    fireEvent.pointerDown(overlay, { clientX: 100, clientY: 200 });
+    fireEvent.pointerDown(overlay, { clientX: 100, clientY: 550 });
+    fireEvent.pointerDown(overlay, { clientX: 300, clientY: 200 });
+
+    const polygon = document.querySelector('.surface-kind-door.is-selected-surface polygon') as SVGPolygonElement;
+    expect(polygon).toHaveAttribute('points', '100,200 300,200 300,550 100,550');
+    expect(document.querySelectorAll('.surface-correction-controls .surface-edge-hit')).toHaveLength(4);
+  });
+
+  it('draws a masonry arch with several points and confirms it explicitly', () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: '＋ Arco' }));
+    const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
+    vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
+    [
+      [700, 560], [700, 260], [740, 180], [820, 130], [900, 180], [940, 260], [940, 560],
+    ].forEach(([clientX, clientY]) => fireEvent.pointerDown(overlay, { clientX, clientY }));
+
+    expect(screen.getByRole('toolbar', { name: 'Correggi disegno Arco' })).toHaveTextContent('7 punti · minimo 5');
+    fireEvent.click(screen.getByRole('button', { name: '✓ Conferma arco' }));
+    expect(screen.getAllByText('Arco 1').length).toBeGreaterThan(0);
+    expect(document.querySelectorAll('.surface-kind-door.is-selected-surface .surface-name')).toHaveLength(1);
+    expect(document.querySelectorAll('.surface-correction-controls .surface-vertex-hit')).toHaveLength(7);
   });
 
   it('lets iPhone users remove a wrong point or cancel a door drawing', () => {

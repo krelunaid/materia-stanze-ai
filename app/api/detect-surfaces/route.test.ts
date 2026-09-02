@@ -54,17 +54,21 @@ describe('room geometry with an independent opening audit', () => {
     expect(mocks.mergeArchitecturalOpeningAudit).toHaveBeenCalledWith(primarySurfaces, auditedOpenings);
   });
 
-  it('keeps the primary geometry when the independent audit times out', async () => {
-    mocks.detectArchitecturalOpenings.mockRejectedValueOnce(new Error('timeout'));
-    mocks.mergeArchitecturalOpeningAudit.mockReturnValue(primarySurfaces);
+  it('retries the independent audit after a timeout instead of accepting zero openings', async () => {
+    mocks.detectArchitecturalOpenings
+      .mockRejectedValueOnce(new Error('timeout'))
+      .mockResolvedValueOnce(auditedOpenings);
+    mocks.mergeArchitecturalOpeningAudit.mockReturnValue([...primarySurfaces, ...auditedOpenings]);
 
     const response = await POST(photoRequest());
-    const result = await response.json() as { surfaces?: unknown[]; auditedOpenings?: number };
+    const result = await response.json() as { surfaces?: unknown[]; auditedOpenings?: number; openingAuditAttempts?: number };
 
     expect(response.ok).toBe(true);
-    expect(result.surfaces).toEqual(primarySurfaces);
-    expect(result.auditedOpenings).toBe(0);
-    expect(mocks.mergeArchitecturalOpeningAudit).toHaveBeenCalledWith(primarySurfaces, []);
+    expect(result.surfaces).toHaveLength(2);
+    expect(result.auditedOpenings).toBe(1);
+    expect(result.openingAuditAttempts).toBe(2);
+    expect(mocks.detectArchitecturalOpenings).toHaveBeenNthCalledWith(2, expect.anything(), expect.any(File), [], { recovery: true });
+    expect(mocks.mergeArchitecturalOpeningAudit).toHaveBeenCalledWith(primarySurfaces, auditedOpenings);
   });
 
   it('runs a targeted outer-opening recovery around a tentative door leaf', async () => {
@@ -87,8 +91,28 @@ describe('room geometry with an independent opening audit', () => {
 
     expect(response.ok).toBe(true);
     expect(result.auditedOpenings).toBe(1);
-    expect(mocks.detectArchitecturalOpenings).toHaveBeenNthCalledWith(2, expect.anything(), expect.any(File), [innerDoor]);
+    expect(mocks.detectArchitecturalOpenings).toHaveBeenNthCalledWith(2, expect.anything(), expect.any(File), [innerDoor], { recovery: true });
     expect(mocks.mergeArchitecturalOpeningAudit).toHaveBeenCalledWith([...primarySurfaces, innerDoor], [outerArch]);
+  });
+
+  it('runs a forced zone-by-zone recovery when both primary and first audit find no opening', async () => {
+    const recoveredArch = {
+      name: 'Arco verificato', kind: 'door', confidence: .94,
+      points: [{ x: .78, y: .12 }, { x: .9, y: .08 }, { x: .98, y: .2 }, { x: .98, y: .76 }, { x: .7, y: .76 }, { x: .7, y: .2 }],
+    };
+    mocks.detectArchitecturalOpenings
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([recoveredArch]);
+    mocks.mergeArchitecturalOpeningAudit.mockReturnValue([...primarySurfaces, recoveredArch]);
+
+    const response = await POST(photoRequest());
+    const result = await response.json() as { surfaces?: unknown[]; openingAuditStatus?: string; openingAuditAttempts?: number };
+
+    expect(response.ok).toBe(true);
+    expect(result.surfaces).toHaveLength(2);
+    expect(result.openingAuditStatus).toBe('verified');
+    expect(result.openingAuditAttempts).toBe(2);
+    expect(mocks.detectArchitecturalOpenings).toHaveBeenNthCalledWith(2, expect.anything(), expect.any(File), [], { recovery: true });
   });
 
   it('drops an unconfirmed primary opening when the auditor returns none', async () => {

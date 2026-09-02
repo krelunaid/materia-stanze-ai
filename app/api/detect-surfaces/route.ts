@@ -40,10 +40,10 @@ export async function POST(request: Request) {
     const auditor = getVisionAuditor(process.env, provider);
     const detectPrimaryGeometry = async () => {
       try {
-        return await detectRoomSurfaces(provider, image, { openingAudit: true, source: 'photo' });
+        return await detectRoomSurfaces(provider, image, { openingAudit: true, source: 'photo', retainOpeningSeeds: true });
       } catch (caught) {
         if (!isTransientVisionFailure(caught)) throw caught;
-        return detectRoomSurfaces(provider, image, { openingAudit: true, source: 'photo' });
+        return detectRoomSurfaces(provider, image, { openingAudit: true, source: 'photo', retainOpeningSeeds: true });
       }
     };
     const [primaryResult, auditResult] = await Promise.allSettled([
@@ -52,10 +52,17 @@ export async function POST(request: Request) {
     ]);
     if (primaryResult.status === 'rejected') throw primaryResult.reason;
     let auditedOpenings = auditResult.status === 'fulfilled' ? auditResult.value : [];
+    let openingAuditAttempts = auditor ? 1 : 0;
     const seedOpenings = primaryResult.value.filter((surface) => surface.kind === 'door' || surface.kind === 'window');
-    if (auditor && seedOpenings.length) {
+    if (auditor && (seedOpenings.length || auditedOpenings.length === 0)) {
       try {
-        const refinedOpenings = await detectArchitecturalOpenings(auditor, image, seedOpenings);
+        openingAuditAttempts += 1;
+        const refinedOpenings = await detectArchitecturalOpenings(
+          auditor,
+          image,
+          seedOpenings,
+          { recovery: auditedOpenings.length === 0 },
+        );
         auditedOpenings = [...auditedOpenings, ...refinedOpenings];
       } catch {
         // The first independent audit still controls whether primary
@@ -75,6 +82,10 @@ export async function POST(request: Request) {
       auditor: auditor?.id ?? null,
       auditorModel: auditor?.model ?? null,
       auditedOpenings: auditedOpenings.length,
+      openingAuditAttempts,
+      openingAuditStatus: auditor
+        ? auditedOpenings.length ? 'verified' : seedOpenings.length ? 'candidate-unverified' : 'none-found'
+        : 'unavailable',
     }, headers);
   } catch (caught) {
     return json({

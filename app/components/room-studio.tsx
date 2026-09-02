@@ -105,6 +105,7 @@ type CleanupTileResult = {
 };
 type AiStatus = 'checking' | 'ready' | 'missing' | 'unreachable';
 type GeometryDetectionStatus = 'ai' | 'fallback' | null;
+type ManualOpeningMode = 'rectangle' | 'arch' | null;
 type DetectedSurface = {
   id?: string;
   name: string;
@@ -332,6 +333,22 @@ function snapOpeningExtrema(points: Point[]) {
     y: minY <= .04 && Math.abs(point.y - minY) < .012 ? 0
       : maxY >= .96 && Math.abs(point.y - maxY) < .012 ? 1 : point.y,
   }));
+}
+
+function orderManualOpeningQuad(points: Point[]) {
+  if (points.length !== 4) return points;
+  const center = points.reduce((result, point) => ({
+    x: result.x + point.x / points.length,
+    y: result.y + point.y / points.length,
+  }), { x: 0, y: 0 });
+  const ordered = [...points].sort((left, right) => (
+    Math.atan2(left.y - center.y, left.x - center.x)
+    - Math.atan2(right.y - center.y, right.x - center.x)
+  ));
+  const start = ordered.reduce((best, point, index) => (
+    point.x + point.y < ordered[best].x + ordered[best].y ? index : best
+  ), 0);
+  return [...ordered.slice(start), ...ordered.slice(0, start)];
 }
 
 function floorContactYAtX(surface: Surface | undefined, x: number) {
@@ -836,6 +853,7 @@ export function RoomStudio() {
   const [renameDraft, setRenameDraft] = useState('');
   const [drawKind, setDrawKind] = useState<SurfaceKind | null>(null);
   const [quickDraw, setQuickDraw] = useState(false);
+  const [manualOpeningMode, setManualOpeningMode] = useState<ManualOpeningMode>(null);
   const [lineWallDraw, setLineWallDraw] = useState(false);
   const [draft, setDraft] = useState<Point[]>([]);
   const [material, setMaterial] = useState<StudioMaterial | null>(null);
@@ -873,6 +891,7 @@ export function RoomStudio() {
   const [isRendering, setIsRendering] = useState(false);
   const [aiStatus, setAiStatus] = useState<AiStatus>('checking');
   const [aiProviderLabel, setAiProviderLabel] = useState<string | null>(null);
+  const [aiServiceLabels, setAiServiceLabels] = useState<string[]>([]);
   const [processedPreview, setProcessedPreview] = useState<string | null>(null);
   const [processedLabel, setProcessedLabel] = useState('Stanza vuota');
   const [showProcessedPreview, setShowProcessedPreview] = useState(false);
@@ -934,8 +953,20 @@ export function RoomStudio() {
     const timer = window.setTimeout(() => controller.abort(), 10000);
     void fetch(studioEndpoint('/api/capabilities'), { cache: 'no-store', signal: controller.signal })
       .then(async (response) => {
-        const result = await response.json() as { aiReady?: boolean; providerLabel?: string | null };
+        const result = await response.json() as {
+          aiReady?: boolean;
+          providerLabel?: string | null;
+          cleanerReady?: boolean;
+          cleanerLabel?: string | null;
+          auditorReady?: boolean;
+          auditorLabel?: string | null;
+        };
         setAiProviderLabel(result.providerLabel ?? null);
+        setAiServiceLabels([
+          result.aiReady ? result.providerLabel : null,
+          result.auditorReady ? result.auditorLabel : null,
+          result.cleanerReady ? result.cleanerLabel : null,
+        ].filter((label): label is string => Boolean(label)));
         setAiStatus(response.ok && result.aiReady ? 'ready' : 'missing');
       })
       .catch((caught: unknown) => {
@@ -1268,7 +1299,7 @@ export function RoomStudio() {
       originalSurfacesRef.current = initialSurfaces;
       processedSurfacesRef.current = null;
       cleanupHistoryRef.current = [];
-      setSurfaces(initialSurfaces); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(initialSurfaces[0]?.id ?? null); setRenameDraft(initialSurfaces[0]?.name ?? ''); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setError(null);
+      setSurfaces(initialSurfaces); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(initialSurfaces[0]?.id ?? null); setRenameDraft(initialSurfaces[0]?.name ?? ''); setDraft([]); setDrawKind(null); setQuickDraw(false); setManualOpeningMode(null); setLineWallDraw(false); setError(null);
       setIsCorrectingEdges(false);
       setNotice(sourceType === 'floorplan'
         ? 'Planimetria caricata. Creo automaticamente la stanza vuota; potrai correggere il perimetro solo se serve.'
@@ -1316,25 +1347,30 @@ export function RoomStudio() {
     furnitureBlobUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     furnitureBlobUrlsRef.current = [];
     furnitureFilesRef.current.clear();
-    setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]); setPlacedFurniture([]); setPastFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); setCleanupRegion(null); setIsPickingCleanup(false); setNotice(null); setIsCorrectingEdges(false); setGeometryDetectionStatus(null); setShowSurfaceGuides(true); setManualRoomWidth(null); setRoomWidthDraft(''); setIsEditingRoomMeasure(false);
+    setRoom(null); setSurfaces([]); setPastSurfaces([]); setFutureSurfaces([]); setSelectedId(null); setDraft([]); setDrawKind(null); setQuickDraw(false); setManualOpeningMode(null); setLineWallDraw(false); setProcessedPreview(null); setShowProcessedPreview(false); setProcessedLabel('Stanza vuota'); setOnlineMaterials([]); setPlacedFurniture([]); setPastFurniture([]); setPendingFurniture(null); setSelectedFurnitureId(null); setCleanupRegion(null); setIsPickingCleanup(false); setNotice(null); setIsCorrectingEdges(false); setGeometryDetectionStatus(null); setShowSurfaceGuides(true); setManualRoomWidth(null); setRoomWidthDraft(''); setIsEditingRoomMeasure(false);
   }
 
-  function startDrawing(kind: SurfaceKind = 'wall', quick = false) {
+  function startDrawing(kind: SurfaceKind = 'wall', quick = false, openingMode: ManualOpeningMode = null) {
     if (!room) return;
     setShowSurfaceGuides(true);
     const selectedSurface = surfaces.find((surface) => surface.id === selectedId);
     manualOpeningParentRef.current = (kind === 'door' || kind === 'window') && selectedSurface?.kind === 'wall'
       ? selectedSurface.id
       : null;
-    setDrawKind(kind); setQuickDraw(quick); setLineWallDraw(false); setDraft([]); setSelectedId(null); setRenameDraft('');
-    const subject = kind === 'door' ? 'Porta' : kind === 'window' ? 'Finestra' : 'Muro';
-    setNotice(quick ? `${subject}: tocca i quattro angoli con il dito o Apple Pencil. Si chiuderà automaticamente.` : `Disegno avanzato: tocca tutti i vertici e poi “Chiudi superficie”.`);
+    const resolvedOpeningMode = kind === 'door' || kind === 'window'
+      ? openingMode ?? (quick ? 'rectangle' : null)
+      : null;
+    setDrawKind(kind); setQuickDraw(quick); setManualOpeningMode(resolvedOpeningMode); setLineWallDraw(false); setDraft([]); setSelectedId(null); setRenameDraft('');
+    const subject = kind === 'door' && resolvedOpeningMode === 'arch' ? 'Arco' : kind === 'door' ? 'Porta' : kind === 'window' ? 'Finestra' : 'Muro';
+    setNotice(quick
+      ? `${subject}: tocca i quattro angoli ESTERNI in qualsiasi ordine. Si chiuderà automaticamente e resterà selezionata.`
+      : `${subject}: segui il bordo esterno in ordine con almeno cinque punti, includendo arco, stipiti e soglia; poi premi “Conferma ${subject.toLowerCase()}”.`);
   }
 
   function startFloorplanWall() {
     if (!room) return;
     setShowSurfaceGuides(true);
-    setDrawKind('wall'); setQuickDraw(false); setLineWallDraw(true); setDraft([]); setSelectedId(null); setRenameDraft('');
+    setDrawKind('wall'); setQuickDraw(false); setManualOpeningMode(null); setLineWallDraw(true); setDraft([]); setSelectedId(null); setRenameDraft('');
     setNotice('Parete interna: tocca l’inizio e la fine della linea. Lo spessore viene creato automaticamente.');
   }
 
@@ -1349,7 +1385,8 @@ export function RoomStudio() {
 
   function completeSurface(points: Point[], kind: SurfaceKind) {
     const isOpening = kind === 'door' || kind === 'window';
-    const finalPoints = isOpening ? snapOpeningExtrema(points) : points;
+    const orderedPoints = isOpening && points.length === 4 ? orderManualOpeningQuad(points) : points;
+    const finalPoints = isOpening ? snapOpeningExtrema(orderedPoints) : orderedPoints;
     if (!isValidPolygon(finalPoints)) {
       setError('Servono almeno tre punti non allineati per chiudere la superficie.'); return;
     }
@@ -1374,9 +1411,12 @@ export function RoomStudio() {
         ? selectedParent.id
         : (wallsByFit.find((candidate) => candidate.coverage >= parentThreshold)?.wall ?? closestWall)?.id
       : undefined;
+    const isManualArch = kind === 'door' && manualOpeningMode === 'arch';
     const surface: Surface = {
       id,
-      name: nextSurfaceName(kind, surfaces),
+      name: isManualArch
+        ? `Arco ${surfaces.filter((candidate) => candidate.kind === 'door' && candidate.name.startsWith('Arco')).length + 1}`
+        : nextSurfaceName(kind, surfaces),
       kind,
       points: finalPoints,
       frozen: false,
@@ -1385,7 +1425,7 @@ export function RoomStudio() {
       parentId,
       source: isOpening ? 'manual' : undefined,
     };
-    commitSurfaces([...surfaces, surface]); setSelectedId(id); setRenameDraft(surface.name); setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setError(null);
+    commitSurfaces([...surfaces, surface]); setSelectedId(id); setRenameDraft(surface.name); setDraft([]); setDrawKind(null); setQuickDraw(false); setManualOpeningMode(null); setLineWallDraw(false); setError(null); setIsCorrectingEdges(isOpening);
     manualOpeningParentRef.current = null;
     setNotice(`${surface.name} creata${parentId ? ` e collegata a ${surfaces.find((item) => item.id === parentId)?.name ?? 'un muro'}` : ''}. Trascina i punti per correggerla.`);
   }
@@ -1398,7 +1438,7 @@ export function RoomStudio() {
     setNotice(`${subject}: ultimo punto cancellato. Tocca di nuovo la foto per continuare.`);
   }
 
-  function cancelDrawing() { manualOpeningParentRef.current = null; setDraft([]); setDrawKind(null); setQuickDraw(false); setLineWallDraw(false); setNotice(null); }
+  function cancelDrawing() { manualOpeningParentRef.current = null; setDraft([]); setDrawKind(null); setQuickDraw(false); setManualOpeningMode(null); setLineWallDraw(false); setNotice(null); }
 
   function linkedVerticesAt(origin: Point) {
     const overlay = surfaceOverlayRef.current?.getBoundingClientRect();
@@ -3454,12 +3494,23 @@ export function RoomStudio() {
     if (step === 4) setRenderSummaryOpen(true);
   }
 
+  const activeDrawingLabel = drawKind === 'door' && manualOpeningMode === 'arch'
+    ? 'Arco'
+    : drawKind ? surfaceLabels[drawKind] : '';
+  const aiServicesDescription = aiServiceLabels.length
+    ? aiServiceLabels.join(' · ')
+    : aiProviderLabel ?? 'Servizi IA';
+  const aiStatusLabel = aiStatus === 'ready'
+    ? aiServiceLabels.length >= 3 ? `${aiServiceLabels.length} IA attive` : `${aiProviderLabel ?? 'IA'} attiva`
+    : aiStatus === 'checking' ? 'Verifica IA'
+      : isLocalPreview() ? 'Anteprima locale · IA online' : 'IA non raggiungibile';
+
   return (
     <main ref={shellRef} className={`app-shell simple-mode step-${activeStep} ${(activeStep === 2 && (drawKind || selected)) || (activeStep === 3 && isCorrectingEdges && selected) ? 'has-mobile-surface-actions' : ''}`}>
       <header className="topbar">
         <a href="/projects" className="brand-lockup" aria-label="Vai ai progetti"><div className="brand-mark" aria-hidden="true"><span /><span /></div><div><p className="eyebrow">Studio materiali</p><p className="brand-name">Materia</p></div></a>
         <div className="project-heading"><span className="status-dot" /><div><p>{projectName}</p><span>{room ? `${room.sourceType === 'floorplan' ? 'Planimetria' : 'Foto'} · originale protetto` : 'Nuovo progetto locale'}</span></div></div>
-        <div className="top-actions"><span className={`ai-status ${aiStatus}`}><i />{aiStatus === 'ready' ? `${aiProviderLabel ?? 'IA'} attiva` : aiStatus === 'checking' ? 'Verifica IA' : isLocalPreview() ? 'Anteprima locale · Grok online' : 'IA non raggiungibile'}</span><button className="avatar" type="button" aria-label="Profilo locale">AG</button></div>
+        <div className="top-actions"><span className={`ai-status ${aiStatus}`} title={aiServicesDescription} aria-label={`${aiStatusLabel}: ${aiServicesDescription}`}><i />{aiStatusLabel}</span><button className="avatar" type="button" aria-label="Profilo locale">AG</button></div>
       </header>
 
       <nav className="simple-steps" aria-label="Passaggi del progetto">{[
@@ -3478,7 +3529,7 @@ export function RoomStudio() {
         <section className="stage" aria-labelledby="editor-title">
           <div className="editor-toolbar">
             <div className="tool-group"><button className={`tool-button ${!drawKind ? 'is-selected' : ''}`} type="button" onClick={cancelDrawing} aria-label="Seleziona">↖</button><button className="tool-button history-button" type="button" onClick={undo} disabled={!pastSurfaces.length} aria-label="Annulla ultima modifica">↶</button><button className="tool-button history-button" type="button" onClick={redo} disabled={!futureSurfaces.length} aria-label="Ripristina modifica">↷</button>{room?.sourceType === 'photo' && <button className="draw-button auto-fit-button" type="button" onClick={() => void autoFitSurfaces()} disabled={!room || isAutoFitting || showProcessedPreview}>✦ {isAutoFitting ? 'Adatto…' : 'Adatta alla foto'}</button>}{room?.sourceType === 'floorplan' ? <button className={`draw-button easy-draw-button ${lineWallDraw ? 'is-selected' : ''}`} type="button" onClick={startFloorplanWall}>＋ Parete con 2 tocchi</button> : <button className={`draw-button easy-draw-button ${quickDraw ? 'is-selected' : ''}`} type="button" onClick={() => startDrawing('wall', true)} disabled={!room}>＋ Aggiungi muro</button>}</div>
-            {drawKind ? <div className="drawing-actions"><span>{lineWallDraw ? `${draft.length}/2 punti` : `${draft.length}/4 angoli`}</span><button type="button" onClick={cancelDrawing}>Annulla</button></div> : <span className="mode-label">{selected ? `Trascina i pallini di ${selected.name}` : room?.sourceType === 'floorplan' ? 'Aggiungi le pareti interne con due tocchi' : room ? 'Adatta automaticamente o trascina i pallini a mano' : 'Carica una foto o una planimetria per iniziare'}</span>}
+            {drawKind ? <div className="drawing-actions"><span>{lineWallDraw ? `${draft.length}/2 punti` : manualOpeningMode === 'arch' ? `${draft.length} punti · minimo 5` : `${draft.length}/4 angoli`}</span><button type="button" onClick={cancelDrawing}>Annulla</button></div> : <span className="mode-label">{selected ? `Trascina i pallini di ${selected.name}` : room?.sourceType === 'floorplan' ? 'Aggiungi le pareti interne con due tocchi' : room ? 'Adatta automaticamente o trascina i pallini a mano' : 'Carica una foto o una planimetria per iniziare'}</span>}
           </div>
 
           <div className="canvas-wrap">
@@ -3579,7 +3630,7 @@ export function RoomStudio() {
           <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif,.webp" onChange={onRoomInput} /><input ref={cameraInputRef} id="camera-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" capture="environment" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif,.webp" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onMaterialInput} /><input ref={furnitureInputRef} id="furniture-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onFurnitureInput} />
           {room?.sourceType === 'photo' && activeStep === 2 && <section className="empty-room-choice" aria-label="Svuota la stanza oppure continua"><div><strong>Vuoi svuotare la stanza?</strong><span>È facoltativo: puoi mantenere la foto originale e andare subito ai prodotti.</span></div><div className="empty-room-actions"><button className="skip-empty-room" type="button" onClick={skipEmptyRoom} disabled={isEmptyingRoom || isCleaningRegion}>Salta · usa foto originale →</button><button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom || isCleaningRegion}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button>{!cleanupRegion && <button type="button" className={isPickingCleanup ? 'is-active' : ''} onClick={() => { setIsPickingCleanup((current) => !current); setError(null); setNotice(isPickingCleanup ? 'Selezione annullata.' : processedPreview ? 'Tocca il centro dell’oggetto rimasto nella foto.' : 'Tocca il centro di un mobile nella foto: lo delimito e lo rimuovo.'); }} disabled={isDetectingCleanup || isCleaningRegion}>{isDetectingCleanup ? 'Riconosco…' : isPickingCleanup ? 'Annulla selezione' : processedPreview ? '◎ Pulisci un residuo' : '◎ Indica un mobile'}</button>}{cleanupRegion && <><button type="button" className="cleanup-confirm" onClick={() => void cleanResidualRegion()} disabled={isCleaningRegion}>{isCleaningRegion ? 'Pulisco…' : 'Pulisci selezione'}</button><button type="button" onClick={() => setCleanupRegion(null)} disabled={isCleaningRegion}>Annulla</button></>}</div></section>}
           {geometryDetectionStatus === 'fallback' && room?.sourceType === 'photo' && (activeStep === 2 || activeStep === 3) && <div className="geometry-fallback-warning" role="status"><div><strong>Contorni provvisori</strong><span>Il riconoscimento IA di questa foto non è riuscito. Non li presento come misure automatiche: correggili trascinando linee o pallini, oppure riprova.</span></div><button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview}>{isAutoFitting ? 'Riconosco…' : '✦ Riprova IA'}</button></div>}
-          <div className={`status-bar ${activeStep === 2 ? 'prepare-status' : ''}`}><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.'}</p>{drawKind && <button className="opening-undo-inline" type="button" onClick={undoDraftPoint} disabled={draft.length === 0}>↶ Ultimo punto</button>}{room && (activeStep === 2 || activeStep === 3) && !drawKind && <button className={`edge-edit-button ${isCorrectingEdges ? 'is-active' : ''}`} type="button" onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine correzione' : activeStep === 3 ? '↔ Sposta linee' : room.sourceType === 'floorplan' ? 'Correggi il perimetro' : 'Correggi i bordi'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && <><button className={`opening-draw-button ${drawKind === 'door' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'door' ? cancelDrawing() : startDrawing('door', true)}>{drawKind === 'door' ? '✕ Cancella porta' : '＋ Porta'}</button><button className={`opening-draw-button ${drawKind === 'window' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'window' ? cancelDrawing() : startDrawing('window', true)}>{drawKind === 'window' ? '✕ Cancella finestra' : '＋ Finestra'}</button></>}{activeStep === 2 && !drawKind && selected && (selected.kind === 'door' || selected.kind === 'window') && <button className="opening-delete-inline" type="button" onClick={deleteSelected} disabled={selected.frozen}>⌫ Elimina {selected.name}</button>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && !drawKind && <button className="continue-products-button" type="button" onClick={() => goToStep(3)}>Continua ai prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
+          <div className={`status-bar ${activeStep === 2 ? 'prepare-status' : ''}`}><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{notice ?? 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.'}</p>{drawKind && <button className="opening-undo-inline" type="button" onClick={undoDraftPoint} disabled={draft.length === 0}>↶ Ultimo punto</button>}{drawKind && !quickDraw && <button className="opening-confirm-inline" type="button" onClick={() => completeSurface(draft, drawKind)} disabled={draft.length < (manualOpeningMode === 'arch' ? 5 : 3)}>✓ Conferma {activeDrawingLabel.toLowerCase()}</button>}{room && (activeStep === 2 || activeStep === 3) && !drawKind && <button className={`edge-edit-button ${isCorrectingEdges ? 'is-active' : ''}`} type="button" onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine correzione' : activeStep === 3 ? '↔ Sposta linee' : room.sourceType === 'floorplan' ? 'Correggi il perimetro' : 'Correggi i bordi'}</button>}{room?.sourceType === 'photo' && activeStep === 2 && <><button className={`opening-draw-button ${drawKind === 'door' && manualOpeningMode !== 'arch' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'door' && manualOpeningMode !== 'arch' ? cancelDrawing() : startDrawing('door', true, 'rectangle')}>{drawKind === 'door' && manualOpeningMode !== 'arch' ? '✕ Cancella porta' : '＋ Porta'}</button><button className={`opening-draw-button ${drawKind === 'door' && manualOpeningMode === 'arch' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'door' && manualOpeningMode === 'arch' ? cancelDrawing() : startDrawing('door', false, 'arch')}>{drawKind === 'door' && manualOpeningMode === 'arch' ? '✕ Cancella arco' : '＋ Arco'}</button><button className={`opening-draw-button ${drawKind === 'window' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'window' ? cancelDrawing() : startDrawing('window', true, 'rectangle')}>{drawKind === 'window' ? '✕ Cancella finestra' : '＋ Finestra'}</button></>}{activeStep === 2 && !drawKind && selected && (selected.kind === 'door' || selected.kind === 'window') && <button className="opening-delete-inline" type="button" onClick={deleteSelected} disabled={selected.frozen}>⌫ Elimina {selected.name}</button>}{room?.sourceType === 'floorplan' && activeStep === 2 && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === 4 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)}>Controlla e crea render</button>}{activeStep === 2 && surfaces.length > 0 && !drawKind && <button className="continue-products-button" type="button" onClick={() => goToStep(3)}>Continua ai prodotti</button>}{activeStep === 3 && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(4)}>Continua: crea render</button>}</div>
         </section>
 
         <aside className="properties-panel" aria-label="Proprietà">
@@ -3630,10 +3681,11 @@ export function RoomStudio() {
           <div className="phase-card"><span className="phase-index">0.3</span><div><p className="eyebrow">Modalità prova</p><strong>IA e Freeze pronti</strong><p>Ricerca prodotti, stanza vuota e render vengono elaborati dal server senza mostrare chiavi nell’app.</p></div></div>
         </aside>
       </div>
-      {activeStep === 2 && drawKind && <div className="mobile-surface-actions is-drawing" role="toolbar" aria-label={`Correggi disegno ${surfaceLabels[drawKind]}`}>
-        <div className="mobile-surface-action-state"><strong>{surfaceLabels[drawKind]}</strong><span>{lineWallDraw ? `${draft.length}/2 punti` : `${draft.length}/4 punti`}</span></div>
+      {activeStep === 2 && drawKind && <div className={`mobile-surface-actions is-drawing ${!quickDraw ? 'has-finish' : ''}`} role="toolbar" aria-label={`Correggi disegno ${activeDrawingLabel}`}>
+        <div className="mobile-surface-action-state"><strong>{activeDrawingLabel}</strong><span>{lineWallDraw ? `${draft.length}/2 punti` : manualOpeningMode === 'arch' ? `${draft.length} punti · minimo 5` : `${draft.length}/4 punti`}</span></div>
         <button type="button" onClick={undoDraftPoint} disabled={draft.length === 0} aria-label="Cancella ultimo punto"><span aria-hidden="true">↶</span><small>Ultimo punto</small></button>
         <button className="cancel-surface-action" type="button" onClick={cancelDrawing} aria-label={`Cancella tutto il disegno ${surfaceLabels[drawKind]}`}><span aria-hidden="true">⌫</span><small>Cancella tutto</small></button>
+        {!quickDraw && <button className="finish-surface-action" type="button" onClick={() => completeSurface(draft, drawKind)} disabled={draft.length < (manualOpeningMode === 'arch' ? 5 : 3)} aria-label={`Conferma ${activeDrawingLabel}`}><span aria-hidden="true">✓</span><small>Conferma</small></button>}
       </div>}
       {(activeStep === 2 || (activeStep === 3 && isCorrectingEdges)) && !drawKind && selected && <div className="mobile-surface-actions is-selected" role="toolbar" aria-label={`Azioni per ${selected.name}`}>
         <div className="mobile-surface-action-state"><strong>{selected.name}</strong><span>{selected.kind === 'door' || selected.kind === 'window' ? 'Modifica o elimina' : 'Correggi i contorni'}</span></div>

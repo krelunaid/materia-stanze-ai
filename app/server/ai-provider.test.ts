@@ -132,6 +132,39 @@ describe('getAiProvider', () => {
     expect(payload.input[0].content[1].text).toContain('Do not return the seed unchanged');
   });
 
+  it('uses a high-effort zone sweep after a zero-opening audit', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({ openings: [] }) }] }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await detectArchitecturalOpenings(
+      { id: 'openai', label: 'OpenAI', apiKey: 'openai-test', model: 'gpt-5.6-terra' },
+      new File([new Uint8Array([1, 2, 3])], 'zero-openings.jpg', { type: 'image/jpeg' }),
+      [],
+      { recovery: true },
+    );
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(payload.reasoning).toEqual({ effort: 'high' });
+    expect(payload.max_output_tokens).toBe(3000);
+    expect(payload.input[0].content[1].text).toContain('ZERO-OPENING RECOVERY SWEEP');
+    expect(payload.input[0].content[1].text).toContain('brick or stone arch');
+  });
+
+  it('retains a strong single-pass opening only when requested as an audit seed', () => {
+    const candidate = {
+      name: 'Anta possibile', kind: 'door' as const, confidence: .9,
+      points: [{ x: .72, y: .2 }, { x: .94, y: .2 }, { x: .94, y: .72 }, { x: .72, y: .72 }],
+    };
+    const wall = { name: 'Muro', kind: 'wall' as const, confidence: .9, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: 0, y: .72 }] };
+    const floor = { name: 'Pavimento', kind: 'floor' as const, confidence: .9, points: [{ x: 0, y: .72 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] };
+    const geometry = [[wall, floor, candidate], [wall, floor]];
+
+    expect(reconcileRoomSurfaceCandidates(geometry).some((surface) => surface.kind === 'door')).toBe(false);
+    expect(reconcileRoomSurfaceCandidates(geometry, { retainOpeningSeeds: true }))
+      .toContainEqual(expect.objectContaining({ kind: 'door' }));
+  });
+
   it('keeps a closed solid architectural door without requiring visible interior', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       output: [{ content: [{ type: 'output_text', text: JSON.stringify({
