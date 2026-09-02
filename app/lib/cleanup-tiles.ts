@@ -168,7 +168,10 @@ export function planRoomCleanupPass(
   maximumTiles = 12,
   imageSize?: CleanupTileImageSize,
 ): CleanupTilePlan[] {
-  if (regions.length >= COHERENT_ROOM_PASS_MIN_REGIONS) {
+  const wholeFrameRatioSupported = !imageSize || supportedRatios.some((ratio) => (
+    cleanupTileRatioMatches(imageSize.width, imageSize.height, ratio.width, ratio.height)
+  ));
+  if (regions.length >= COHERENT_ROOM_PASS_MIN_REGIONS && wholeFrameRatioSupported) {
     return [{
       bounds: { left: 0, top: 0, right: 1, bottom: 1 },
       regions,
@@ -178,6 +181,10 @@ export function planRoomCleanupPass(
       })),
     }];
   }
+  // The image editor returns only the supported aspect ratios above. Sending
+  // a full 5:4 (or another unsupported) photograph would force it to change
+  // the frame and the compositor would correctly reject the result. Keep the
+  // original framing by splitting those rooms into exact-ratio local tiles.
   return planCleanupTiles(regions, maximumTiles, imageSize);
 }
 

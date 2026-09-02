@@ -111,6 +111,29 @@ describe('cleanup tile planning', () => {
       .toEqual({ left: 0, top: 0, right: 2560, bottom: 1708, width: 2560, height: 1708 });
   });
 
+  it('splits a furnished room when the source ratio is unsupported by the image editor', () => {
+    const input = [
+      region('cassettiera', .02, .45, .25, .93),
+      region('letto', .36, .43, .88, .95),
+      region('comodino', .84, .58, .98, .94),
+      region('pianta', .61, .22, .77, .66),
+    ];
+    const size = { width: 1400, height: 1120 }; // 5:4 is not an editor output ratio.
+    const plans = planRoomCleanupPass(input, 12, size);
+
+    expect(plans.length).toBeGreaterThan(1);
+    expect(plans.every((plan) => (
+      plan.bounds.left !== 0 || plan.bounds.top !== 0 || plan.bounds.right !== 1 || plan.bounds.bottom !== 1
+    ))).toBe(true);
+    expect(plans.flatMap((plan) => plan.regions).map((item) => item.label).sort())
+      .toEqual(input.map((item) => item.label).sort());
+    for (const plan of plans) {
+      const rect = snapCleanupTileRect(plan.bounds, size);
+      expect(cleanupTileRatioMatches(rect.width, rect.height, rect.width, rect.height)).toBe(true);
+      expect(rect.width * rect.height / (size.width * size.height)).toBeLessThanOrEqual(CLEANUP_MAX_TILE_AREA_RATIO);
+    }
+  });
+
   it('keeps a small cleanup as a detail crop', () => {
     const plans = planRoomCleanupPass([region('sedia', .4, .5, .58, .86)], 12, { width: 1600, height: 900 });
     expect(plans).toHaveLength(1);
