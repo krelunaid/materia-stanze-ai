@@ -172,7 +172,7 @@ describe('cleanup tile planning', () => {
     }
   });
 
-  it('never joins disconnected parts of one large concave mask while splitting', () => {
+  it('triangulates one large concave mask into safe connected pieces', () => {
     const concave = {
       label: 'mobile a U',
       confidence: .9,
@@ -181,8 +181,15 @@ describe('cleanup tile planning', () => {
         { x: .68, y: .05 }, { x: .68, y: .75 }, { x: .32, y: .75 }, { x: .32, y: .05 },
       ],
     };
-    expect(() => planCleanupTiles([concave], 4, { width: 900, height: 1600 }))
-      .toThrow(/parte più piccola|pulizia locale sicura/i);
+    const plans = planCleanupTiles([concave], 12, { width: 900, height: 1600 });
+    const pieces = plans.flatMap((plan) => plan.regions);
+    expect(plans.length).toBeGreaterThan(1);
+    expect(pieces.length).toBeGreaterThan(1);
+    expect(pieces.every((item) => item.points.length >= 3 && item.points.length <= 4)).toBe(true);
+    for (const plan of plans) {
+      const rect = snapCleanupTileRect(plan.bounds, { width: 900, height: 1600 });
+      expect(rect.width * rect.height / (900 * 1600)).toBeLessThanOrEqual(CLEANUP_MAX_TILE_AREA_RATIO);
+    }
   });
 
   it('keeps triangular pieces valid when a large diamond is split', () => {

@@ -228,10 +228,67 @@ export function planCleanupTiles(
     }
     return direction !== 0;
   };
+  const triangulate = (points: Point[]) => {
+    if (points.length < 3) return [] as Point[][];
+    const signedArea = points.reduce((total, point, index) => {
+      const next = points[(index + 1) % points.length];
+      return total + point.x * next.y - next.x * point.y;
+    }, 0);
+    const orientation = Math.sign(signedArea) || 1;
+    const remaining = points.map((_, index) => index);
+    const triangles: Point[][] = [];
+    const insideTriangle = (point: Point, first: Point, second: Point, third: Point) => {
+      const cross = (left: Point, right: Point, target: Point) => (
+        (right.x - left.x) * (target.y - left.y) - (right.y - left.y) * (target.x - left.x)
+      );
+      const a = cross(first, second, point) * orientation;
+      const b = cross(second, third, point) * orientation;
+      const c = cross(third, first, point) * orientation;
+      return a >= -.000001 && b >= -.000001 && c >= -.000001;
+    };
+    let guard = points.length * points.length;
+    while (remaining.length > 3 && guard-- > 0) {
+      let clipped = false;
+      for (let cursor = 0; cursor < remaining.length; cursor += 1) {
+        const previousIndex = remaining[(cursor + remaining.length - 1) % remaining.length];
+        const currentIndex = remaining[cursor];
+        const nextIndex = remaining[(cursor + 1) % remaining.length];
+        const previous = points[previousIndex];
+        const current = points[currentIndex];
+        const next = points[nextIndex];
+        const corner = ((current.x - previous.x) * (next.y - current.y)
+          - (current.y - previous.y) * (next.x - current.x)) * orientation;
+        if (corner <= .000001) continue;
+        const containsVertex = remaining.some((candidateIndex) => (
+          candidateIndex !== previousIndex && candidateIndex !== currentIndex && candidateIndex !== nextIndex
+          && insideTriangle(points[candidateIndex], previous, current, next)
+        ));
+        if (containsVertex) continue;
+        triangles.push([previous, current, next]);
+        remaining.splice(cursor, 1);
+        clipped = true;
+        break;
+      }
+      if (!clipped) return [] as Point[][];
+    }
+    if (remaining.length === 3) triangles.push(remaining.map((index) => points[index]));
+    return triangles;
+  };
   const splitUnsafeRegion = (region: CleanupTileRegion, depth = 0): CleanupTileRegion[] => {
     if (!imageSize || safeGroup([region])) return [region];
-    if (depth >= 3 || !isConvex(region.points)) {
+    if (depth >= 3) {
       throw new Error('La zona richiesta è troppo estesa per una pulizia locale sicura. Indica una parte più piccola del mobile.');
+    }
+    if (!isConvex(region.points)) {
+      const triangles = triangulate(region.points);
+      if (!triangles.length) {
+        throw new Error('La zona richiesta è troppo estesa per una pulizia locale sicura. Indica una parte più piccola del mobile.');
+      }
+      return triangles.flatMap((points, index) => splitUnsafeRegion({
+        ...region,
+        label: `${region.label} · parte ${index + 1}`,
+        points,
+      }, depth + 1));
     }
     const bounds = regionBounds([region]);
     const axis: 'x' | 'y' = bounds.right - bounds.left >= bounds.bottom - bounds.top ? 'x' : 'y';
