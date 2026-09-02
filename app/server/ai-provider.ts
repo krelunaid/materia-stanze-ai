@@ -51,6 +51,8 @@ export type DetectedRoomSurface = {
   openingHead?: 'straight' | 'arched' | 'uncertain';
   passableFloorOpening?: boolean;
   visibleSillAboveFloor?: boolean;
+  largerCurvedOpeningSurroundsCandidate?: boolean;
+  rectangularLeafInsideLargerOpening?: boolean;
 };
 
 export type DetectedObjectRegion = {
@@ -432,8 +434,10 @@ const architecturalOpeningAuditSchema = {
           openingHead: { type: 'string', enum: ['straight', 'arched', 'uncertain'] },
           passableFloorOpening: { type: 'boolean' },
           visibleSillAboveFloor: { type: 'boolean' },
+          largerCurvedOpeningSurroundsCandidate: { type: 'boolean' },
+          rectangularLeafInsideLargerOpening: { type: 'boolean' },
         },
-        required: ['type', 'points', 'confidence', 'evidence', 'architecturalFrame', 'wallRevealSillOrThreshold', 'showsOpeningInteriorOrGlazing', 'furniturePanelMirrorOrAppliance', 'lowerBoundaryDirectlyVisible', 'leftSideDirectlyVisibleToLowerBoundary', 'rightSideDirectlyVisibleToLowerBoundary', 'occludedByFurniture', 'openingHead', 'passableFloorOpening', 'visibleSillAboveFloor'],
+        required: ['type', 'points', 'confidence', 'evidence', 'architecturalFrame', 'wallRevealSillOrThreshold', 'showsOpeningInteriorOrGlazing', 'furniturePanelMirrorOrAppliance', 'lowerBoundaryDirectlyVisible', 'leftSideDirectlyVisibleToLowerBoundary', 'rightSideDirectlyVisibleToLowerBoundary', 'occludedByFurniture', 'openingHead', 'passableFloorOpening', 'visibleSillAboveFloor', 'largerCurvedOpeningSurroundsCandidate', 'rectangularLeafInsideLargerOpening'],
       },
     },
   },
@@ -1887,7 +1891,7 @@ export async function detectArchitecturalOpenings(
   auditor: VisionAuditor,
   image: File,
   seedCandidates: DetectedRoomSurface[] = [],
-  options: { recovery?: boolean } = {},
+  options: { recovery?: boolean; highEffort?: boolean } = {},
 ) {
   const imageUrl = await fileToDataUri(image);
   const prompt = [
@@ -1901,6 +1905,7 @@ export async function detectArchitecturalOpenings(
     'Also report openingHead, passableFloorOpening and visibleSillAboveFloor. openingHead=arched whenever brick, stone or plaster visibly curves over the opening. passableFloorOpening=true when a person can pass through the opening to the floor, even if furniture hides part of the threshold. visibleSillAboveFloor=true only when an actual sill or an unbroken band of wall is directly visible below the opening.',
     'Use type=door only when the opening reaches a passable floor threshold. Use type=window when a sill or wall remains below it. A full-height glazed wall or French window that reaches the floor is a door.',
     'NON-NEGOTIABLE CLASSIFICATION CHECK: openingHead=arched plus passableFloorOpening=true plus visibleSillAboveFloor=false is a DOORWAY/ARCH, never a window. Trace its curved outer head with at least five vertices. Do not flatten the masonry curve into a four-corner window rectangle.',
+    'Before returning any four-corner door or window, inspect a generous band around all four sides. Report largerCurvedOpeningSurroundsCandidate=true if brick, stone, plaster or a wall reveal forms a larger curved opening around it. Report rectangularLeafInsideLargerOpening=true when the rectangle is only a door leaf or inner frame inside that larger opening. If either is true, discard the rectangle and trace the COMPLETE OUTER CURVED OPENING with 5 to 16 points.',
     'Do not classify mirrors, pictures, televisions, air conditioners, cabinets, kitchen wall units, cupboard doors, furniture panels, niches, shadows, reflections or bright wall patches as openings.',
     'For every candidate, explicitly decide whether its outer frame is integrated into the architectural wall, whether a wall reveal plus sill or floor threshold is visible, whether the interior shows glazing/outdoors/a passable doorway, and whether it could instead be a furniture panel, mirror or appliance. A closed solid door is still a real opening: return it when an operable door leaf and handle are visibly enclosed by architectural jambs and a threshold, even though showsOpeningInteriorOrGlazing is false.',
     'A bright vertical rectangle beside or inside kitchen cabinetry is not a window without visible architectural jambs, a real sill or threshold and glazing/outdoor depth. Glass-front cabinet doors remain furniture and must be rejected.',
@@ -1911,6 +1916,9 @@ export async function detectArchitecturalOpenings(
       : '',
     options.recovery
       ? 'ZERO-OPENING RECOVERY SWEEP: a previous full-image audit returned no accepted openings. Do not repeat that answer before inspecting the image again in five explicit zones: left edge, left half, centre, right half and right edge. In each zone search for masonry arches, brick or stone rings, jambs, wall reveals, passable depth, door leaves and handles, glazing, outdoor light and real sills or floor thresholds. A brick or stone arch surrounding a smaller rectangular wooden leaf is strong architectural evidence and must be returned as one OUTER arched door contour. Still reject cupboards, mirrors, niches, pictures and bright furniture panels; an empty list is allowed only after the complete zone-by-zone sweep finds no architectural frame or passable opening.'
+      : '',
+    options.highEffort
+      ? 'TARGETED OUTER-CONTOUR REVIEW: spend most of the reasoning budget comparing every proposed rectangle with the architecture immediately around it. A visible curved brick ring over a wooden leaf means the rectangle is wrong even when its handle and jambs are clear.'
       : '',
     'confidence measures the accuracy of the complete outer-opening contour. evidence is one short factual Italian phrase describing the visible frame, arch, glass, sill or threshold.',
     'Return only the structured result. You are an auditor: never invent, edit or repair pixels.',
@@ -1927,12 +1935,12 @@ export async function detectArchitecturalOpenings(
           { type: 'input_text', text: prompt },
         ],
       }],
-      max_output_tokens: options.recovery ? 3000 : seedCandidates.length ? 1800 : 2400,
-      reasoning: { effort: options.recovery ? 'high' : seedCandidates.length ? 'low' : 'medium' },
+      max_output_tokens: options.recovery || options.highEffort ? 3000 : seedCandidates.length ? 1800 : 2400,
+      reasoning: { effort: options.recovery || options.highEffort ? 'high' : seedCandidates.length ? 'low' : 'medium' },
       text: { format: { type: 'json_schema', name: 'architectural_opening_audit', schema: architecturalOpeningAuditSchema, strict: true } },
       store: false,
     }),
-    signal: AbortSignal.timeout(options.recovery ? 75000 : seedCandidates.length ? 45000 : 65000),
+    signal: AbortSignal.timeout(options.recovery || options.highEffort ? 75000 : seedCandidates.length ? 45000 : 65000),
   });
   const payload = await response.json() as ResponsesPayload;
   if (!response.ok) throw new Error(payload.error?.message ?? 'Controllo indipendente delle aperture non disponibile.');
@@ -1952,6 +1960,8 @@ export async function detectArchitecturalOpenings(
       openingHead?: 'straight' | 'arched' | 'uncertain';
       passableFloorOpening?: boolean;
       visibleSillAboveFloor?: boolean;
+      largerCurvedOpeningSurroundsCandidate?: boolean;
+      rectangularLeafInsideLargerOpening?: boolean;
     }>;
   };
   return (parsed.openings ?? []).slice(0, 16).filter((opening) => (
@@ -1960,12 +1970,15 @@ export async function detectArchitecturalOpenings(
     && (opening.type === 'door' || opening.showsOpeningInteriorOrGlazing === true)
     && opening.furniturePanelMirrorOrAppliance === false
   )).map((opening, index) => {
+    const surroundingArch = opening.largerCurvedOpeningSurroundsCandidate === true
+      || opening.rectangularLeafInsideLargerOpening === true;
+    const openingHead = surroundingArch ? 'arched' as const : opening.openingHead;
     const auditedDoorway = opening.passableFloorOpening === true
       && opening.visibleSillAboveFloor !== true;
     const kind = opening.type === 'door' || auditedDoorway ? 'door' as const : 'window' as const;
     return {
       name: kind === 'door'
-        ? opening.openingHead === 'arched' ? `Arco verificato ${index + 1}` : `Porta verificata ${index + 1}`
+        ? openingHead === 'arched' ? `Arco verificato ${index + 1}` : `Porta verificata ${index + 1}`
         : `Finestra verificata ${index + 1}`,
       kind,
       points: ((opening.points?.length ?? 0) === 4 ? orderQuadClockwise(opening.points ?? []) : (opening.points ?? []).slice(0, 16)).map((point) => ({
@@ -1974,9 +1987,11 @@ export async function detectArchitecturalOpenings(
       })),
       confidence: finiteUnit(opening.confidence),
       audited: true,
-      openingHead: opening.openingHead,
+      openingHead,
       passableFloorOpening: opening.passableFloorOpening,
       visibleSillAboveFloor: opening.visibleSillAboveFloor,
+      largerCurvedOpeningSurroundsCandidate: opening.largerCurvedOpeningSurroundsCandidate,
+      rectangularLeafInsideLargerOpening: opening.rectangularLeafInsideLargerOpening,
       thresholdInferred: opening.lowerBoundaryDirectlyVisible !== true
         || opening.leftSideDirectlyVisibleToLowerBoundary !== true
         || opening.rightSideDirectlyVisibleToLowerBoundary !== true

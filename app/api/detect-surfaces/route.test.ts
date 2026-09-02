@@ -70,7 +70,7 @@ describe('room geometry with an independent opening audit', () => {
     expect(result.surfaces).toHaveLength(2);
     expect(result.auditedOpenings).toBe(1);
     expect(result.openingAuditAttempts).toBe(2);
-    expect(mocks.detectArchitecturalOpenings).toHaveBeenNthCalledWith(2, expect.anything(), expect.any(File), [], { recovery: true });
+    expect(mocks.detectArchitecturalOpenings).toHaveBeenNthCalledWith(2, expect.anything(), expect.any(File), [], { recovery: true, highEffort: true });
     expect(mocks.mergeArchitecturalOpeningAudit).toHaveBeenCalledWith(primarySurfaces, auditedOpenings);
   });
 
@@ -94,7 +94,7 @@ describe('room geometry with an independent opening audit', () => {
 
     expect(response.ok).toBe(true);
     expect(result.auditedOpenings).toBe(1);
-    expect(mocks.detectArchitecturalOpenings).toHaveBeenNthCalledWith(2, expect.anything(), expect.any(File), [innerDoor], { recovery: true });
+    expect(mocks.detectArchitecturalOpenings).toHaveBeenNthCalledWith(2, expect.anything(), expect.any(File), [innerDoor], { recovery: true, highEffort: true });
     expect(mocks.mergeArchitecturalOpeningAudit).toHaveBeenCalledWith([...primarySurfaces, innerDoor], [outerArch]);
   });
 
@@ -124,7 +124,7 @@ describe('room geometry with an independent opening audit', () => {
     expect(result.acceptedOpenings).toBe(1);
     expect(result.openingAuditAttempts).toBe(2);
     expect(mocks.detectArchitecturalOpenings).toHaveBeenNthCalledWith(
-      2, expect.anything(), expect.any(File), [innerDoor, wrongWindow], { recovery: false },
+      2, expect.anything(), expect.any(File), [innerDoor, wrongWindow], { recovery: false, highEffort: true },
     );
     expect(mocks.mergeArchitecturalOpeningAudit).toHaveBeenCalledWith(
       [...primarySurfaces, innerDoor], [wrongWindow, outerArch],
@@ -148,7 +148,7 @@ describe('room geometry with an independent opening audit', () => {
     expect(result.surfaces).toHaveLength(2);
     expect(result.openingAuditStatus).toBe('verified');
     expect(result.openingAuditAttempts).toBe(2);
-    expect(mocks.detectArchitecturalOpenings).toHaveBeenNthCalledWith(2, expect.anything(), expect.any(File), [], { recovery: true });
+    expect(mocks.detectArchitecturalOpenings).toHaveBeenNthCalledWith(2, expect.anything(), expect.any(File), [], { recovery: true, highEffort: true });
   });
 
   it('reports a blocking geometry failure when an audited opening is rejected after normalization', async () => {

@@ -1612,7 +1612,7 @@ export function RoomStudio() {
     setPendingFurniture(null);
     setShowSurfaceGuides(true);
     setIsCorrectingEdges(true);
-    setNotice('Correzione attiva: trascina una linea per spostarla intera, oppure un pallino per correggere un angolo. Funziona con dito e Apple Pencil.');
+    setNotice('Correzione attiva: trascina la linea per spostarla intera, il cerchio grande per muovere un angolo oppure il cerchietto piccolo per creare una nuova punta.');
     window.requestAnimationFrame(() => canvasRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }));
   }
 

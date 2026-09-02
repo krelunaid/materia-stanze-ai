@@ -63,7 +63,7 @@ export async function POST(request: Request) {
           auditor,
           image,
           refinementSeeds,
-          { recovery: auditedOpenings.length === 0 },
+          { recovery: auditedOpenings.length === 0, highEffort: true },
         );
         auditedOpenings = [...auditedOpenings, ...refinedOpenings];
       } catch {
