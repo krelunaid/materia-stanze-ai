@@ -1085,43 +1085,55 @@ function reconstructRoomShellFromWallPlanes(surfaces: DetectedRoomSurface[]) {
     ));
   if (!coversRoom) return surfaces;
 
-  const reconstructedWalls: DetectedRoomSurface[] = [];
-  const floorJunctions: DetectedRoomSurface['points'] = [];
-  const ceilingJunctions: DetectedRoomSurface['points'] = [];
-  for (const wall of walls) {
-    const box = surfaceBounds(wall);
-    const candidateXs = wall.points.filter((point) => {
-      const top = wallTopBoundaryAtX(wall, point.x);
-      const bottom = wallBoundaryAtX(wall, point.x);
-      return top !== null && bottom !== null && Math.abs(point.y - top) <= .008 && bottom - top >= .12;
-    }).map((point) => point.x)
-      .filter((x, index, all) => index === 0 || all.slice(0, index).every((other) => Math.abs(other - x) >= .004))
-      .sort((left, right) => left - right);
-    const topChain = candidateXs.map((x) => {
-      const top = wallTopBoundaryAtX(wall, x);
-      const bottom = wallBoundaryAtX(wall, x);
-      return top !== null && bottom !== null && bottom - top >= .12 ? { x, y: top } : null;
-    }).filter((point): point is { x: number; y: number } => point !== null);
-    const leftX = box.left;
-    const rightX = box.right;
-    const leftFloor = floorBoundaryAtX(floor, leftX);
-    const rightFloor = floorBoundaryAtX(floor, rightX);
-    if (topChain.length < 2 || leftFloor === null || rightFloor === null) return surfaces;
-    const polygon = dedupeShellPoints([
-      ...topChain,
-      { x: rightX, y: rightFloor },
-      { x: leftX, y: leftFloor },
-    ]);
-    if (!isSimpleRoomPolygon(polygon)) return surfaces;
-    reconstructedWalls.push({ ...wall, points: polygon });
-    floorJunctions.push({ x: leftX, y: leftFloor }, { x: rightX, y: rightFloor });
-    ceilingJunctions.push(...topChain);
-  }
+  // Independent passes often put the two sides of the same wall corner a few
+  // pixels apart. Use one shared x coordinate for every adjoining pair before
+  // rebuilding any polygon; otherwise the final floor keeps both near-duplicate
+  // points and creates the small cabinet-shaped notches seen in the live test.
+  const junctionXs = [
+    bounds[0].left,
+    ...bounds.slice(0, -1).map((box, index) => (box.right + bounds[index + 1].left) / 2),
+    bounds.at(-1)?.right ?? 1,
+  ];
+  if (junctionXs.some((x, index) => index > 0 && x - junctionXs[index - 1] < .045)) return surfaces;
 
-  const uniqueFloorJunctions = floorJunctions.sort((left, right) => left.x - right.x)
-    .filter((point, index, all) => index === 0 || Math.abs(point.x - all[index - 1].x) >= .004);
+  const floorJunctions = junctionXs.map((x) => {
+    const y = floorBoundaryAtX(floor, x);
+    return y === null ? null : { x, y };
+  });
+  if (floorJunctions.some((point) => point === null)) return surfaces;
+
+  const ceilingJunctions = junctionXs.map((x, index) => {
+    const adjacent = index === 0
+      ? [walls[0]]
+      : index === walls.length
+        ? [walls[walls.length - 1]]
+        : [walls[index - 1], walls[index]];
+    const candidates = adjacent.map((wall) => {
+      const nearbyTop = wall.points.filter((point) => Math.abs(point.x - x) <= .025)
+        .sort((left, right) => left.y - right.y)[0];
+      return nearbyTop?.y ?? wallTopBoundaryAtX(wall, x);
+    })
+      .filter((value): value is number => value !== null);
+    if (!candidates.length || Math.max(...candidates) - Math.min(...candidates) > .06) return null;
+    return { x, y: candidates.reduce((sum, value) => sum + value, 0) / candidates.length };
+  });
+  if (ceilingJunctions.some((point) => point === null)) return surfaces;
+
+  const exactFloorJunctions = floorJunctions as DetectedRoomSurface['points'];
+  const exactCeilingJunctions = ceilingJunctions as DetectedRoomSurface['points'];
+  const reconstructedWalls = walls.map((wall, index) => ({
+    ...wall,
+    points: [
+      exactCeilingJunctions[index],
+      exactCeilingJunctions[index + 1],
+      exactFloorJunctions[index + 1],
+      exactFloorJunctions[index],
+    ],
+  }));
+  if (reconstructedWalls.some((wall) => !isSimpleRoomPolygon(wall.points))) return surfaces;
+
   const reconstructedFloorPoints = dedupeShellPoints([
-    ...uniqueFloorJunctions,
+    ...exactFloorJunctions,
     { x: 1, y: 1 },
     { x: 0, y: 1 },
   ]);
@@ -1129,16 +1141,14 @@ function reconstructRoomShellFromWallPlanes(surfaces: DetectedRoomSurface[]) {
 
   let reconstructedCeiling: DetectedRoomSurface | null = null;
   if (ceiling) {
-    const uniqueCeilingJunctions = ceilingJunctions.sort((left, right) => left.x - right.x)
-      .filter((point, index, all) => index === 0 || Math.abs(point.x - all[index - 1].x) >= .004);
-    const left = uniqueCeilingJunctions[0];
-    const right = uniqueCeilingJunctions.at(-1);
+    const left = exactCeilingJunctions[0];
+    const right = exactCeilingJunctions.at(-1);
     const touchesTopCrop = surfaceBounds(ceiling).top <= .015;
     const ceilingPoints = left && right && touchesTopCrop
       ? dedupeShellPoints([
         { x: left.x, y: 0 },
         { x: right.x, y: 0 },
-        ...[...uniqueCeilingJunctions].reverse(),
+        ...[...exactCeilingJunctions].reverse(),
       ])
       : [];
     if (ceilingPoints.length >= 3 && isSimpleRoomPolygon(ceilingPoints)) {

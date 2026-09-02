@@ -655,6 +655,23 @@ describe('getAiProvider', () => {
     expect(roomShellTopologyStatus(result)).toBe('verified');
   });
 
+  it('repairs the reconciled kitchen shell returned by the live v129 recognition pass', () => {
+    const source = [
+      { name: 'left', kind: 'wall', confidence: .9, points: [{ x: 0, y: .12 }, { x: .265, y: .255 }, { x: .268, y: .68 }, { x: .145, y: .68 }, { x: 0, y: .72 }] },
+      { name: 'back', kind: 'wall', confidence: .94, points: [{ x: .265, y: .255 }, { x: .78, y: .265 }, { x: .79, y: .72 }, { x: .618, y: .752 }, { x: .385, y: .748 }, { x: .268, y: .68 }] },
+      { name: 'right', kind: 'wall', confidence: .9, points: [{ x: .78, y: .265 }, { x: 1, y: .22 }, { x: 1, y: .78 }, { x: .79, y: .72 }] },
+      { name: 'floor', kind: 'floor', confidence: .95, points: [{ x: 0, y: .72 }, { x: .145, y: .68 }, { x: .265, y: .678 }, { x: .385, y: .748 }, { x: .618, y: .752 }, { x: .78, y: .722 }, { x: .79, y: .72 }, { x: 1, y: .78 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+      { name: 'ceiling', kind: 'ceiling', confidence: .9, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .22 }, { x: .78, y: .265 }, { x: .265, y: .255 }, { x: 0, y: .12 }] },
+    ] as Parameters<typeof normalizeRoomSurfaces>[0];
+
+    expect(roomShellTopologyStatus(source)).toBe('geometry-invalid');
+    const result = normalizeRoomSurfaces(source);
+    expect(result.find((surface) => surface.kind === 'floor')?.points).toEqual([
+      { x: 0, y: .72 }, { x: .2665, y: expect.closeTo(.679, 3) }, { x: .785, y: expect.closeTo(.721, 3) }, { x: 1, y: .78 }, { x: 1, y: 1 }, { x: 0, y: 1 },
+    ]);
+    expect(roomShellTopologyStatus(result)).toBe('verified');
+  });
+
   it('labels a traced masonry arch as Arco while keeping it an architectural doorway', () => {
     const outerArch = [
       { x: .7, y: .72 }, { x: .7, y: .2 }, { x: .74, y: .13 },
