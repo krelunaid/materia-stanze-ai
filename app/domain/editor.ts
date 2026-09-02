@@ -14,6 +14,7 @@ export type Surface = {
   parentId?: string;
   source?: 'ai' | 'manual' | 'demo';
   audited?: boolean;
+  thresholdInferred?: boolean;
 };
 
 export const surfaceLabels: Record<SurfaceKind, string> = {
