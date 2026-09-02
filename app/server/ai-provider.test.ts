@@ -600,6 +600,22 @@ describe('getAiProvider', () => {
     expect(result.find((surface) => surface.kind === 'door')).toBeTruthy();
   });
 
+  it('labels a traced masonry arch as Arco while keeping it an architectural doorway', () => {
+    const outerArch = [
+      { x: .7, y: .72 }, { x: .7, y: .2 }, { x: .74, y: .13 },
+      { x: .82, y: .09 }, { x: .9, y: .12 }, { x: .96, y: .2 }, { x: .96, y: .72 },
+    ];
+    const result = normalizeRoomSurfaces([
+      { name: 'Muro', kind: 'wall', confidence: .9, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: 0, y: .72 }] },
+      { name: 'Pavimento', kind: 'floor', confidence: .9, points: [{ x: 0, y: .72 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+      { name: 'Arco esterno verificato', kind: 'door', confidence: .93, points: outerArch, audited: true },
+    ]);
+
+    expect(result.find((surface) => surface.kind === 'door')).toEqual(expect.objectContaining({
+      name: 'Arco', kind: 'door', points: outerArch, audited: true,
+    }));
+  });
+
   it('rejects self-intersecting and microscopic detected polygons', () => {
     const result = normalizeRoomSurfaces([
       { name: 'bow tie', kind: 'wall', confidence: .99, points: [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 1, y: 0 }, { x: 0, y: 1 }] },

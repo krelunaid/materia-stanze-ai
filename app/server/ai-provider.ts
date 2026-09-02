@@ -1092,10 +1092,12 @@ export function normalizeRoomSurfaces(surfaces: DetectedRoomSurface[]) {
   return validated.map((surface) => {
     counters[surface.kind] = (counters[surface.kind] ?? 0) + 1;
     const count = counters[surface.kind] as number;
+    const isArchedDoorway = surface.kind === 'door'
+      && (surface.points.length > 4 || /\barco\b/i.test(surface.name));
     const base = surface.kind === 'wall' ? 'Muro'
       : surface.kind === 'floor' ? 'Pavimento'
         : surface.kind === 'ceiling' ? 'Soffitto'
-          : surface.kind === 'door' ? 'Porta'
+          : surface.kind === 'door' ? (isArchedDoorway ? 'Arco' : 'Porta')
             : surface.kind === 'window' ? 'Finestra'
               : 'Superficie';
     const repeatedKind = validated.filter((candidate) => candidate.kind === surface.kind).length > 1;
