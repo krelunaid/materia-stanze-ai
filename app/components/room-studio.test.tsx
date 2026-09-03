@@ -695,6 +695,20 @@ describe('RoomStudio', () => {
     expect(screen.getByRole('button', { name: 'Crea render reale con IA' })).toBeInTheDocument();
   });
 
+  it('offers enlarge and save controls when the render is ready', async () => {
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    fireEvent.click(screen.getByRole('button', { name: /Render$/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prova flusso render' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Crea render reale con IA' }));
+
+    expect(await screen.findByRole('button', { name: '⛶ Ingrandisci' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '↓ Salva render' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '⛶ Ingrandisci' }));
+    expect(screen.getByRole('dialog', { name: 'Render Materia' })).toBeInTheDocument();
+    expect(screen.getByAltText('Render Materia ingrandito')).toBeInTheDocument();
+  });
+
   it('does not enter Render while a furniture photo still needs a floor position', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));

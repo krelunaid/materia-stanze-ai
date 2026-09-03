@@ -102,6 +102,10 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .before-after-toggle { position:absolute; z-index:5; top:10px; right:10px; display:flex; gap:3px; padding:3px; border-radius:10px; background:rgba(255,255,255,.9); box-shadow:0 4px 16px rgba(15,35,30,.16); backdrop-filter:blur(8px); }
 .before-after-toggle button { min-height:30px; padding:0 10px; border:0; border-radius:7px; background:transparent; color:#5f6b67; font-size:9px; font-weight:750; cursor:pointer; }
 .before-after-toggle button.is-active { background:var(--accent); color:#fff; }
+.render-output-actions { position:absolute; z-index:6; right:10px; bottom:10px; display:flex; gap:6px; padding:4px; border-radius:11px; background:rgba(255,255,255,.92); box-shadow:0 5px 18px rgba(15,35,30,.18); backdrop-filter:blur(8px); }
+.render-output-actions button { min-height:36px; padding:0 12px; border:1px solid #cddbd6; border-radius:8px; background:#fff; color:var(--ink); font-size:10px; font-weight:800; cursor:pointer; }
+.render-output-actions .save-render-button { border-color:var(--accent); background:var(--accent); color:#fff; }
+.render-output-actions button:disabled { cursor:wait; opacity:.65; }
 .empty-room-button { background:var(--ink)!important; color:#fff!important; }
 .empty-room-choice { display:flex; align-items:center; justify-content:space-between; gap:14px; margin:12px 18px 0; padding:12px 14px; border:1px solid #cfe1db; border-radius:13px; background:#f1f8f5; box-shadow:0 4px 14px rgba(25,41,36,.05); }
 .empty-room-choice > div { display:grid; gap:3px; min-width:0; }
@@ -411,7 +415,7 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 
 /* Assistente contestuale: racconta lo stato reale dell'IA senza coprire i comandi. */
 .materia-assistant { position:fixed; z-index:44; right:max(18px,env(safe-area-inset-right)); bottom:max(18px,env(safe-area-inset-bottom)); display:flex; align-items:flex-end; gap:10px; max-width:min(390px,calc(100vw - 30px)); pointer-events:none; }
-.materia-assistant-character { position:relative; width:88px; height:96px; flex:0 0 auto; filter:drop-shadow(0 12px 18px rgba(16,37,34,.24)); }
+.materia-assistant-character { position:relative; width:100px; height:109px; flex:0 0 auto; filter:drop-shadow(0 12px 18px rgba(16,37,34,.24)); }
 .materia-assistant-character img { width:100%; height:100%; object-fit:contain; }
 .materia-assistant-bubble { display:grid; gap:3px; max-width:270px; padding:12px 14px; border:1px solid rgba(31,118,108,.2); border-radius:16px 16px 4px 16px; background:rgba(255,255,255,.96); color:var(--ink); box-shadow:0 12px 34px rgba(16,37,34,.18); backdrop-filter:blur(10px); }
 .materia-assistant-bubble strong { font-size:14px; line-height:1.2; }
@@ -429,6 +433,13 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .advanced-geometry-tools .opening-draw-button { display:block; min-height:44px; }
 .status-bar>.opening-draw-button { display:none; }
 .render-modal-card { position:relative; width:min(540px,100%); padding:29px; border-radius:20px; background:#fff; box-shadow:0 28px 80px rgba(0,0,0,.28); }
+.render-preview-modal { z-index:110; }
+.render-preview-card { position:relative; display:grid; gap:12px; width:min(1180px,96vw); max-height:94vh; padding:16px; border-radius:20px; background:#fff; box-shadow:0 28px 80px rgba(0,0,0,.32); }
+.render-preview-card>img { display:block; width:100%; max-height:calc(94vh - 88px); border-radius:12px; background:#eef2ef; object-fit:contain; }
+.render-preview-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:44px; padding:0 4px; }
+.render-preview-footer strong { font-size:16px; }
+.render-preview-footer button { min-height:40px; padding:0 16px; border:0; border-radius:10px; background:var(--accent); color:#fff; font-size:11px; font-weight:800; cursor:pointer; }
+.render-preview-footer button:disabled { cursor:wait; opacity:.65; }
 .render-modal-card h2 { margin:5px 0 20px; font-size:27px; letter-spacing:-.04em; }
 .modal-close { position:absolute; top:13px; right:14px; width:34px; height:34px; border:0; border-radius:50%; background:#eff2ef; font-size:20px; cursor:pointer; }
 .render-checks { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
@@ -536,11 +547,16 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
   .geometry-fallback-warning { align-items:stretch; flex-direction:column; margin:8px; }
   .geometry-fallback-warning button { width:100%; min-height:48px; }
   .materia-assistant { right:max(8px,env(safe-area-inset-right)); bottom:max(82px,calc(68px + env(safe-area-inset-bottom))); gap:6px; max-width:calc(100vw - 16px); }
-  .materia-assistant-character { width:54px; height:62px; }
+  .materia-assistant-character { width:62px; height:71px; }
   .materia-assistant-bubble { max-width:190px; padding:9px 11px; }
   .materia-assistant-bubble strong { font-size:12px; }
   .materia-assistant-bubble span { font-size:10px; }
   .materia-assistant:not(.is-working) .materia-assistant-bubble span { display:none; }
+  .render-output-actions { right:7px; bottom:7px; }
+  .render-output-actions button { min-height:38px; padding:0 10px; }
+  .render-preview-card { width:calc(100vw - 16px); padding:10px; border-radius:15px; }
+  .render-preview-footer { align-items:stretch; flex-direction:column; }
+  .render-preview-footer button { width:100%; }
   .advanced-geometry-tools>div { grid-template-columns:1fr; }
 }
 

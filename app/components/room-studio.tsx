@@ -881,6 +881,7 @@ export function RoomStudio() {
   const [customRequests, setCustomRequests] = useState<string[]>([]);
   const [customColor, setCustomColor] = useState('#c8b9a6');
   const [renderSummaryOpen, setRenderSummaryOpen] = useState(false);
+  const [renderPreviewOpen, setRenderPreviewOpen] = useState(false);
   const [activeStep, setActiveStep] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -898,6 +899,7 @@ export function RoomStudio() {
   const [isPreparingFurniture, setIsPreparingFurniture] = useState(false);
   const [isApplyingProduct, setIsApplyingProduct] = useState(false);
   const [isRendering, setIsRendering] = useState(false);
+  const [isSavingRender, setIsSavingRender] = useState(false);
   const [aiStatus, setAiStatus] = useState<AiStatus>('checking');
   const [aiProviderLabel, setAiProviderLabel] = useState<string | null>(null);
   const [aiServiceLabels, setAiServiceLabels] = useState<string[]>([]);
@@ -1671,14 +1673,23 @@ export function RoomStudio() {
     importMaterial(event.currentTarget.files?.[0]); event.currentTarget.value = '';
   }
 
-  function applyMaterial() {
-    if (!selected || !material || selected.frozen) return;
+  async function applyMaterial() {
+    if (!selected || !material || selected.frozen || isApplyingProduct || isRendering) return;
     if (requiresVerifiedSurfaceSample(material)) {
       setError('Questa pagina contiene foto ambientate, non una texture pulita. Carica un campione JPG o PNG prima di applicare il prodotto.');
       return;
     }
-    commitSurfaces(surfaces.map((surface) => surface.id === selected.id ? { ...surface, materialId: material.id } : surface));
-    setNotice(`${material.name} applicato a ${selected.name}. L’originale resta visibile fuori dal contorno.`);
+    setIsApplyingProduct(true); setError(null);
+    const updatedSurfaces = surfaces.map((surface) => surface.id === selected.id ? { ...surface, materialId: material.id } : surface);
+    commitSurfaces(updatedSurfaces);
+    setNotice(`${material.name} applicato a ${selected.name}. Ora preparo il render…`);
+    try {
+      await new Promise((resolve) => window.setTimeout(resolve, 450));
+      setIsApplyingProduct(false);
+      await createFinalRender(updatedSurfaces, material);
+    } finally {
+      setIsApplyingProduct(false);
+    }
   }
 
   function endpoint(path: string) {
@@ -2538,7 +2549,7 @@ export function RoomStudio() {
   }
 
   async function applyMaterialAutomatically(chosenMaterial: StudioMaterial | null = material) {
-    if (!chosenMaterial || !room?.previewUrl || isApplyingProduct) return;
+    if (!chosenMaterial || !room?.previewUrl || isApplyingProduct || isRendering) return;
     setMaterial(chosenMaterial);
     if (chosenMaterial.category === 'Arredi') {
       startFurniturePlacement(chosenMaterial.name, chosenMaterial.previewUrl, chosenMaterial.description);
@@ -2559,8 +2570,13 @@ export function RoomStudio() {
     }
 
     if (!chosenMaterial.sourceUrl) {
-      commitSurfaces(surfaces.map((surface) => surface.id === target.id ? { ...surface, materialId: chosenMaterial.id } : surface));
-      setNotice(`${chosenMaterial.name} applicato automaticamente a ${target.name}. Le zone bloccate non sono state toccate.`);
+      setIsApplyingProduct(true);
+      const updatedSurfaces = surfaces.map((surface) => surface.id === target.id ? { ...surface, materialId: chosenMaterial.id } : surface);
+      commitSurfaces(updatedSurfaces);
+      setNotice(`${chosenMaterial.name} applicato a ${target.name}. Ora preparo il render…`);
+      await new Promise((resolve) => window.setTimeout(resolve, 450));
+      setIsApplyingProduct(false);
+      await createFinalRender(updatedSurfaces, chosenMaterial);
       return;
     }
 
@@ -2601,7 +2617,9 @@ export function RoomStudio() {
       commitSurfaces(updatedSurfaces);
       processedSurfacesRef.current = updatedSurfaces;
       setProcessedPreview(protectedPreview); setProcessedLabel(chosenMaterial.name); setShowProcessedPreview(true);
-      setNotice(`${chosenMaterial.name} adattato a ${target.name} usando il campione visivo. Fuori dal contorno restano i pixel originali.`);
+      setNotice(`${chosenMaterial.name} applicato a ${target.name}. Ora creo il render finale.`);
+      setIsApplyingProduct(false);
+      await createFinalRender(updatedSurfaces, chosenMaterial, protectedPreview);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Non sono riuscito ad applicare il prodotto.'); setNotice(null);
     } finally { setIsApplyingProduct(false); }
@@ -3461,7 +3479,11 @@ export function RoomStudio() {
     setActiveStep(3);
   }
 
-  async function createFinalRender() {
+  async function createFinalRender(
+    renderSurfaces: Surface[] = surfaces,
+    renderMaterial: StudioMaterial | null = material,
+    sourceOverride?: string,
+  ) {
     if (!room?.previewUrl || room.sourceType !== 'photo' || isRendering) return;
     if (isClassifyingProduct) {
       setActiveStep(3); setRenderSummaryOpen(false);
@@ -3476,14 +3498,14 @@ export function RoomStudio() {
       window.requestAnimationFrame(() => canvasRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }));
       return;
     }
-    const frozenSurfaces = surfaces.filter((surface) => surface.frozen);
-    const sourceUrl = showProcessedPreview && processedPreview ? processedPreview : room.previewUrl;
-    const editableMaterialSurfaces = surfaces.filter((surface) => surface.materialId && !surface.frozen);
-    const protectedSurfaces = surfaces.filter((surface) => surface.frozen
+    const frozenSurfaces = renderSurfaces.filter((surface) => surface.frozen);
+    const sourceUrl = sourceOverride ?? (showProcessedPreview && processedPreview ? processedPreview : room.previewUrl);
+    const editableMaterialSurfaces = renderSurfaces.filter((surface) => surface.materialId && !surface.frozen);
+    const protectedSurfaces = renderSurfaces.filter((surface) => surface.frozen
       || ((surface.kind === 'door' || surface.kind === 'window') && !surface.materialId)
       || (surface.kind === 'ceiling' && !surface.materialId));
-    const materialAssignments = surfaces.filter((surface) => surface.materialId).map((surface) => {
-      const assigned = materialMap.get(surface.materialId!);
+    const materialAssignments = renderSurfaces.filter((surface) => surface.materialId).map((surface) => {
+      const assigned = surface.materialId === renderMaterial?.id ? renderMaterial : materialMap.get(surface.materialId!);
       return `${surface.name}: ${assigned?.brand ? `${assigned.brand} ` : ''}${assigned?.name ?? 'materiale scelto'} (${assigned?.description ?? 'mantieni il campione selezionato'}; ${assigned ? materialReferenceLabel(assigned) : 'riferimento non disponibile'})`;
     });
     const furnitureAssignments = placedFurniture.map((item) => [
@@ -3500,7 +3522,7 @@ export function RoomStudio() {
     setNotice('Grok modifica solo prodotti e mobili. Geometria, aperture e resto della foto sono bloccati pixel per pixel.');
     try {
       if (!editableMaterialSurfaces.length && !placedFurniture.length) {
-        processedSurfacesRef.current = surfaces;
+        processedSurfacesRef.current = renderSurfaces;
         setProcessedPreview(sourceUrl); setProcessedLabel('Render controllato'); setShowProcessedPreview(true); setActiveStep(4);
         setNotice('Nessuna modifica visiva richiesta: la fotografia è rimasta identica e non è stata inviata all’IA.');
         return;
@@ -3539,9 +3561,9 @@ export function RoomStudio() {
         furnitureReferenceFilename = originalFurnitureReference.name;
       }
 
-      const referenceUrl = material?.textureUrl;
+      const referenceUrl = renderMaterial?.textureUrl;
       const uploadedMaterialReference = materialAssignments.length
-        && material?.referenceKind === 'uploaded-sample'
+        && renderMaterial?.referenceKind === 'uploaded-sample'
         && materialSampleRef.current
         ? materialSampleRef.current
         : null;
@@ -3550,7 +3572,7 @@ export function RoomStudio() {
       } else if (referenceUrl && materialAssignments.length) {
         form.append('imageUrl', referenceUrl);
       }
-      if (materialAssignments.length) form.append('referenceType', material?.referenceKind ?? 'metadata-only');
+      if (materialAssignments.length) form.append('referenceType', renderMaterial?.referenceKind ?? 'metadata-only');
       if (furnitureReference) {
         form.append('furnitureReference', furnitureReference, furnitureReferenceFilename);
         form.append('furnitureReferenceName', furnitureReferenceName);
@@ -3559,11 +3581,11 @@ export function RoomStudio() {
         const combinedReference = await createCombinedRenderReference(
           uploadedMaterialReference,
           furnitureReference,
-          material?.name ?? 'campione scelto',
+          renderMaterial?.name ?? 'campione scelto',
           furnitureReferenceName || 'mobile scelto',
         );
         form.append('combinedReference', combinedReference, 'riferimenti-materiale-mobile.png');
-        form.append('combinedReferenceMaterialName', material?.name ?? 'campione scelto');
+        form.append('combinedReferenceMaterialName', renderMaterial?.name ?? 'campione scelto');
       }
       const furnitureWithRemotePhoto = placedFurniture.find((item) => item.previewUrl?.startsWith('http'));
       if (!furnitureReference && furnitureWithRemotePhoto?.previewUrl) {
@@ -3582,7 +3604,7 @@ export function RoomStudio() {
         protectedSurfaces,
         sourceUrl,
       });
-      processedSurfacesRef.current = surfaces;
+      processedSurfacesRef.current = renderSurfaces;
       setProcessedPreview(protectedPreview); setProcessedLabel('Render controllato'); setShowProcessedPreview(true);
       setActiveStep(4);
       setNotice(placedFurniture.length
@@ -3593,6 +3615,47 @@ export function RoomStudio() {
       setNotice(null);
     } finally {
       setIsRendering(false);
+    }
+  }
+
+  function openRenderPreview() {
+    if (!processedPreview) return;
+    setRenderPreviewOpen(true);
+    setNotice('Render ingrandito. Chiudilo per tornare alle modifiche.');
+  }
+
+  async function saveRender() {
+    if (!processedPreview || isSavingRender) return;
+    setIsSavingRender(true); setError(null);
+    setNotice('Preparo il file del render…');
+    try {
+      const response = await fetch(processedPreview);
+      if (!response.ok) throw new Error('Non riesco a preparare il file del render.');
+      const blob = await response.blob();
+      const extension = blob.type.includes('png') ? 'png' : 'jpg';
+      const file = new File([blob], `materia-render-${new Date().toISOString().slice(0, 10)}.${extension}`, { type: blob.type || 'image/jpeg' });
+      const canShareFile = typeof navigator.share === 'function'
+        && (typeof navigator.canShare !== 'function' || navigator.canShare({ files: [file] }));
+      if (canShareFile) {
+        await navigator.share({ files: [file], title: 'Render Materia' });
+        setNotice('Render pronto. Dal menu puoi scegliere “Salva immagine” o condividerlo.');
+      } else {
+        const downloadUrl = URL.createObjectURL(file);
+        const anchor = document.createElement('a');
+        anchor.href = downloadUrl; anchor.download = file.name;
+        document.body.appendChild(anchor); anchor.click(); anchor.remove();
+        window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+        setNotice('Render salvato nei download.');
+      }
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === 'AbortError') {
+        setNotice('Salvataggio annullato. Il render resta disponibile.');
+      } else {
+        setError(caught instanceof Error ? caught.message : 'Non sono riuscito a salvare il render.');
+        setNotice(null);
+      }
+    } finally {
+      setIsSavingRender(false);
     }
   }
 
@@ -3752,13 +3815,17 @@ export function RoomStudio() {
                       ? { working: true, title: 'Applico il materiale', detail: 'Seguo la superficie che hai scelto.' }
                       : isRendering
                         ? { working: true, title: 'Creo il render', detail: 'Controllo posizione, scala e zone protette.' }
+                        : isSavingRender
+                          ? { working: true, title: 'Preparo il salvataggio', detail: 'Creo il file del render senza modificare l’originale.' }
                         : activeStep === 1
                           ? { working: false, title: 'Iniziamo dalla foto', detail: 'Scattala oppure sceglila dalla libreria.' }
                           : activeStep === 2
                             ? { working: false, title: geometrySaved ? 'Linee salvate' : surfaces.length ? 'Riconoscimento completato' : 'Controlla solo se serve', detail: geometrySaved ? `Ho salvato: ${recognizedStructure}. Userò queste aree per pulizia e prodotti.` : surfaces.length ? `Ho trovato: ${recognizedStructure}. Le linee colorate mostrano le aree che userò.` : 'Se i bordi sono giusti, puoi continuare.' }
                             : activeStep === 3
                               ? { working: false, title: 'Scegli un prodotto', detail: 'Poi tocca la superficie dove applicarlo.' }
-                              : { working: false, title: 'Pronto per il risultato', detail: 'Controlla il riepilogo e crea il render.' };
+                              : processedPreview && processedLabel === 'Render controllato'
+                                ? { working: false, title: 'Render pronto', detail: 'Puoi ingrandirlo oppure salvarlo.' }
+                                : { working: false, title: 'Pronto per il risultato', detail: 'Controlla il riepilogo e crea il render.' };
 
   return (
     <main ref={shellRef} className={`app-shell simple-mode step-${activeStep} ${(activeStep === 2 && (drawKind || selected)) || (activeStep === 3 && isCorrectingEdges && selected) ? 'has-mobile-surface-actions' : ''}`}>
@@ -3884,6 +3951,7 @@ export function RoomStudio() {
               <div className="import-status"><span className="status-dot" /><div><strong>{showProcessedPreview ? processedLabel : 'Originale intatto'}</strong><small>{showProcessedPreview ? 'Elaborazione IA · originale sempre disponibile' : importedCaption}</small></div></div>
               <button className="replace-button" type="button" onClick={() => roomInputRef.current?.click()}>↑ Carica la tua foto</button>
               {processedPreview && <div className="before-after-toggle" aria-label="Confronta originale e risultato"><button type="button" className={!showProcessedPreview ? 'is-active' : ''} onClick={showOriginalRoom}>Originale</button><button type="button" className={showProcessedPreview ? 'is-active' : ''} onClick={showProcessedRoom}>{processedLabel}</button></div>}
+              {activeStep === 4 && processedPreview && showProcessedPreview && <div className="render-output-actions" aria-label="Azioni render"><button type="button" onClick={openRenderPreview}>⛶ Ingrandisci</button><button className="save-render-button" type="button" onClick={() => void saveRender()} disabled={isSavingRender}>{isSavingRender ? 'Preparo…' : '↓ Salva render'}</button></div>}
             </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Inizia da ciò che hai</p><h1>Cosa vuoi caricare?</h1><p>Scegli una foto della stanza oppure una planimetria. L’originale resterà sempre intatto.</p><div className="source-actions"><label className="source-card is-primary" htmlFor="room-file"><span>▣</span><strong>Libreria foto</strong><small>Scegli una foto già presente su iPhone o iPad</small></label><label className="source-card" htmlFor="camera-file"><span>●</span><strong>Scatta foto</strong><small>Usa direttamente la fotocamera posteriore</small></label><label className="source-card" htmlFor="floorplan-file"><span>⌗</span><strong>Planimetria</strong><small>Crea automaticamente la stanza vuota</small></label></div>{localCleaningTestAvailable && <button className="demo-button" type="button" onClick={() => void loadLocalCleaningTest()}>Apri questa prova dentro Materia</button>}<button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>JPG, PNG, WEBP o HEIC · massimo 20 MB</small></div></>}
             {isDraggingFile && <div className="drop-overlay"><strong>Rilascia per importare</strong><span>La foto resterà nel browser.</span></div>}
             {(isImportingRoom || isCreatingFloorplanRoom) && <div className="processing-overlay" role="status"><img className="processing-mascot" src="/materia-assistant.png" alt="Assistente Materia al lavoro" /><strong>{isCreatingFloorplanRoom ? 'Creo la stanza dalla planimetria…' : 'Preparo la foto…'}</strong><small>{isCreatingFloorplanRoom ? 'Riconosco pareti, porte e finestre. Può richiedere circa un minuto.' : 'Le immagini grandi vengono ottimizzate senza modificare l’originale.'}</small></div>}
@@ -3927,14 +3995,14 @@ export function RoomStudio() {
               <label className="free-search-label"><span>Link prodotto facoltativo · ricerca più veloce</span><input className="material-search" type="url" inputMode="url" aria-label="Link prodotto" value={searchSourceUrl} onChange={(event) => setSearchSourceUrl(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchProductsOnline(); }} placeholder="https://sito-produttore.it/prodotto" /></label>
               <div className="guided-search-actions"><button type="button" className="reset-search-button" onClick={resetProductSearch}>Azzera</button><button type="button" className="guided-search-button" onClick={() => void searchProductsOnline()} disabled={isSearchingProducts}>{isSearchingProducts ? 'Cerco nei cataloghi…' : `Cerca con ${aiProviderLabel ?? 'IA'}`}</button></div>
               <div className="search-scope"><span>Materiali</span><span>Colori</span><span>Arredi</span><span className="internet-ready">Prodotti reali con fonte</span></div>
-              {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => { const missingFurnitureImage = item.category === 'Arredi' && !item.previewUrl; const needsSurfaceSample = requiresVerifiedSurfaceSample(item); const target = recommendedSurface(item); return <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={`Riferimento ${item.name}`} /> : <span className="catalog-swatch tile" /> }<button className="online-product-info" type="button" onClick={() => void chooseOnlineProduct(item)} disabled={missingFurnitureImage} title={missingFurnitureImage ? 'Serve una foto prodotto prima di inserire questo mobile' : undefined}><strong>{item.brand} · {item.name}</strong><span className={`reference-badge reference-${item.referenceKind ?? 'metadata-only'}`}>{materialReferenceLabel(item)}</span><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a><button className="online-product-try" type="button" onClick={() => item.category === 'Arredi' ? void chooseOnlineProduct(item) : void applyMaterialAutomatically(item)} disabled={missingFurnitureImage || isApplyingProduct}>{item.category === 'Arredi' ? 'Inserisci nella stanza' : needsSurfaceSample ? 'Aggiungi campione per provarlo' : `Prova ora su ${target?.name ?? 'una superficie'}`}</button></div>; })}</div>}
+              {onlineMaterials.length > 0 && <div className="online-results"><strong>Risultati online</strong>{onlineMaterials.map((item) => { const missingFurnitureImage = item.category === 'Arredi' && !item.previewUrl; const needsSurfaceSample = requiresVerifiedSurfaceSample(item); const target = recommendedSurface(item); return <div className={`online-product ${material?.id === item.id ? 'is-selected' : ''}`} key={item.id}>{item.previewUrl ? <img src={item.previewUrl} alt={`Riferimento ${item.name}`} /> : <span className="catalog-swatch tile" /> }<button className="online-product-info" type="button" onClick={() => void chooseOnlineProduct(item)} disabled={missingFurnitureImage} title={missingFurnitureImage ? 'Serve una foto prodotto prima di inserire questo mobile' : undefined}><strong>{item.brand} · {item.name}</strong><span className={`reference-badge reference-${item.referenceKind ?? 'metadata-only'}`}>{materialReferenceLabel(item)}</span><small>{item.description}</small></button><a href={item.sourceUrl} target="_blank" rel="noreferrer">Fonte</a><button className="online-product-try" type="button" onClick={() => item.category === 'Arredi' ? void chooseOnlineProduct(item) : void applyMaterialAutomatically(item)} disabled={missingFurnitureImage || isApplyingProduct || isRendering}>{item.category === 'Arredi' ? 'Inserisci nella stanza' : isRendering ? 'Creo il render…' : needsSurfaceSample ? 'Aggiungi campione per provarlo' : `Prova ora su ${target?.name ?? 'una superficie'}`}</button></div>; })}</div>}
               <div className="material-results">{filteredMaterials.length > 0 && <div className="included-results-heading"><strong>Esempi compatibili</strong><span>Seleziona per provarli subito nella stanza</span></div>}{filteredMaterials.map((item) => <button type="button" key={item.id} className={`material-result ${material?.id === item.id ? 'is-selected' : ''}`} onClick={() => chooseMaterial(item)}><span className={`catalog-swatch ${item.pattern ?? 'color'}`} style={{ '--swatch-color': item.color } as CSSProperties} /><span><strong>{item.name}</strong><small>{item.category} · {item.description}</small></span></button>)}{filteredFurniture.map((item) => <button type="button" key={item.name} className={`material-result furniture-result ${pendingFurniture?.name === item.name ? 'is-selected' : ''}`} onClick={() => startFurniturePlacement(item.name, item.previewUrl, item.description, undefined, item.previewUrl, item.sidePreviewUrl)}>{item.previewUrl ? <img className="furniture-result-preview" src={item.previewUrl} alt="" /> : <span className="furniture-icon">＋</span>}<span><strong>{item.name}</strong><small>Tocca e poi scegli il punto nella stanza · {item.description}</small></span></button>)}{filteredMaterials.length === 0 && filteredFurniture.length === 0 && onlineMaterials.length === 0 && <div className="custom-search-result"><p>Nessun campione incluso corrisponde. Per trovare marca e prodotto esatti serve la ricerca IA attiva.</p><button type="button" onClick={addCustomRequest}>Aggiungi “{materialQuery.trim()}” alla richiesta</button></div>}</div>
               <div className="custom-color"><input type="color" aria-label="Scegli colore personalizzato" value={customColor} onChange={(event) => setCustomColor(event.target.value)} /><button type="button" onClick={chooseCustomColor}>Usa questo colore</button></div>
               {!selectedFurniture && !pendingFurniture ? <>
                 {material && <div className="loaded-material">{material.previewUrl ? <img src={material.previewUrl} alt={`Campione ${material.name}`} /> : <span className="catalog-swatch tile" />}<div><strong>{material.name}</strong><small>{materialReferenceLabel(material)}</small></div></div>}
                 {materialNeedsSample && <div className="indicative-product-note"><div><strong>Serve un campione prima della prova.</strong><span>La fonte verifica il prodotto, ma non fornisce una texture applicabile. L’app non inventa il disegno dal solo nome.</span></div><button type="button" onClick={() => materialInputRef.current?.click()}>＋ Carica campione materiale</button></div>}
-                <button className="auto-apply-product-button" type="button" onClick={() => void applyMaterialAutomatically()} disabled={!material || isApplyingProduct}>{isApplyingProduct ? 'Adatto il prodotto alla stanza…' : materialNeedsSample ? 'Aggiungi campione per provarlo' : `Prova ora su ${materialTarget?.name ?? 'la superficie scelta'}`}</button>
-                <button className="apply-button secondary-apply" type="button" aria-label={`Applica a ${selected.name}`} onClick={applyMaterial} disabled={!material || selected.frozen || materialNeedsSample}>Oppure applica solo a {selected.name}</button>
+                <button className="auto-apply-product-button" type="button" onClick={() => void applyMaterialAutomatically()} disabled={!material || isApplyingProduct || isRendering}>{isRendering ? 'Creo il render…' : isApplyingProduct ? 'Applico il prodotto…' : materialNeedsSample ? 'Aggiungi campione per provarlo' : `Prova ora su ${materialTarget?.name ?? 'la superficie scelta'}`}</button>
+                <button className="apply-button secondary-apply" type="button" aria-label={`Applica a ${selected.name}`} onClick={() => void applyMaterial()} disabled={!material || selected.frozen || materialNeedsSample || isApplyingProduct || isRendering}>{isRendering ? 'Creo il render…' : isApplyingProduct ? `Applico a ${selected.name}…` : `Applica a ${selected.name} e crea render`}</button>
                 <p className="material-search-note">L’app sceglie pavimento o muro, corregge prospettiva e scala, e lascia identiche tutte le zone Freeze. La resa è fedele al prodotto solo quando compare “Texture ufficiale verificata” o usi un tuo campione.</p>
               </> : <div className="furniture-mode-note"><strong>Modalità mobile attiva</strong><span>I comandi di pavimento e rivestimento sono nascosti per evitare di applicare per errore la foto del mobile a un muro.</span></div>}
             </div>
@@ -3958,6 +4026,7 @@ export function RoomStudio() {
         <button className="finish-surface-action" type="button" onClick={toggleEdgeCorrection} aria-label={`Termina modifica di ${selected.name}`}><span aria-hidden="true">✓</span><small>Fine</small></button>
       </div>}
       {renderSummaryOpen && <div className="render-modal" role="dialog" aria-modal="true" aria-labelledby="render-summary-title"><div className="render-modal-card"><button className="modal-close" type="button" onClick={() => setRenderSummaryOpen(false)} aria-label="Chiudi riepilogo">×</button><p className="eyebrow">Richiesta pronta</p><h2 id="render-summary-title">Crea il render reale</h2><div className="render-checks"><div><span>Superfici con materiale</span><strong>{surfaces.filter((surface) => surface.materialId).length}</strong></div><div><span>Zone protette</span><strong>{surfaces.filter((surface) => surface.frozen).length}</strong></div><div><span>Mobili posizionati</span><strong>{placedFurniture.length}</strong></div></div><div className="render-list"><strong>Il motore riceverà:</strong><p>{surfaces.filter((surface) => surface.materialId).map((surface) => `${surface.name}: ${materialMap.get(surface.materialId!)?.name ?? 'materiale'}`).join(' · ') || 'Nessun materiale ancora applicato'}</p><p>{placedFurniture.length || customRequests.length ? `Da inserire: ${[...placedFurniture.map((item) => `${item.name} nel punto scelto`), ...customRequests].join(', ')}` : 'Nessun arredo aggiunto'}</p></div><div className="engine-warning"><span>AI</span><p><strong>{aiStatus === 'ready' ? `${aiProviderLabel ?? 'IA'} attiva` : 'L’app riproverà il collegamento'}</strong>L’IA riceve una maschera limitata a prodotti e mobili. Il resto della stanza, incluse aperture e Freeze, viene ricopiato pixel per pixel.</p></div><button className="modal-primary" type="button" onClick={() => void createFinalRender()} disabled={isRendering}>{isRendering ? 'Creo il render…' : 'Crea render reale con IA'}</button><button className="modal-secondary" type="button" onClick={() => setRenderSummaryOpen(false)}>Torna alle modifiche</button></div></div>}
+      {renderPreviewOpen && processedPreview && <div className="render-modal render-preview-modal" role="dialog" aria-modal="true" aria-labelledby="render-preview-title" onClick={() => setRenderPreviewOpen(false)}><div className="render-preview-card" onClick={(event) => event.stopPropagation()}><button className="modal-close" type="button" onClick={() => setRenderPreviewOpen(false)} aria-label="Chiudi render ingrandito">×</button><img src={processedPreview} alt="Render Materia ingrandito" /><div className="render-preview-footer"><strong id="render-preview-title">Render Materia</strong><button type="button" onClick={() => void saveRender()} disabled={isSavingRender}>{isSavingRender ? 'Preparo…' : '↓ Salva render'}</button></div></div></div>}
     </main>
   );
 }
