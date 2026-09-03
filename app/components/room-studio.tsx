@@ -3718,6 +3718,18 @@ export function RoomStudio() {
     ? aiServiceLabels.length >= 3 ? `${aiServiceLabels.length} IA attive` : `${aiProviderLabel ?? 'IA'} attiva`
     : aiStatus === 'checking' ? 'Verifica IA'
       : isLocalPreview() ? 'Anteprima locale · IA online' : 'IA non raggiungibile';
+  const recognizedWalls = surfaces.filter((surface) => surface.kind === 'wall').length;
+  const recognizedArches = surfaces.filter((surface) => surface.kind === 'door' && /arco/i.test(surface.name)).length;
+  const recognizedDoors = surfaces.filter((surface) => surface.kind === 'door' && !/arco/i.test(surface.name)).length;
+  const recognizedWindows = surfaces.filter((surface) => surface.kind === 'window').length;
+  const recognizedStructure = [
+    recognizedWalls ? `${recognizedWalls} ${recognizedWalls === 1 ? 'muro' : 'muri'}` : '',
+    surfaces.some((surface) => surface.kind === 'floor') ? 'pavimento' : '',
+    surfaces.some((surface) => surface.kind === 'ceiling') ? 'soffitto' : '',
+    recognizedDoors ? `${recognizedDoors} ${recognizedDoors === 1 ? 'porta' : 'porte'}` : '',
+    recognizedArches ? `${recognizedArches} ${recognizedArches === 1 ? 'arco' : 'archi'}` : '',
+    recognizedWindows ? `${recognizedWindows} ${recognizedWindows === 1 ? 'finestra' : 'finestre'}` : '',
+  ].filter(Boolean).join(', ');
   const assistantActivity = isImportingRoom
     ? { working: true, title: 'Preparo la foto', detail: 'La ottimizzo senza modificare l’originale.' }
     : isCreatingFloorplanRoom
@@ -3743,7 +3755,7 @@ export function RoomStudio() {
                         : activeStep === 1
                           ? { working: false, title: 'Iniziamo dalla foto', detail: 'Scattala oppure sceglila dalla libreria.' }
                           : activeStep === 2
-                            ? { working: false, title: geometrySaved ? 'Linee salvate' : 'Controlla solo se serve', detail: geometrySaved ? 'La struttura non si muoverà per errore.' : 'Se i bordi sono giusti, puoi continuare.' }
+                            ? { working: false, title: geometrySaved ? 'Linee salvate' : surfaces.length ? 'Riconoscimento completato' : 'Controlla solo se serve', detail: geometrySaved ? `Ho salvato: ${recognizedStructure}. Userò queste aree per pulizia e prodotti.` : surfaces.length ? `Ho trovato: ${recognizedStructure}. Le linee colorate mostrano le aree che userò.` : 'Se i bordi sono giusti, puoi continuare.' }
                             : activeStep === 3
                               ? { working: false, title: 'Scegli un prodotto', detail: 'Poi tocca la superficie dove applicarlo.' }
                               : { working: false, title: 'Pronto per il risultato', detail: 'Controlla il riepilogo e crea il render.' };

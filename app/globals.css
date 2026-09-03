@@ -535,10 +535,11 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
   .geometry-fallback-warning { align-items:stretch; flex-direction:column; margin:8px; }
   .geometry-fallback-warning button { width:100%; min-height:48px; }
   .materia-assistant { right:max(8px,env(safe-area-inset-right)); bottom:max(82px,calc(68px + env(safe-area-inset-bottom))); gap:6px; max-width:calc(100vw - 16px); }
-  .materia-assistant img { width:66px; height:74px; }
-  .materia-assistant-bubble { max-width:220px; padding:10px 12px; }
-  .materia-assistant-bubble strong { font-size:13px; }
-  .materia-assistant-bubble span { font-size:11px; }
+  .materia-assistant img { width:54px; height:62px; }
+  .materia-assistant-bubble { max-width:190px; padding:9px 11px; }
+  .materia-assistant-bubble strong { font-size:12px; }
+  .materia-assistant-bubble span { font-size:10px; }
+  .materia-assistant:not(.is-working) .materia-assistant-bubble span { display:none; }
   .advanced-geometry-tools>div { grid-template-columns:1fr; }
 }
 
