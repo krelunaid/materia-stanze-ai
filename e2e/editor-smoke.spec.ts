@@ -17,6 +17,16 @@ test('exposes the projects route', async ({ page }) => {
   await page.goto('/projects');
   await expect(page.getByRole('heading', { name: 'Progetti' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Crea nuovo progetto' })).toBeVisible();
+  await expect(page.getByText(/app TestFlight/)).toBeVisible();
+  await expect(page.getByText('Aggiungi alla schermata Home')).toHaveCount(0);
+});
+
+test('opens local projects from the editor without leaving the page', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('main.app-shell')).toHaveAttribute('data-hydrated', 'true');
+  await page.getByRole('link', { name: 'Vai ai progetti' }).click();
+  await expect(page.getByRole('dialog', { name: 'Progetti' })).toBeVisible();
+  await expect(page).toHaveURL(/\/$/);
 });
 
 test('keeps iPhone form controls at a non-zooming size', async ({ page }) => {
@@ -50,8 +60,8 @@ test('places, resizes and locks furniture at a chosen room point', async ({ page
   if (!box) throw new Error('Anteprima stanza non disponibile');
   await canvas.click({ position: { x: box.width * .62, y: box.height * .78 } });
 
-  await expect(page.getByRole('button', { name: 'Sposta Divano chiaro' })).toBeVisible();
-  await page.getByRole('button', { name: 'Ingrandisci mobile' }).click();
-  await page.getByRole('button', { name: '◆ Blocca posizione' }).click();
-  await expect(page.getByText('Posizione bloccata')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sposta Divano chiaro', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Ingrandisci Divano chiaro' }).click();
+  await page.getByRole('button', { name: 'Blocca Divano chiaro' }).click();
+  await expect(page.getByRole('button', { name: 'Sblocca Divano chiaro' })).toBeVisible();
 });

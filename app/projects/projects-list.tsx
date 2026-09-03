@@ -13,7 +13,12 @@ function formatWhen(stamp: number) {
   }
 }
 
-export function ProjectsList() {
+type ProjectsListProps = {
+  onOpenProject?: (id: string) => void;
+  onOpenEditor?: () => void;
+};
+
+export function ProjectsList({ onOpenProject, onOpenEditor }: ProjectsListProps) {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
 
   useEffect(() => {
@@ -32,7 +37,9 @@ export function ProjectsList() {
         <div className="new-project-icon" aria-hidden="true">+</div>
         <h2>Nessun progetto salvato</h2>
         <p>I contorni approvati restano in questo browser dopo Foto → Prepara.</p>
-        <a href="/">Apri l’editor <span aria-hidden="true">→</span></a>
+        {onOpenEditor
+          ? <button type="button" className="projects-inline-link" onClick={onOpenEditor}>Apri l’editor <span aria-hidden="true">→</span></button>
+          : <a href="/">Apri l’editor <span aria-hidden="true">→</span></a>}
       </article>
     );
   }
@@ -45,7 +52,9 @@ export function ProjectsList() {
             <span className="phase-pill">Locale</span>
             <h2>{project.title}</h2>
             <p>{project.fileName} · {formatWhen(project.updatedAt)}</p>
-            <a href={`/?project=${encodeURIComponent(project.id)}`}>Continua <span aria-hidden="true">→</span></a>
+            {onOpenProject
+              ? <button type="button" className="projects-inline-link" onClick={() => onOpenProject(project.id)}>Continua <span aria-hidden="true">→</span></button>
+              : <a href={`/?project=${encodeURIComponent(project.id)}`}>Continua <span aria-hidden="true">→</span></a>}
           </div>
         </article>
       ))}

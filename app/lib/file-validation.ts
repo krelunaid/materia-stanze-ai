@@ -31,6 +31,11 @@ export function deriveProjectName(fileName: string) {
   return readable.charAt(0).toUpperCase() + readable.slice(1);
 }
 
+export function isAcceptedRasterImage(file: File) {
+  if (allowedMimeTypes.has(file.type)) return true;
+  return file.type === '' && allowedFallbackExtensions.has(extensionOf(file.name));
+}
+
 export function validateRoomFile(file: File): RoomFileValidation {
   const extension = extensionOf(file.name);
   const recognizedType = allowedMimeTypes.has(file.type);

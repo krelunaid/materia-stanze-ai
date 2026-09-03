@@ -2,6 +2,14 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { friendlyRequestError, mergeDetectedSurfaces, RoomStudio } from './room-studio';
 import { geometryForDerivedImage, surfacesMatch } from '../geometry/model';
+import { buildStoredProject, resetMemoryProjectStore, saveProject } from '../geometry/project-store';
+import { pickPhotoOrFallbackToInput } from '../lib/native-photo-picker';
+import { PROJECTS_FOOTER_COPY } from '../projects/projects-screen';
+
+vi.mock('../lib/native-photo-picker', async () => {
+  const actual = await vi.importActual<typeof import('../lib/native-photo-picker')>('../lib/native-photo-picker');
+  return { ...actual, pickPhotoOrFallbackToInput: vi.fn(actual.pickPhotoOrFallbackToInput) };
+});
 
 beforeAll(() => {
   URL.createObjectURL = vi.fn(() => 'blob:room-preview');
@@ -11,6 +19,8 @@ beforeAll(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  resetMemoryProjectStore();
+  window.history.replaceState(null, '', '/');
 });
 
 function mockMaterialPhotoCrop() {
@@ -1240,5 +1250,61 @@ describe('RoomStudio', () => {
     expect(screen.getByRole('button', { name: /Prepara/ })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
     expect(screen.getByRole('button', { name: /Prepara/ })).toBeEnabled();
+  });
+
+  it('opens local IndexedDB projects from the brand lockup instead of a dead /projects route', async () => {
+    resetMemoryProjectStore();
+    await saveProject(buildStoredProject({
+      id: 'soggiorno-1',
+      title: 'Soggiorno salvato',
+      sourceType: 'photo',
+      fileName: 'soggiorno.jpg',
+      mime: 'image/jpeg',
+      original: new Blob(['room'], { type: 'image/jpeg' }),
+      processed: null,
+      processedLabel: 'Stanza vuota',
+      surfaces: [{
+        id: 'floor', name: 'Pavimento', kind: 'floor', frozen: false,
+        points: [{ x: 0, y: .7 }, { x: 1, y: .7 }, { x: 1, y: 1 }, { x: 0, y: 1 }],
+      }],
+      originalSurfaces: [],
+      processedSurfaces: null,
+      source: 'manual',
+    }));
+
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('link', { name: 'Vai ai progetti' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Progetti' });
+    expect(dialog).toHaveTextContent(PROJECTS_FOOTER_COPY);
+    expect(within(dialog).getByRole('heading', { name: 'Soggiorno salvato' })).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /Continua/ }));
+    expect(await screen.findByText('Progetto ripristinato. I contorni approvati non sono stati ricalcolati.')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Progetti' })).not.toBeInTheDocument();
+    expect(screen.getByText('Soggiorno salvato')).toBeInTheDocument();
+  });
+
+  it('picks a room photo through the native helper and still accepts the file-input fallback', async () => {
+    const pick = vi.mocked(pickPhotoOrFallbackToInput);
+    pick.mockImplementation(async ({ onFile }) => {
+      onFile(new File(['room'], 'libreria.jpg', { type: 'image/jpeg' }));
+      return 'native';
+    });
+
+    window.history.replaceState(null, '', '/');
+    render(<RoomStudio />);
+    fireEvent.click(screen.getByRole('button', { name: /Libreria foto/ }));
+    expect(await screen.findByText('Libreria')).toBeInTheDocument();
+    expect(pick).toHaveBeenCalledWith(expect.objectContaining({ source: 'photos' }));
+
+    pick.mockImplementation(async ({ input }) => {
+      input?.click();
+      return 'fallback';
+    });
+    const clickSpy = vi.spyOn(HTMLInputElement.prototype, 'click');
+    fireEvent.click(screen.getByRole('button', { name: '↑ Carica la tua foto' }));
+    expect(pick).toHaveBeenCalledWith(expect.objectContaining({ source: 'photos' }));
+    expect(clickSpy).toHaveBeenCalled();
   });
 });

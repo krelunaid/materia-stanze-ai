@@ -10,7 +10,7 @@
     "build": "vinext build",
     "build:ios": "vite build --config vite.native.config.ts && cap sync ios",
     "start": "vinext start",
-    "lint": "eslint app e2e capacitor.config.ts next.config.ts eslint.config.mjs vitest.setup.ts vitest.config.ts vite.config.ts playwright.config.ts public/sw.js",
+    "lint": "eslint app e2e native capacitor.config.ts next.config.ts eslint.config.mjs vitest.setup.ts vitest.config.ts vite.config.ts vite.native.config.ts playwright.config.ts public/sw.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "baseline": "vitest run app/benchmark/baseline.test.ts --reporter=verbose",
@@ -20,6 +20,7 @@
     "ios:open": "cap open ios"
   },
   "dependencies": {
+    "@capacitor/camera": "^8.2.4",
     "@capacitor/core": "^8.5.0",
     "@capacitor/ios": "^8.5.0",
     "next": "16.2.6",

@@ -34,7 +34,9 @@ import {
   pointInCleanupTile,
   snapCleanupTileRect,
 } from '../lib/cleanup-tiles';
-import { AcceptedRoomFile, formatBytes, validateRoomFile } from '../lib/file-validation';
+import { AcceptedRoomFile, formatBytes, isAcceptedRasterImage, validateRoomFile } from '../lib/file-validation';
+import { pickPhotoOrFallbackToInput } from '../lib/native-photo-picker';
+import { ProjectsScreen } from '../projects/projects-screen';
 import { MaterialReferenceKind, requiresVerifiedSurfaceSample } from '../lib/material-reference';
 import { furnitureEditRect, hasCompatibleImageGeometry, rectPoints } from '../lib/render-geometry';
 import { NormalizedProductBounds, removeConnectedProductBackground } from '../lib/product-cutout';
@@ -906,6 +908,7 @@ export function RoomStudio() {
   const [processedPreview, setProcessedPreview] = useState<string | null>(null);
   const [processedLabel, setProcessedLabel] = useState('Stanza vuota');
   const [showProcessedPreview, setShowProcessedPreview] = useState(false);
+  const [showProjects, setShowProjects] = useState(false);
   const [localCleaningTestAvailable, setLocalCleaningTestAvailable] = useState(false);
   const [dragVertex, setDragVertex] = useState<DragVertex | null>(null);
   const [dragEdge, setDragEdge] = useState<DragEdge | null>(null);
@@ -1013,50 +1016,71 @@ export function RoomStudio() {
     return () => window.removeEventListener('resize', update);
   }, [room, activeStep]);
 
+  const restoreProject = useCallback(async (id: string) => {
+    skipAutosaveRef.current = true;
+    try {
+      const project = await loadProject(id);
+      if (!project) {
+        setError('Non sono riuscito a riaprire il progetto salvato in locale.');
+        return;
+      }
+      projectIdRef.current = project.id;
+      const previewUrl = URL.createObjectURL(project.original);
+      if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
+      roomBlobRef.current = previewUrl;
+      const file = new File([project.original], project.fileName, { type: project.mime || 'image/jpeg' });
+      setRoom({
+        file,
+        kind: 'image',
+        canPreview: true,
+        displaySize: formatBytes(project.original.size),
+        projectName: project.title,
+        previewUrl,
+        sourceType: project.sourceType,
+      });
+      originalSurfacesRef.current = project.originalSurfaces;
+      processedSurfacesRef.current = project.processedSurfaces;
+      setSurfaces(project.geometry.surfaces);
+      setPastSurfaces([]);
+      setFutureSurfaces([]);
+      const preferred = project.geometry.surfaces.find((surface) => surface.kind === 'floor')
+        ?? project.geometry.surfaces[0]
+        ?? null;
+      setSelectedId(preferred?.id ?? null);
+      setRenameDraft(preferred?.name ?? '');
+      if (project.processed) {
+        const processedUrl = URL.createObjectURL(project.processed);
+        if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
+        processedBlobRef.current = processedUrl;
+        setProcessedPreview(processedUrl);
+        setProcessedLabel(project.processedLabel);
+        setShowProcessedPreview(Boolean(project.processedSurfaces?.length));
+      }
+      autoFitPreviewRef.current = previewUrl;
+      setActiveStep(2);
+      setShowProjects(false);
+      setError(null);
+      setNotice('Progetto ripristinato. I contorni approvati non sono stati ricalcolati.');
+      const nextUrl = `?project=${encodeURIComponent(project.id)}`;
+      if (`${window.location.search}` !== nextUrl) {
+        window.history.replaceState(null, '', nextUrl);
+      }
+    } catch {
+      setError('Non sono riuscito a riaprire il progetto salvato in locale.');
+    } finally {
+      skipAutosaveRef.current = false;
+    }
+  }, []);
+
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const id = params.get('project');
+    const id = new URLSearchParams(window.location.search).get('project');
     if (!id) return;
     let cancelled = false;
     skipAutosaveRef.current = true;
     void loadProject(id)
       .then((project) => {
         if (cancelled || !project) return;
-        projectIdRef.current = project.id;
-        const previewUrl = URL.createObjectURL(project.original);
-        if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
-        roomBlobRef.current = previewUrl;
-        const file = new File([project.original], project.fileName, { type: project.mime || 'image/jpeg' });
-        setRoom({
-          file,
-          kind: 'image',
-          canPreview: true,
-          displaySize: formatBytes(project.original.size),
-          projectName: project.title,
-          previewUrl,
-          sourceType: project.sourceType,
-        });
-        originalSurfacesRef.current = project.originalSurfaces;
-        processedSurfacesRef.current = project.processedSurfaces;
-        setSurfaces(project.geometry.surfaces);
-        setPastSurfaces([]);
-        setFutureSurfaces([]);
-        const preferred = project.geometry.surfaces.find((surface) => surface.kind === 'floor')
-          ?? project.geometry.surfaces[0]
-          ?? null;
-        setSelectedId(preferred?.id ?? null);
-        setRenameDraft(preferred?.name ?? '');
-        if (project.processed) {
-          const processedUrl = URL.createObjectURL(project.processed);
-          if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
-          processedBlobRef.current = processedUrl;
-          setProcessedPreview(processedUrl);
-          setProcessedLabel(project.processedLabel);
-          setShowProcessedPreview(Boolean(project.processedSurfaces?.length));
-        }
-        autoFitPreviewRef.current = previewUrl;
-        setActiveStep(2);
-        setNotice('Progetto ripristinato. I contorni approvati non sono stati ricalcolati.');
+        return restoreProject(id);
       })
       .catch(() => {
         if (!cancelled) setError('Non sono riuscito a riaprire il progetto salvato in locale.');
@@ -1067,7 +1091,7 @@ export function RoomStudio() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [restoreProject]);
 
   useEffect(() => {
     if (!room || skipAutosaveRef.current || surfaces.length === 0) return;
@@ -1658,7 +1682,7 @@ export function RoomStudio() {
 
   function importMaterial(file?: File) {
     if (!file) return;
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { setError('Il campione materiale deve essere JPG, PNG o WEBP.'); return; }
+    if (!isAcceptedRasterImage(file)) { setError('Il campione materiale deve essere JPG, PNG, WEBP o HEIC.'); return; }
     if (file.size > 12 * 1024 * 1024) { setError('Il campione materiale supera il limite di 12 MB.'); return; }
     if (materialBlobRef.current) URL.revokeObjectURL(materialBlobRef.current);
     const previewUrl = URL.createObjectURL(file);
@@ -2565,7 +2589,7 @@ export function RoomStudio() {
 
     if (requiresVerifiedSurfaceSample(chosenMaterial)) {
       setNotice(`${chosenMaterial.name} è un prodotto verificato, ma la fonte non fornisce una texture applicabile. Carica un campione del materiale: non inventerò il disegno dal solo nome.`);
-      materialInputRef.current?.click();
+      pickMaterialPhoto();
       return;
     }
 
@@ -2678,7 +2702,7 @@ export function RoomStudio() {
 
   async function importFurniture(file?: File) {
     if (!file) return;
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { setError('La foto del mobile deve essere JPG, PNG o WEBP.'); return; }
+    if (!isAcceptedRasterImage(file)) { setError('La foto del mobile deve essere JPG, PNG, WEBP o HEIC.'); return; }
     if (file.size > 12 * 1024 * 1024) { setError('La foto prodotto supera il limite di 12 MB.'); return; }
     if (isClassifyingProduct) return;
     setIsClassifyingProduct(true); setError(null);
@@ -2764,6 +2788,43 @@ export function RoomStudio() {
   function onFurnitureInput(event: ChangeEvent<HTMLInputElement>) {
     void importFurniture(event.currentTarget.files?.[0]);
     event.currentTarget.value = '';
+  }
+
+  function pickRoomPhoto(source: 'photos' | 'camera' = 'photos') {
+    void pickPhotoOrFallbackToInput({
+      source,
+      input: source === 'camera' ? cameraInputRef.current : roomInputRef.current,
+      onFile: (file) => importRoom(file, 'photo'),
+    });
+  }
+
+  function pickFloorplanPhoto() {
+    void pickPhotoOrFallbackToInput({
+      source: 'photos',
+      input: floorplanInputRef.current,
+      onFile: (file) => importRoom(file, 'floorplan'),
+    });
+  }
+
+  function pickProductPhoto() {
+    void pickPhotoOrFallbackToInput({
+      source: 'photos',
+      input: furnitureInputRef.current,
+      onFile: (file) => void importFurniture(file),
+    });
+  }
+
+  function pickMaterialPhoto() {
+    void pickPhotoOrFallbackToInput({
+      source: 'photos',
+      input: materialInputRef.current,
+      onFile: importMaterial,
+    });
+  }
+
+  function openProjects(event: ReactMouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    setShowProjects(true);
   }
 
   function automaticFurnitureScale(name: string, description: string | undefined, x: number, y: number, measurement = roomMeasurement) {
@@ -3828,9 +3889,11 @@ export function RoomStudio() {
                                 : { working: false, title: 'Pronto per il risultato', detail: 'Controlla il riepilogo e crea il render.' };
 
   return (
+    <>
+    {showProjects && <div className="projects-overlay" role="dialog" aria-modal="true" aria-labelledby="projects-title"><ProjectsScreen onClose={() => setShowProjects(false)} onNewProject={() => { removeRoom(); setShowProjects(false); window.history.replaceState(null, '', window.location.pathname || '/'); }} onOpenProject={(id) => { void restoreProject(id); }} /></div>}
     <main ref={shellRef} className={`app-shell simple-mode step-${activeStep} ${(activeStep === 2 && (drawKind || selected)) || (activeStep === 3 && isCorrectingEdges && selected) ? 'has-mobile-surface-actions' : ''}`}>
       <header className="topbar">
-        <a href="/projects" className="brand-lockup" aria-label="Vai ai progetti"><div className="brand-mark" aria-hidden="true"><span /><span /></div><div><p className="eyebrow">Studio materiali</p><p className="brand-name">Materia</p></div></a>
+        <a href="/projects" className="brand-lockup" aria-label="Vai ai progetti" onClick={openProjects}><div className="brand-mark" aria-hidden="true"><span /><span /></div><div><p className="eyebrow">Studio materiali</p><p className="brand-name">Materia</p></div></a>
         <div className="project-heading"><span className="status-dot" /><div><p>{projectName}</p><span>{room ? `${room.sourceType === 'floorplan' ? 'Planimetria' : 'Foto'} · originale protetto` : 'Nuovo progetto locale'}</span></div></div>
         <div className="top-actions"><span className={`ai-status ${aiStatus}`} title={aiServicesDescription} aria-label={`${aiStatusLabel}: ${aiServicesDescription}`}><i />{aiStatusLabel}</span><button className="avatar" type="button" aria-label="Profilo locale">AG</button></div>
       </header>
@@ -3949,14 +4012,14 @@ export function RoomStudio() {
               })}</div>}
               {activeStep === 3 && pendingFurniture && <div className="placement-hint" role="status"><strong>Tocca il punto sul pavimento</strong><span>“{pendingFurniture.name}” verrà agganciato automaticamente al muro frontale.</span><div><button type="button" onClick={(event) => { event.stopPropagation(); setPendingFurniture(null); setError(null); setNotice('Sei tornato alla scelta dei prodotti.'); document.querySelector('.product-search-section')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }); }}>← Torna ai prodotti</button><button type="button" className="cancel-placement" aria-label="Annulla" onClick={(event) => { event.stopPropagation(); setPendingFurniture(null); setError(null); setNotice('Inserimento mobile annullato.'); }}>✕ Annulla</button></div></div>}
               <div className="import-status"><span className="status-dot" /><div><strong>{showProcessedPreview ? processedLabel : 'Originale intatto'}</strong><small>{showProcessedPreview ? 'Elaborazione IA · originale sempre disponibile' : importedCaption}</small></div></div>
-              <button className="replace-button" type="button" onClick={() => roomInputRef.current?.click()}>↑ Carica la tua foto</button>
+              <button className="replace-button" type="button" onClick={() => pickRoomPhoto('photos')}>↑ Carica la tua foto</button>
               {processedPreview && <div className="before-after-toggle" aria-label="Confronta originale e risultato"><button type="button" className={!showProcessedPreview ? 'is-active' : ''} onClick={showOriginalRoom}>Originale</button><button type="button" className={showProcessedPreview ? 'is-active' : ''} onClick={showProcessedRoom}>{processedLabel}</button></div>}
               {activeStep === 4 && processedPreview && showProcessedPreview && <div className="render-output-actions" aria-label="Azioni render"><button type="button" onClick={openRenderPreview}>⛶ Ingrandisci</button><button className="save-render-button" type="button" onClick={() => void saveRender()} disabled={isSavingRender}>{isSavingRender ? 'Preparo…' : '↓ Salva render'}</button></div>}
-            </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Inizia da ciò che hai</p><h1>Cosa vuoi caricare?</h1><p>Scegli una foto della stanza oppure una planimetria. L’originale resterà sempre intatto.</p><div className="source-actions"><label className="source-card is-primary" htmlFor="room-file"><span>▣</span><strong>Libreria foto</strong><small>Scegli una foto già presente su iPhone o iPad</small></label><label className="source-card" htmlFor="camera-file"><span>●</span><strong>Scatta foto</strong><small>Usa direttamente la fotocamera posteriore</small></label><label className="source-card" htmlFor="floorplan-file"><span>⌗</span><strong>Planimetria</strong><small>Crea automaticamente la stanza vuota</small></label></div>{localCleaningTestAvailable && <button className="demo-button" type="button" onClick={() => void loadLocalCleaningTest()}>Apri questa prova dentro Materia</button>}<button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>JPG, PNG, WEBP o HEIC · massimo 20 MB</small></div></>}
+            </div> : <><div className="room-demo" aria-label="Anteprima schematica della stanza"><div className="room-ceiling"><span>Soffitto</span></div><div className="room-wall left"><span>Muro 2</span></div><div className="room-wall center"><span>Muro 1</span></div><div className="room-wall right"><span>Muro 3</span></div><div className="room-floor"><span>Pavimento</span></div></div><div className="upload-card"><div className="upload-icon">↑</div><p className="eyebrow">Inizia da ciò che hai</p><h1>Cosa vuoi caricare?</h1><p>Scegli una foto della stanza oppure una planimetria. L’originale resterà sempre intatto.</p><div className="source-actions"><button type="button" className="source-card is-primary" onClick={() => pickRoomPhoto('photos')}><span>▣</span><strong>Libreria foto</strong><small>Scegli una foto già presente su iPhone o iPad</small></button><button type="button" className="source-card" onClick={() => pickRoomPhoto('camera')}><span>●</span><strong>Scatta foto</strong><small>Usa direttamente la fotocamera posteriore</small></button><button type="button" className="source-card" onClick={pickFloorplanPhoto}><span>⌗</span><strong>Planimetria</strong><small>Crea automaticamente la stanza vuota</small></button></div>{localCleaningTestAvailable && <button className="demo-button" type="button" onClick={() => void loadLocalCleaningTest()}>Apri questa prova dentro Materia</button>}<button className="demo-button" type="button" onClick={loadDemoRoom}>Prova con la stanza esempio</button><small>JPG, PNG, WEBP o HEIC · massimo 20 MB</small></div></>}
             {isDraggingFile && <div className="drop-overlay"><strong>Rilascia per importare</strong><span>La foto resterà nel browser.</span></div>}
             {(isImportingRoom || isCreatingFloorplanRoom) && <div className="processing-overlay" role="status"><img className="processing-mascot" src="/materia-assistant.png" alt="Assistente Materia al lavoro" /><strong>{isCreatingFloorplanRoom ? 'Creo la stanza dalla planimetria…' : 'Preparo la foto…'}</strong><small>{isCreatingFloorplanRoom ? 'Riconosco pareti, porte e finestre. Può richiedere circa un minuto.' : 'Le immagini grandi vengono ottimizzate senza modificare l’originale.'}</small></div>}
           </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span>{activeStep === 4 && <button className="file-error-retry" type="button" onClick={() => void createFinalRender()} disabled={isRendering}>{isRendering ? 'Riprovo…' : 'Riprova render'}</button>}<button className="file-error-close" type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
-          <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif,.webp" onChange={onRoomInput} /><input ref={cameraInputRef} id="camera-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" capture="environment" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif,.webp" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onMaterialInput} /><input ref={furnitureInputRef} id="furniture-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onFurnitureInput} />
+          <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif,.webp" onChange={onRoomInput} /><input ref={cameraInputRef} id="camera-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif,.webp" capture="environment" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif,.webp" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif,.webp" onChange={onMaterialInput} /><input ref={furnitureInputRef} id="furniture-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif,.webp" onChange={onFurnitureInput} />
           {room?.sourceType === 'photo' && activeStep === 2 && <section className="empty-room-choice" aria-label="Svuota la stanza oppure continua"><div><strong>Vuoi svuotare la stanza?</strong><span>È facoltativo: l’originale resta sempre disponibile.</span></div><div className="empty-room-actions"><button className="skip-empty-room" type="button" onClick={skipEmptyRoom} disabled={isEmptyingRoom || isCleaningRegion || geometryDetectionBlocked}>Salta · usa foto originale →</button><button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom || isCleaningRegion || geometryDetectionBlocked}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button>{!cleanupRegion && <button type="button" className={isPickingCleanup ? 'is-active' : ''} onClick={() => { setIsPickingCleanup((current) => !current); setError(null); setNotice(isPickingCleanup ? 'Selezione annullata.' : processedPreview ? 'Tocca il centro dell’oggetto rimasto nella foto.' : 'Tocca il centro di un mobile nella foto: lo delimito e lo rimuovo.'); }} disabled={isDetectingCleanup || isCleaningRegion}>{isDetectingCleanup ? 'Riconosco…' : isPickingCleanup ? 'Annulla selezione' : processedPreview ? '◎ Pulisci un residuo' : '◎ Indica un mobile'}</button>}{cleanupRegion && <><button type="button" className="cleanup-confirm" onClick={() => void cleanResidualRegion()} disabled={isCleaningRegion}>{isCleaningRegion ? 'Pulisco…' : 'Pulisci selezione'}</button><button type="button" onClick={() => setCleanupRegion(null)} disabled={isCleaningRegion}>Annulla</button></>}</div></section>}
           {geometryDetectionStatus === 'fallback' && room?.sourceType === 'photo' && (activeStep === 2 || activeStep === 3) && <div className="geometry-fallback-warning" role="status"><div><strong>Contorni provvisori</strong><span>Il riconoscimento IA di questa foto non è riuscito. Non li presento come misure automatiche: correggili trascinando linee o pallini, oppure riprova.</span></div><button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview}>{isAutoFitting ? 'Riconosco…' : '✦ Riprova IA'}</button></div>}
           {geometryHasOpeningIssue && room?.sourceType === 'photo' && (activeStep === 2 || activeStep === 3) && <div className="geometry-fallback-warning opening-invalid-warning" role="alert"><div><strong>Apertura non sicura</strong><span>La curva è visibile, ma soglia o stipiti sono ricostruiti dietro mobili: le parti arancioni tratteggiate richiedono conferma. Se coincidono, seleziona l’arco e conferma; altrimenti sposta i punti.</span></div><button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview}>{isAutoFitting ? 'Riconosco…' : '✦ Riprova IA'}</button></div>}
@@ -3966,7 +4029,7 @@ export function RoomStudio() {
 
         <aside className="properties-panel" aria-label="Proprietà">
           <div className="panel-heading"><div><p className="eyebrow">Controlli</p><h2>{selected?.name ?? (room ? 'Nessuna selezione' : 'Importa una stanza')}</h2></div>{selected && <span className="type-badge">{surfaceLabels[selected.kind]}</span>}</div>
-          {room && <div className="asset-card"><span>{room.sourceType === 'floorplan' ? 'PLAN' : 'IMG'}</span><div><strong>{room.file.name}</strong><small>{room.sourceType === 'floorplan' ? 'Planimetria originale' : importedCaption}</small></div><label htmlFor={room.sourceType === 'floorplan' ? 'floorplan-file' : 'room-file'}>Sostituisci</label></div>}
+          {room && <div className="asset-card"><span>{room.sourceType === 'floorplan' ? 'PLAN' : 'IMG'}</span><div><strong>{room.file.name}</strong><small>{room.sourceType === 'floorplan' ? 'Planimetria originale' : importedCaption}</small></div><button type="button" onClick={() => room.sourceType === 'floorplan' ? pickFloorplanPhoto() : pickRoomPhoto('photos')}>Sostituisci</button></div>}
           {selected ? <><div className="property-section"><div className="property-title"><span>Nome superficie</span><span className="editable-badge">Personalizzabile</span></div><div className="rename-control"><input aria-label="Nome superficie" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} /><button type="button" onClick={renameSelected} disabled={!renameDraft.trim() || renameDraft.trim() === selected.name}>Salva</button></div></div><div className="property-section"><div className="property-title"><span>Protezione superficie</span><span className={`editable-badge ${selected.frozen ? 'frozen' : ''}`}>{selected.frozen ? 'Frozen' : 'Modificabile'}</span></div><button className={`freeze-button ${selected.frozen ? 'is-active' : ''}`} type="button" aria-label={selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'} onClick={toggleFreeze}><span>{selected.frozen ? '◆' : '◇'}</span>{selected.frozen ? 'Sblocca superficie' : 'Freeze superficie'}<small>{selected.frozen ? 'Protetta' : 'Attivo subito'}</small></button><button className="freeze-others-button" type="button" onClick={freezeAllExceptSelected}>Blocca tutto tranne {selected.name}</button></div>
             <div className="property-section product-search-section">
               {activeStep === 3 && !geometryDetectionBlocked && <div className="room-measurement-card">
@@ -3985,8 +4048,8 @@ export function RoomStudio() {
               <div className="property-title"><span>Come vuoi inserire il prodotto?</span></div>
               <div className="product-entry-cards" aria-label="Modalità inserimento prodotto">
                 <button type="button" className="product-entry-card is-primary" onClick={() => document.querySelector<HTMLInputElement>('.guided-search input')?.focus()}><span>⌕</span><strong>Cerca online</strong><small>Marca, modello, colore o link</small></button>
-                <button type="button" className="product-entry-card" onClick={() => furnitureInputRef.current?.click()} disabled={isClassifyingProduct || isPreparingFurniture}><span>▣</span><strong>{isClassifyingProduct || isPreparingFurniture ? 'Riconosco e preparo…' : 'Foto prodotto'}</strong><small>Capisce materiale o mobile</small></button>
-                <button type="button" className="product-entry-card" onClick={() => materialInputRef.current?.click()}><span>▦</span><strong>Campione materiale</strong><small>Per pavimenti e pareti</small></button>
+                <button type="button" className="product-entry-card" onClick={pickProductPhoto} disabled={isClassifyingProduct || isPreparingFurniture}><span>▣</span><strong>{isClassifyingProduct || isPreparingFurniture ? 'Riconosco e preparo…' : 'Foto prodotto'}</strong><small>Capisce materiale o mobile</small></button>
+                <button type="button" className="product-entry-card" onClick={pickMaterialPhoto}><span>▦</span><strong>Campione materiale</strong><small>Per pavimenti e pareti</small></button>
               </div>
               <div className="product-search-heading"><strong>Ricerca normale</strong><span>oppure incolla il link del prodotto</span></div>
               {aiStatus !== 'ready' && <div className="ai-setup-banner"><strong>{isLocalPreview() ? 'Anteprima locale' : aiStatus === 'missing' ? 'IA non configurata sul server' : 'IA momentaneamente non raggiungibile'}</strong><span>{isLocalPreview() ? 'Grok è configurata sul sito online; qui verifichi interfaccia e posizionamento senza usare credenziali.' : 'La chiave resta protetta sul server. Puoi comunque premere il comando: l’app riproverà il collegamento.'}</span></div>}
@@ -4000,13 +4063,13 @@ export function RoomStudio() {
               <div className="custom-color"><input type="color" aria-label="Scegli colore personalizzato" value={customColor} onChange={(event) => setCustomColor(event.target.value)} /><button type="button" onClick={chooseCustomColor}>Usa questo colore</button></div>
               {!selectedFurniture && !pendingFurniture ? <>
                 {material && <div className="loaded-material">{material.previewUrl ? <img src={material.previewUrl} alt={`Campione ${material.name}`} /> : <span className="catalog-swatch tile" />}<div><strong>{material.name}</strong><small>{materialReferenceLabel(material)}</small></div></div>}
-                {materialNeedsSample && <div className="indicative-product-note"><div><strong>Serve un campione prima della prova.</strong><span>La fonte verifica il prodotto, ma non fornisce una texture applicabile. L’app non inventa il disegno dal solo nome.</span></div><button type="button" onClick={() => materialInputRef.current?.click()}>＋ Carica campione materiale</button></div>}
+                {materialNeedsSample && <div className="indicative-product-note"><div><strong>Serve un campione prima della prova.</strong><span>La fonte verifica il prodotto, ma non fornisce una texture applicabile. L’app non inventa il disegno dal solo nome.</span></div><button type="button" onClick={pickMaterialPhoto}>＋ Carica campione materiale</button></div>}
                 <button className="auto-apply-product-button" type="button" onClick={() => void applyMaterialAutomatically()} disabled={!material || isApplyingProduct || isRendering}>{isRendering ? 'Creo il render…' : isApplyingProduct ? 'Applico il prodotto…' : materialNeedsSample ? 'Aggiungi campione per provarlo' : `Prova ora su ${materialTarget?.name ?? 'la superficie scelta'}`}</button>
                 <button className="apply-button secondary-apply" type="button" aria-label={`Applica a ${selected.name}`} onClick={() => void applyMaterial()} disabled={!material || selected.frozen || materialNeedsSample || isApplyingProduct || isRendering}>{isRendering ? 'Creo il render…' : isApplyingProduct ? `Applico a ${selected.name}…` : `Applica a ${selected.name} e crea render`}</button>
                 <p className="material-search-note">L’app sceglie pavimento o muro, corregge prospettiva e scala, e lascia identiche tutte le zone Freeze. La resa è fedele al prodotto solo quando compare “Texture ufficiale verificata” o usi un tuo campione.</p>
               </> : <div className="furniture-mode-note"><strong>Modalità mobile attiva</strong><span>I comandi di pavimento e rivestimento sono nascosti per evitare di applicare per errore la foto del mobile a un muro.</span></div>}
             </div>
-            <div className="property-section furniture-section"><div className="property-title"><span>Mobili nella stanza</span><span className="editable-badge">{placedFurniture.length + customRequests.length} scelti</span></div><button className="upload-furniture-button" type="button" onClick={() => furnitureInputRef.current?.click()} disabled={isClassifyingProduct || isPreparingFurniture}>{isClassifyingProduct || isPreparingFurniture ? 'Riconosco, scontorno e preparo la prospettiva…' : '＋ Carica la foto di un prodotto'}</button>{placedFurniture.length || customRequests.length ? <div className="selected-assets">{placedFurniture.map((item, index) => <button type="button" className={selectedFurnitureId === item.id ? 'is-selected' : ''} key={item.id} onClick={() => selectFurnitureForEditing(item)}>{item.name} {placedFurniture.filter((candidate) => candidate.name === item.name).length > 1 ? index + 1 : ''}<span>{item.frozen ? '◆' : '›'}</span></button>)}{customRequests.map((item) => <button type="button" key={item} onClick={() => setCustomRequests((current) => current.filter((name) => name !== item))}>{item}<span>×</span></button>)}</div> : <p className="no-results">Carica una foto: l’app riconosce se è un mobile oppure un materiale e sceglie il flusso corretto.</p>}{selectedFurniture && <div className="furniture-controls"><div className="furniture-control-heading"><strong>{selectedFurniture.name}</strong><span>{selectedFurniture.frozen ? 'Posizione bloccata' : 'Tocca i comandi per sistemarlo'}</span></div><div className="furniture-real-size"><label htmlFor="furniture-real-width">Larghezza reale</label><div><input id="furniture-real-width" aria-label="Larghezza reale del mobile" inputMode="decimal" value={furnitureWidthDraft} onChange={(event) => setFurnitureWidthDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') confirmFurnitureWidth(); }} placeholder="es. 140" disabled={selectedFurniture.frozen} /><span>cm</span><button type="button" onClick={confirmFurnitureWidth} disabled={selectedFurniture.frozen}>Applica misura</button></div><small>Per una scala esatta usa la misura del prodotto; senza quote l’app può soltanto stimarla.</small></div><div className="furniture-facing-controls" role="group" aria-label="Parete di orientamento"><span>Schienale verso</span>{(Object.keys(furnitureFacingLabels) as FurnitureFacing[]).map((facing) => <button type="button" key={facing} className={selectedFurniture.facing === facing ? 'is-active' : ''} onClick={() => void orientSelectedFurniture(facing)} disabled={selectedFurniture.frozen || isPreparingFurniture}>{facing === 'front-wall' ? '↑ Frontale' : facing === 'left-wall' ? '↙ Sinistra' : '↘ Destra'}</button>)}</div><div className="furniture-ipad-pad" role="group" aria-label="Comandi rapidi per il mobile"><button type="button" onClick={() => rotateSelectedFurniture(-5)} disabled={selectedFurniture.frozen || selectedFurniture.rotation <= -35} aria-label="Ruota mobile a sinistra">↶</button><button type="button" onClick={() => nudgeSelectedFurniture(0, -.025)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile in alto">↑</button><button type="button" onClick={() => rotateSelectedFurniture(5)} disabled={selectedFurniture.frozen || selectedFurniture.rotation >= 35} aria-label="Ruota mobile a destra">↷</button><button type="button" onClick={() => nudgeSelectedFurniture(-.025, 0)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile a sinistra">←</button><button type="button" className="furniture-angle-reset" onClick={() => updateSelectedFurniture({ rotation: 0 })} disabled={selectedFurniture.frozen || selectedFurniture.rotation === 0} aria-label="Raddrizza mobile">{Math.round(selectedFurniture.rotation)}°</button><button type="button" onClick={() => nudgeSelectedFurniture(.025, 0)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile a destra">→</button><button type="button" onClick={() => resizeSelectedFurniture(-6)} disabled={selectedFurniture.frozen} aria-label="Rimpicciolisci mobile">−</button><button type="button" onClick={() => nudgeSelectedFurniture(0, .025)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile in basso">↓</button><button type="button" onClick={() => resizeSelectedFurniture(6)} disabled={selectedFurniture.frozen} aria-label="Ingrandisci mobile">＋</button></div><div className="furniture-quick-actions"><button type="button" onClick={undoFurnitureChange} disabled={!pastFurniture.length}>↶ Indietro</button><button className={`auto-size-furniture-button ${selectedFurniture.autoScale ? 'is-active' : ''}`} type="button" onClick={restoreAutomaticFurnitureScale} disabled={selectedFurniture.frozen || selectedFurniture.autoScale} aria-label="Misura automatica">{selectedFurniture.autoScale ? `✓ Auto ${Math.round(selectedFurniture.scale)}%` : '◎ Auto'}</button><button className={`freeze-furniture-button ${selectedFurniture.frozen ? 'is-active' : ''}`} type="button" onClick={() => updateSelectedFurniture({ frozen: !selectedFurniture.frozen })}>{selectedFurniture.frozen ? '◇ Sblocca' : '◆ Blocca'}</button><button className="remove-furniture-button" type="button" onClick={removeSelectedFurniture} disabled={selectedFurniture.frozen} aria-label="Rimuovi mobile">⌫ Cancella</button></div></div>}<p className="material-search-note">La vista fotografica viene ricostruita per la parete scelta; posizione, scala e contatto col pavimento sono controllati di nuovo nel render finale.</p></div>
+            <div className="property-section furniture-section"><div className="property-title"><span>Mobili nella stanza</span><span className="editable-badge">{placedFurniture.length + customRequests.length} scelti</span></div><button className="upload-furniture-button" type="button" onClick={pickProductPhoto} disabled={isClassifyingProduct || isPreparingFurniture}>{isClassifyingProduct || isPreparingFurniture ? 'Riconosco, scontorno e preparo la prospettiva…' : '＋ Carica la foto di un prodotto'}</button>{placedFurniture.length || customRequests.length ? <div className="selected-assets">{placedFurniture.map((item, index) => <button type="button" className={selectedFurnitureId === item.id ? 'is-selected' : ''} key={item.id} onClick={() => selectFurnitureForEditing(item)}>{item.name} {placedFurniture.filter((candidate) => candidate.name === item.name).length > 1 ? index + 1 : ''}<span>{item.frozen ? '◆' : '›'}</span></button>)}{customRequests.map((item) => <button type="button" key={item} onClick={() => setCustomRequests((current) => current.filter((name) => name !== item))}>{item}<span>×</span></button>)}</div> : <p className="no-results">Carica una foto: l’app riconosce se è un mobile oppure un materiale e sceglie il flusso corretto.</p>}{selectedFurniture && <div className="furniture-controls"><div className="furniture-control-heading"><strong>{selectedFurniture.name}</strong><span>{selectedFurniture.frozen ? 'Posizione bloccata' : 'Tocca i comandi per sistemarlo'}</span></div><div className="furniture-real-size"><label htmlFor="furniture-real-width">Larghezza reale</label><div><input id="furniture-real-width" aria-label="Larghezza reale del mobile" inputMode="decimal" value={furnitureWidthDraft} onChange={(event) => setFurnitureWidthDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') confirmFurnitureWidth(); }} placeholder="es. 140" disabled={selectedFurniture.frozen} /><span>cm</span><button type="button" onClick={confirmFurnitureWidth} disabled={selectedFurniture.frozen}>Applica misura</button></div><small>Per una scala esatta usa la misura del prodotto; senza quote l’app può soltanto stimarla.</small></div><div className="furniture-facing-controls" role="group" aria-label="Parete di orientamento"><span>Schienale verso</span>{(Object.keys(furnitureFacingLabels) as FurnitureFacing[]).map((facing) => <button type="button" key={facing} className={selectedFurniture.facing === facing ? 'is-active' : ''} onClick={() => void orientSelectedFurniture(facing)} disabled={selectedFurniture.frozen || isPreparingFurniture}>{facing === 'front-wall' ? '↑ Frontale' : facing === 'left-wall' ? '↙ Sinistra' : '↘ Destra'}</button>)}</div><div className="furniture-ipad-pad" role="group" aria-label="Comandi rapidi per il mobile"><button type="button" onClick={() => rotateSelectedFurniture(-5)} disabled={selectedFurniture.frozen || selectedFurniture.rotation <= -35} aria-label="Ruota mobile a sinistra">↶</button><button type="button" onClick={() => nudgeSelectedFurniture(0, -.025)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile in alto">↑</button><button type="button" onClick={() => rotateSelectedFurniture(5)} disabled={selectedFurniture.frozen || selectedFurniture.rotation >= 35} aria-label="Ruota mobile a destra">↷</button><button type="button" onClick={() => nudgeSelectedFurniture(-.025, 0)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile a sinistra">←</button><button type="button" className="furniture-angle-reset" onClick={() => updateSelectedFurniture({ rotation: 0 })} disabled={selectedFurniture.frozen || selectedFurniture.rotation === 0} aria-label="Raddrizza mobile">{Math.round(selectedFurniture.rotation)}°</button><button type="button" onClick={() => nudgeSelectedFurniture(.025, 0)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile a destra">→</button><button type="button" onClick={() => resizeSelectedFurniture(-6)} disabled={selectedFurniture.frozen} aria-label="Rimpicciolisci mobile">−</button><button type="button" onClick={() => nudgeSelectedFurniture(0, .025)} disabled={selectedFurniture.frozen} aria-label="Sposta mobile in basso">↓</button><button type="button" onClick={() => resizeSelectedFurniture(6)} disabled={selectedFurniture.frozen} aria-label="Ingrandisci mobile">＋</button></div><div className="furniture-quick-actions"><button type="button" onClick={undoFurnitureChange} disabled={!pastFurniture.length}>↶ Indietro</button><button className={`auto-size-furniture-button ${selectedFurniture.autoScale ? 'is-active' : ''}`} type="button" onClick={restoreAutomaticFurnitureScale} disabled={selectedFurniture.frozen || selectedFurniture.autoScale} aria-label="Misura automatica">{selectedFurniture.autoScale ? `✓ Auto ${Math.round(selectedFurniture.scale)}%` : '◎ Auto'}</button><button className={`freeze-furniture-button ${selectedFurniture.frozen ? 'is-active' : ''}`} type="button" onClick={() => updateSelectedFurniture({ frozen: !selectedFurniture.frozen })}>{selectedFurniture.frozen ? '◇ Sblocca' : '◆ Blocca'}</button><button className="remove-furniture-button" type="button" onClick={removeSelectedFurniture} disabled={selectedFurniture.frozen} aria-label="Rimuovi mobile">⌫ Cancella</button></div></div>}<p className="material-search-note">La vista fotografica viene ricostruita per la parete scelta; posizione, scala e contatto col pavimento sono controllati di nuovo nel render finale.</p></div>
             <div className="property-section metrics"><div><span>Vertici</span><strong>{selected.points.length}</strong></div><div><span>Stato</span><strong>{selected.frozen ? 'Lock' : 'Edit'}</strong></div><div><span>Texture</span><strong>{selected.materialId ? 'Sì' : 'No'}</strong></div></div><button className="remove-button" type="button" onClick={deleteSelected} disabled={selected.frozen}>Elimina superficie</button></> : room ? <div className="empty-properties"><strong>Seleziona un contorno</strong><p>Tocca una superficie sulla foto o sceglila dall’elenco. Puoi anche disegnarne una nuova.</p></div> : null}
           {room && <button className="remove-room-button" type="button" onClick={removeRoom}>Chiudi progetto</button>}
           <div className="phase-card"><span className="phase-index">0.3</span><div><p className="eyebrow">Modalità prova</p><strong>IA e Freeze pronti</strong><p>Ricerca prodotti, stanza vuota e render vengono elaborati dal server senza mostrare chiavi nell’app.</p></div></div>
@@ -4028,5 +4091,6 @@ export function RoomStudio() {
       {renderSummaryOpen && <div className="render-modal" role="dialog" aria-modal="true" aria-labelledby="render-summary-title"><div className="render-modal-card"><button className="modal-close" type="button" onClick={() => setRenderSummaryOpen(false)} aria-label="Chiudi riepilogo">×</button><p className="eyebrow">Richiesta pronta</p><h2 id="render-summary-title">Crea il render reale</h2><div className="render-checks"><div><span>Superfici con materiale</span><strong>{surfaces.filter((surface) => surface.materialId).length}</strong></div><div><span>Zone protette</span><strong>{surfaces.filter((surface) => surface.frozen).length}</strong></div><div><span>Mobili posizionati</span><strong>{placedFurniture.length}</strong></div></div><div className="render-list"><strong>Il motore riceverà:</strong><p>{surfaces.filter((surface) => surface.materialId).map((surface) => `${surface.name}: ${materialMap.get(surface.materialId!)?.name ?? 'materiale'}`).join(' · ') || 'Nessun materiale ancora applicato'}</p><p>{placedFurniture.length || customRequests.length ? `Da inserire: ${[...placedFurniture.map((item) => `${item.name} nel punto scelto`), ...customRequests].join(', ')}` : 'Nessun arredo aggiunto'}</p></div><div className="engine-warning"><span>AI</span><p><strong>{aiStatus === 'ready' ? `${aiProviderLabel ?? 'IA'} attiva` : 'L’app riproverà il collegamento'}</strong>L’IA riceve una maschera limitata a prodotti e mobili. Il resto della stanza, incluse aperture e Freeze, viene ricopiato pixel per pixel.</p></div><button className="modal-primary" type="button" onClick={() => void createFinalRender()} disabled={isRendering}>{isRendering ? 'Creo il render…' : 'Crea render reale con IA'}</button><button className="modal-secondary" type="button" onClick={() => setRenderSummaryOpen(false)}>Torna alle modifiche</button></div></div>}
       {renderPreviewOpen && processedPreview && <div className="render-modal render-preview-modal" role="dialog" aria-modal="true" aria-labelledby="render-preview-title" onClick={() => setRenderPreviewOpen(false)}><div className="render-preview-card" onClick={(event) => event.stopPropagation()}><button className="modal-close" type="button" onClick={() => setRenderPreviewOpen(false)} aria-label="Chiudi render ingrandito">×</button><img src={processedPreview} alt="Render Materia ingrandito" /><div className="render-preview-footer"><strong id="render-preview-title">Render Materia</strong><button type="button" onClick={() => void saveRender()} disabled={isSavingRender}>{isSavingRender ? 'Preparo…' : '↓ Salva render'}</button></div></div></div>}
     </main>
+    </>
   );
 }
