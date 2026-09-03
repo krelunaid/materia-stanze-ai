@@ -415,7 +415,7 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 
 /* Assistente contestuale: racconta lo stato reale dell'IA senza coprire i comandi. */
 .materia-assistant { position:fixed; z-index:44; right:max(18px,env(safe-area-inset-right)); bottom:max(18px,env(safe-area-inset-bottom)); display:flex; align-items:flex-end; gap:10px; max-width:min(390px,calc(100vw - 30px)); pointer-events:none; }
-.materia-assistant-character { position:relative; width:100px; height:109px; flex:0 0 auto; filter:drop-shadow(0 12px 18px rgba(16,37,34,.24)); }
+.materia-assistant-character { position:relative; width:126px; height:137px; flex:0 0 auto; filter:drop-shadow(0 12px 18px rgba(16,37,34,.24)); }
 .materia-assistant-character img { width:100%; height:100%; object-fit:contain; }
 .materia-assistant-bubble { display:grid; gap:3px; max-width:270px; padding:12px 14px; border:1px solid rgba(31,118,108,.2); border-radius:16px 16px 4px 16px; background:rgba(255,255,255,.96); color:var(--ink); box-shadow:0 12px 34px rgba(16,37,34,.18); backdrop-filter:blur(10px); }
 .materia-assistant-bubble strong { font-size:14px; line-height:1.2; }
@@ -547,7 +547,7 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
   .geometry-fallback-warning { align-items:stretch; flex-direction:column; margin:8px; }
   .geometry-fallback-warning button { width:100%; min-height:48px; }
   .materia-assistant { right:max(8px,env(safe-area-inset-right)); bottom:max(82px,calc(68px + env(safe-area-inset-bottom))); gap:6px; max-width:calc(100vw - 16px); }
-  .materia-assistant-character { width:62px; height:71px; }
+  .materia-assistant-character { width:78px; height:89px; }
   .materia-assistant-bubble { max-width:190px; padding:9px 11px; }
   .materia-assistant-bubble strong { font-size:12px; }
   .materia-assistant-bubble span { font-size:10px; }
