@@ -12,10 +12,14 @@ export function isNativePlatform() {
 }
 
 export function isPhotoPickerCancel(error: unknown) {
-  const code = typeof error === 'object' && error && 'code' in error
-    ? String((error as { code?: unknown }).code)
-    : '';
-  const message = error instanceof Error ? error.message : String(error ?? '');
+  if (error == null) return false;
+  const record = typeof error === 'object' ? error as { code?: unknown; message?: unknown } : null;
+  const code = record && 'code' in record ? String(record.code ?? '') : '';
+  const message = error instanceof Error
+    ? error.message
+    : record && 'message' in record
+      ? String(record.message ?? '')
+      : String(error);
   return /cancel/i.test(code) || /cancel/i.test(message);
 }
 

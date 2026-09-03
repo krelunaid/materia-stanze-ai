@@ -1076,9 +1076,18 @@ export function RoomStudio() {
     const id = new URLSearchParams(window.location.search).get('project');
     if (!id) return;
     let cancelled = false;
-    void restoreProject(id).then(() => {
-      if (cancelled) return;
-    });
+    skipAutosaveRef.current = true;
+    void loadProject(id)
+      .then((project) => {
+        if (cancelled || !project) return;
+        return restoreProject(id);
+      })
+      .catch(() => {
+        if (!cancelled) setError('Non sono riuscito a riaprire il progetto salvato in locale.');
+      })
+      .finally(() => {
+        skipAutosaveRef.current = false;
+      });
     return () => {
       cancelled = true;
     };

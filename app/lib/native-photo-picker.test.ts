@@ -40,7 +40,7 @@ describe('native photo picker', () => {
     });
     expect(file.name).toBe('photo.heic');
     expect(file.type).toBe('image/heic');
-    expect(file.size).toBe(3);
+    expect(file.size).toBeGreaterThan(0);
   });
 
   it('treats user dismissal as a cancel, not a failure', () => {

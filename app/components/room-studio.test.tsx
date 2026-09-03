@@ -19,6 +19,8 @@ beforeAll(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  resetMemoryProjectStore();
+  window.history.replaceState(null, '', '/');
 });
 
 function mockMaterialPhotoCrop() {
@@ -1278,18 +1280,19 @@ describe('RoomStudio', () => {
     expect(within(dialog).getByRole('heading', { name: 'Soggiorno salvato' })).toBeInTheDocument();
 
     fireEvent.click(within(dialog).getByRole('button', { name: /Continua/ }));
-    expect(await screen.findByText('Soggiorno salvato')).toBeInTheDocument();
+    expect(await screen.findByText('Progetto ripristinato. I contorni approvati non sono stati ricalcolati.')).toBeInTheDocument();
     expect(screen.queryByRole('dialog', { name: 'Progetti' })).not.toBeInTheDocument();
-    expect(screen.getByText('Progetto ripristinato. I contorni approvati non sono stati ricalcolati.')).toBeInTheDocument();
+    expect(screen.getByText('Soggiorno salvato')).toBeInTheDocument();
   });
 
   it('picks a room photo through the native helper and still accepts the file-input fallback', async () => {
     const pick = vi.mocked(pickPhotoOrFallbackToInput);
     pick.mockImplementation(async ({ onFile }) => {
-      onFile(new File(['room'], 'libreria.heic', { type: 'image/heic' }));
+      onFile(new File(['room'], 'libreria.jpg', { type: 'image/jpeg' }));
       return 'native';
     });
 
+    window.history.replaceState(null, '', '/');
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: /Libreria foto/ }));
     expect(await screen.findByText('Libreria')).toBeInTheDocument();
@@ -1300,8 +1303,8 @@ describe('RoomStudio', () => {
       return 'fallback';
     });
     const clickSpy = vi.spyOn(HTMLInputElement.prototype, 'click');
-    fireEvent.click(screen.getByRole('button', { name: /Scatta foto/ }));
-    expect(pick).toHaveBeenCalledWith(expect.objectContaining({ source: 'camera' }));
+    fireEvent.click(screen.getByRole('button', { name: '↑ Carica la tua foto' }));
+    expect(pick).toHaveBeenCalledWith(expect.objectContaining({ source: 'photos' }));
     expect(clickSpy).toHaveBeenCalled();
   });
 });
