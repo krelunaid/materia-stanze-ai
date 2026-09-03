@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveProjectName, formatBytes, MAX_FILE_BYTES, validateRoomFile } from './file-validation';
+import { deriveProjectName, formatBytes, isAcceptedRasterImage, MAX_FILE_BYTES, validateRoomFile } from './file-validation';
 
 describe('validateRoomFile', () => {
   it('accepts a JPEG within the size limit', () => {
@@ -18,6 +18,8 @@ describe('validateRoomFile', () => {
     const result = validateRoomFile(new File(['room'], 'camera.heic'));
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.canPreview).toBe(true);
+    expect(isAcceptedRasterImage(new File(['room'], 'prodotto.HEIC'))).toBe(true);
+    expect(isAcceptedRasterImage(new File(['room'], 'campione.heif', { type: 'image/heif' }))).toBe(true);
   });
 
   it('accepts WEBP room photos by MIME type or extension', () => {
