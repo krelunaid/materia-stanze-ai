@@ -1024,11 +1024,7 @@ export function RoomStudio() {
   }, [activeStep]);
 
   useEffect(() => {
-    if (!isAutoFitting) {
-      setAutoFitElapsedSeconds(0);
-      return;
-    }
-    setAutoFitElapsedSeconds(0);
+    if (!isAutoFitting) return;
     const startedAt = Date.now();
     const timer = window.setInterval(() => {
       setAutoFitElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
@@ -3093,7 +3089,7 @@ export function RoomStudio() {
       setNotice('La geometria resta legata alla foto originale. Tocca “Originale” prima di rifare il riconoscimento.');
       return;
     }
-    setIsAutoFitting(true); setGeometrySaved(false); setError(null);
+    setIsAutoFitting(true); setAutoFitElapsedSeconds(0); setGeometrySaved(false); setError(null);
     setNotice(`${RECOGNITION_WAITING_DETAIL} ${recognitionElapsedLabel(0)}`);
     try {
       let detected: Surface[] | null = null;
@@ -3165,6 +3161,7 @@ export function RoomStudio() {
         : 'Riconoscimento automatico non completato. Puoi riprovare oppure continuare con la foto originale.');
     } finally {
       setIsAutoFitting(false);
+      setAutoFitElapsedSeconds(0);
     }
   }
 
