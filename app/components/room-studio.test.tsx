@@ -380,6 +380,104 @@ describe('RoomStudio', () => {
     expect(screen.getByLabelText('Modalità inserimento prodotto')).toBeInTheDocument();
   });
 
+  function deferredResponse() {
+    let resolveResponse: (value: Response) => void = () => undefined;
+    const promise = new Promise<Response>((resolve) => { resolveResponse = resolve; });
+    return { promise, resolve: (value: Response) => resolveResponse(value) };
+  }
+
+  function detectedPhotoSurfaces() {
+    return {
+      surfaces: [
+        { name: 'Muro', kind: 'wall', confidence: .9, points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: .72 }, { x: 0, y: .72 }] },
+        { name: 'Pavimento', kind: 'floor', confidence: .94, points: [{ x: 0, y: .72 }, { x: 1, y: .72 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+      ],
+    };
+  }
+
+  function loadImportedPhoto(fileName = 'soggiorno.jpg') {
+    fireEvent.change(document.querySelector('#room-file') as HTMLInputElement, {
+      target: { files: [new File(['room'], fileName, { type: 'image/jpeg' })] },
+    });
+    const image = screen.getByAltText(`Originale importato: ${fileName}`) as HTMLImageElement;
+    Object.defineProperties(image, {
+      naturalWidth: { configurable: true, value: 1200 },
+      naturalHeight: { configurable: true, value: 800 },
+    });
+    fireEvent.load(image);
+    return image;
+  }
+
+  it('shows a recognition overlay and live assistant copy while auto-fitting a photo', async () => {
+    mockMaterialPhotoCrop();
+    const detect = deferredResponse();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/capabilities')) {
+        return new Response(JSON.stringify({ aiReady: true, providerLabel: 'Grok' }), { status: 200 });
+      }
+      if (url.includes('/api/detect-surfaces')) return detect.promise;
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<RoomStudio />);
+    loadImportedPhoto('cucina-attesa.jpg');
+
+    const overlay = await screen.findByRole('status');
+    expect(overlay).toHaveClass('processing-overlay');
+    expect(overlay).toHaveTextContent('Riconosco la stanza…');
+    expect(overlay).toHaveTextContent('Sto cercando muri, pavimento e soffitto. Di solito 30–90 secondi, al massimo circa 2 minuti. Le linee appariranno a fine riconoscimento.');
+    expect(overlay).toHaveTextContent('Passati 0 s…');
+    expect(document.querySelector('.surface-kind-wall')).not.toBeInTheDocument();
+
+    const assistant = screen.getByLabelText('Assistente Materia');
+    expect(assistant).toHaveClass('is-working');
+    expect(assistant).toHaveTextContent('Riconosco la stanza…');
+    expect(assistant).toHaveTextContent('Sto cercando muri, pavimento e soffitto');
+    expect(assistant).toHaveTextContent('Passati 0 s…');
+    expect(screen.getByLabelText('Svuota la stanza oppure continua')).toHaveTextContent('Riconosco la stanza…');
+    expect(document.querySelector('.status-bar')).toHaveTextContent('Le linee appariranno a fine riconoscimento.');
+
+    detect.resolve(new Response(JSON.stringify(detectedPhotoSurfaces()), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    expect(await screen.findByText('Riconoscimento completato. Scegli se svuotare la stanza o usare la foto originale.')).toBeInTheDocument();
+    expect(document.querySelector('.processing-overlay')).not.toBeInTheDocument();
+    expect(screen.queryByText('Riconosco la stanza…')).not.toBeInTheDocument();
+    expect(document.querySelector('.surface-kind-wall')).toBeInTheDocument();
+    expect(screen.getByLabelText('Assistente Materia')).not.toHaveClass('is-working');
+    expect(screen.getByLabelText('Assistente Materia')).toHaveTextContent('Riconoscimento completato');
+  });
+
+  it('shows the same recognition overlay when retrying from Controlla', async () => {
+    mockMaterialPhotoCrop();
+    const detect = deferredResponse();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/api/capabilities')) {
+        return new Response(JSON.stringify({ aiReady: true, providerLabel: 'Grok' }), { status: 200 });
+      }
+      if (url.includes('/api/detect-surfaces')) return detect.promise;
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<RoomStudio />);
+    loadDemoAndContinue();
+    fireEvent.click(screen.getByRole('button', { name: '✦ Adatta alla foto' }));
+
+    const overlay = await screen.findByRole('status');
+    expect(overlay).toHaveClass('processing-overlay');
+    expect(overlay).toHaveTextContent('Riconosco la stanza…');
+    expect(overlay).toHaveTextContent('Passati 0 s…');
+    expect(screen.getByLabelText('Assistente Materia')).toHaveClass('is-working');
+    expect(screen.getByRole('button', { name: '✦ Adatto…' })).toBeDisabled();
+
+    detect.resolve(new Response(JSON.stringify(detectedPhotoSurfaces()), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    expect(await screen.findByText(/superfici proposte da controllare/)).toBeInTheDocument();
+    expect(document.querySelector('.processing-overlay')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '✦ Adatta alla foto' })).toBeEnabled();
+  });
+
   it('keeps Prepara limited to emptying or the original photo', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
