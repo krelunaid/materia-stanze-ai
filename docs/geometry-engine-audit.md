@@ -9,7 +9,7 @@ Commit analizzato: `34ee1856bef96dcc8fbada84fdf4365bf95feda3` (`Riconosci superf
 
 ## 1. Esito esecutivo
 
-La Milestone 0 è completata come audit, non come correzione funzionale. L'applicazione è compilabile per web e iOS, i test esistenti passano e il flusso Foto → Prepara → Prodotti → Render è presente. Tuttavia il motore attuale non è ancora un Geometry Engine affidabile: mantiene poligoni 2D normalizzati solo nello stato React, non possiede un modello di stanza persistente/versionato, non misura la qualità geometrica e permette alla fotografia generata dall'IA di produrre una nuova interpretazione delle superfici dopo “Svuota la stanza”.
+La Milestone 0 è completata come audit, non come correzione funzionale. L'applicazione è compilabile per web e iOS, i test esistenti passano e il flusso Foto → Prepara → Controlla → Prodotti → Render è presente. Tuttavia il motore attuale non è ancora un Geometry Engine affidabile: mantiene poligoni 2D normalizzati solo nello stato React, non possiede un modello di stanza persistente/versionato, non misura la qualità geometrica e permette alla fotografia generata dall'IA di produrre una nuova interpretazione delle superfici dopo “Svuota la stanza”.
 
 Il punto più critico è stato individuato con precisione: `RoomStudio.emptyRoom()` invia la foto a `/api/empty-room`, accetta l'immagine generata tramite una debole similarità fotografica e poi richiama `detectSurfacesForPreview()` sull'immagine generata; il risultato viene passato a `mergeDetectedSurfaces()` e diventa la geometria elaborata. In questo modo l'IA generativa può indirettamente cambiare muri, pavimento, porte e finestre.
 
@@ -54,12 +54,13 @@ Foto JPG/PNG/HEIC
   → anteprima elaborata in memoria
 ```
 
-I quattro passaggi visibili sono implementati nello stesso componente:
+I cinque passaggi visibili sono implementati nello stesso componente:
 
 1. Foto: importazione foto o planimetria raster.
-2. Prepara: riconoscimento, correzione vertici, aggiunta superfici, Freeze e stanza vuota.
-3. Prodotti: catalogo locale, campione caricato, colore e ricerca online verificata.
-4. Render: richiesta generativa con materiali/arredi/richieste testuali.
+2. Prepara: riconoscimento e scelta tra stanza vuota o foto originale.
+3. Controlla: correzione vertici, aperture, Freeze e avvisi di geometria.
+4. Prodotti: catalogo locale, campione caricato, colore e ricerca online verificata.
+5. Render: richiesta generativa con materiali/arredi/richieste testuali.
 
 ## 3. Modello dati e coordinate
 

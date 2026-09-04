@@ -44,9 +44,18 @@ function continueWithOriginalPhoto() {
   fireEvent.click(screen.getByRole('button', { name: 'Usa foto originale →' }));
 }
 
+function continueToProducts() {
+  fireEvent.click(screen.getByRole('button', { name: 'Continua ai prodotti' }));
+}
+
 function loadDemoAndContinue() {
   fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
   continueWithOriginalPhoto();
+}
+
+function loadDemoAndOpenProducts() {
+  loadDemoAndContinue();
+  continueToProducts();
 }
 
 function clickStatusBar(name: string) {
@@ -114,7 +123,8 @@ describe('RoomStudio', () => {
   it('shows the product-specific import flow', () => {
     render(<RoomStudio />);
     expect(screen.getByRole('heading', { name: 'Cosa vuoi caricare?' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Superfici della stanza')).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Passaggi del progetto' })).toHaveTextContent('Foto');
+    expect(screen.queryByLabelText('Superfici della stanza')).not.toBeInTheDocument();
   });
 
   it('uses the lower skirting-floor contact in the example room', () => {
@@ -218,7 +228,7 @@ describe('RoomStudio', () => {
     expect(original).toBeEnabled();
 
     fireEvent.click(original);
-    expect(screen.getByRole('button', { name: /Prodotti/ })).toHaveClass('is-active');
+    expect(screen.getByRole('button', { name: /Controlla/ })).toHaveClass('is-active');
     expect(screen.getByText('Apertura da confermare')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '＋ Arco' }));
@@ -283,6 +293,7 @@ describe('RoomStudio', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/apertura più sicura|contorni devono coincidere/);
 
     fireEvent.click(original);
+    expect(screen.getByRole('button', { name: /Controlla/ })).toHaveClass('is-active');
     expect(screen.getByText('Apertura da confermare')).toBeInTheDocument();
     expect(screen.getByText('Contorni da rivedere')).toBeInTheDocument();
 
@@ -360,8 +371,12 @@ describe('RoomStudio', () => {
     expect(skip).toBeEnabled();
     fireEvent.click(skip);
 
+    expect(screen.getByRole('button', { name: /Controlla/ })).toHaveClass('is-active');
+    expect(screen.getByText('Foto originale mantenuta. Controlla i contorni, poi continua ai prodotti.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Modalità inserimento prodotto')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continua ai prodotti' })).toBeInTheDocument();
+    continueToProducts();
     expect(screen.getByRole('button', { name: /Prodotti/ })).toHaveClass('is-active');
-    expect(screen.getByText('Foto originale mantenuta. Ora puoi scegliere materiali e mobili senza svuotare la stanza.')).toBeInTheDocument();
     expect(screen.getByLabelText('Modalità inserimento prodotto')).toBeInTheDocument();
   });
 
@@ -375,7 +390,23 @@ describe('RoomStudio', () => {
     expect(screen.queryByRole('button', { name: '＋ Arco' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Continua ai prodotti' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Correggi i bordi' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '↔ Sposta linee' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '✓ Fine correzione' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Correzione attiva/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Superfici della stanza')).not.toBeInTheDocument();
+    continueWithOriginalPhoto();
+    expect(screen.getByRole('button', { name: /Controlla/ })).toHaveClass('is-active');
+    expect(screen.getByLabelText('Superfici della stanza')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Continua ai prodotti' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '＋ Porta' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '↔ Sposta linee' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Modalità inserimento prodotto')).not.toBeInTheDocument();
+    continueToProducts();
+    expect(screen.getByRole('button', { name: /Prodotti/ })).toHaveClass('is-active');
+    expect(screen.getByLabelText('Modalità inserimento prodotto')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '＋ Porta' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Superfici della stanza')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Continua ai prodotti' })).not.toBeInTheDocument();
   });
 
   it('keeps cleanup usable when automatic detection finds no movable objects', async () => {
@@ -427,6 +458,7 @@ describe('RoomStudio', () => {
     fireEvent.click(screen.getByRole('button', { name: '⌂ Svuota la stanza' }));
 
     expect(await screen.findByText(/Terra conferma che la stanza è già vuota/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Controlla/ })).toHaveClass('is-active');
     expect(screen.getByText('Originale intatto')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
@@ -490,9 +522,8 @@ describe('RoomStudio', () => {
     expect(screen.getByRole('button', { name: /^Finestra/ })).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /^Soffitto/ }).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: 'Mantieni identico Muro 1' }));
-    expect(screen.getByText('Frozen')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Consenti modifiche a Muro 1' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Elimina superficie' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Muro 1.*Freeze attivo/ })).toBeInTheDocument();
   });
 
   it('keeps correction handles hidden until the user asks to edit the borders', () => {
@@ -585,7 +616,7 @@ describe('RoomStudio', () => {
 
   it('loads a local material and applies it to one surface', () => {
     render(<RoomStudio />);
-    fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    loadDemoAndOpenProducts();
     fireEvent.change(document.querySelector('#material-file') as HTMLInputElement, { target: { files: [new File(['tile'], 'travertino.png', { type: 'image/png' })] } });
     fireEvent.click(screen.getByRole('button', { name: 'Applica a Muro 1' }));
     expect(screen.getByText(/travertino applicato a Muro 1/i)).toBeInTheDocument();
@@ -602,6 +633,7 @@ describe('RoomStudio', () => {
   it('closes an easy wall automatically after four taps', () => {
     render(<RoomStudio />);
     fireEvent.click(screen.getByRole('button', { name: 'Prova con la stanza esempio' }));
+    continueWithOriginalPhoto();
     fireEvent.click(screen.getByRole('button', { name: /Aggiungi muro/ }));
     const overlay = document.querySelector('.surface-overlay') as SVGSVGElement;
     vi.spyOn(overlay, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 1000, bottom: 625, width: 1000, height: 625, toJSON: () => ({}) });
@@ -719,7 +751,7 @@ describe('RoomStudio', () => {
 
   it('renames an internal wall and supports undo and redo', () => {
     render(<RoomStudio />);
-    loadDemoAndContinue();
+    loadDemoAndOpenProducts();
     fireEvent.change(screen.getByLabelText('Nome superficie'), { target: { value: 'Divisorio cucina' } });
     fireEvent.click(screen.getByRole('button', { name: 'Salva' }));
     expect(screen.getAllByText('Divisorio cucina').length).toBeGreaterThan(0);
@@ -734,12 +766,12 @@ describe('RoomStudio', () => {
     loadDemoAndContinue();
     fireEvent.click(screen.getByRole('button', { name: 'Mantieni tutto tranne questa' }));
     fireEvent.click(screen.getByRole('button', { name: /Muro 2Freeze attivo/ }));
-    expect(screen.getByText('Frozen')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Consenti modifiche a Muro 2' })).toBeInTheDocument();
   });
 
   it('searches demo materials and prepares an honest render summary', () => {
     render(<RoomStudio />);
-    loadDemoAndContinue();
+    loadDemoAndOpenProducts();
     const search = screen.getByLabelText('Cerca materiali, colori o mobili');
     fireEvent.change(search, { target: { value: 'salvia' } });
     fireEvent.click(screen.getByRole('button', { name: /Verde salvia/ }));
@@ -772,7 +804,7 @@ describe('RoomStudio', () => {
 
   it('does not enter Render while a furniture photo still needs a floor position', () => {
     render(<RoomStudio />);
-    loadDemoAndContinue();
+    loadDemoAndOpenProducts();
     fireEvent.change(screen.getByLabelText('Cerca materiali, colori o mobili'), { target: { value: 'divano' } });
     fireEvent.click(screen.getByRole('button', { name: /Divano chiaro/ }));
     fireEvent.click(screen.getByRole('button', { name: /Render/ }));
@@ -793,7 +825,7 @@ describe('RoomStudio', () => {
 
   it('anchors initial furniture to the front wall and exposes undo and delete', () => {
     render(<RoomStudio />);
-    loadDemoAndContinue();
+    loadDemoAndOpenProducts();
     const search = screen.getByLabelText('Cerca materiali, colori o mobili');
     fireEvent.change(search, { target: { value: 'divano' } });
     const canvas = document.querySelector('.canvas') as HTMLDivElement;
@@ -825,7 +857,7 @@ describe('RoomStudio', () => {
 
   it('uses one search for furniture and accepts a free-form render request', () => {
     render(<RoomStudio />);
-    loadDemoAndContinue();
+    loadDemoAndOpenProducts();
     const search = screen.getByLabelText('Cerca materiali, colori o mobili');
     fireEvent.change(search, { target: { value: 'cucina' } });
     fireEvent.click(screen.getByRole('button', { name: /Cucina/ }));
@@ -840,7 +872,7 @@ describe('RoomStudio', () => {
 
   it('shows a real side preview and on-canvas controls when furniture orientation changes', () => {
     render(<RoomStudio />);
-    loadDemoAndContinue();
+    loadDemoAndOpenProducts();
     fireEvent.change(screen.getByLabelText('Cerca materiali, colori o mobili'), { target: { value: 'divano' } });
     fireEvent.click(screen.getByRole('button', { name: /Divano chiaro/ }));
     const canvas = document.querySelector('.canvas') as HTMLDivElement;
@@ -892,7 +924,7 @@ describe('RoomStudio', () => {
 
   it('keeps the grabbed point stable while auto-scaling furniture in depth', () => {
     render(<RoomStudio />);
-    loadDemoAndContinue();
+    loadDemoAndOpenProducts();
     fireEvent.change(screen.getByLabelText('Cerca materiali, colori o mobili'), { target: { value: 'divano' } });
     fireEvent.click(screen.getByRole('button', { name: /Divano chiaro/ }));
     const canvas = document.querySelector('.canvas') as HTMLDivElement;
@@ -923,7 +955,7 @@ describe('RoomStudio', () => {
     });
 
     render(<RoomStudio />);
-    loadDemoAndContinue();
+    loadDemoAndOpenProducts();
     fireEvent.change(screen.getByLabelText('Cerca materiali, colori o mobili'), { target: { value: 'pavimento parquel legno' } });
 
     expect(screen.getByRole('button', { name: /Rovere naturale/ })).toBeInTheDocument();
@@ -937,7 +969,7 @@ describe('RoomStudio', () => {
 
   it('offers separate brand, model, color and product type criteria', () => {
     render(<RoomStudio />);
-    loadDemoAndContinue();
+    loadDemoAndOpenProducts();
 
     fireEvent.change(screen.getByLabelText('Marca o produttore'), { target: { value: 'Lea Ceramiche' } });
     fireEvent.change(screen.getByLabelText('Modello o collezione'), { target: { value: 'Intense' } });
@@ -960,7 +992,7 @@ describe('RoomStudio', () => {
 
   it('offers search, product photo and material sample as clear entry cards', () => {
     render(<RoomStudio />);
-    loadDemoAndContinue();
+    loadDemoAndOpenProducts();
     expect(screen.getByLabelText('Modalità inserimento prodotto')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Cerca online/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Foto prodotto/ })).toBeInTheDocument();
@@ -986,7 +1018,7 @@ describe('RoomStudio', () => {
     });
 
     render(<RoomStudio />);
-    loadDemoAndContinue();
+    loadDemoAndOpenProducts();
     fireEvent.change(document.querySelector('#furniture-file') as HTMLInputElement, {
       target: { files: [new File(['photo'], 'divano.jpg', { type: 'image/jpeg' })] },
     });
@@ -1009,7 +1041,7 @@ describe('RoomStudio', () => {
     });
 
     render(<RoomStudio />);
-    loadDemoAndContinue();
+    loadDemoAndOpenProducts();
     fireEvent.change(document.querySelector('#furniture-file') as HTMLInputElement, {
       target: { files: [new File(['photo'], 'prodotto.jpg', { type: 'image/jpeg' })] },
     });
@@ -1039,7 +1071,7 @@ describe('RoomStudio', () => {
     });
 
     render(<RoomStudio />);
-    loadDemoAndContinue();
+    loadDemoAndOpenProducts();
     fireEvent.change(document.querySelector('#furniture-file') as HTMLInputElement, {
       target: { files: [new File(['photo'], 'travertino.jpg', { type: 'image/jpeg' })] },
     });
@@ -1075,6 +1107,7 @@ describe('RoomStudio', () => {
     loadDemoAndContinue();
     fireEvent.pointerDown(document.querySelector('.surface-kind-floor polygon') as SVGPolygonElement);
     fireEvent.click(screen.getByRole('button', { name: 'Mantieni identico Pavimento' }));
+    continueToProducts();
     fireEvent.change(document.querySelector('#furniture-file') as HTMLInputElement, {
       target: { files: [new File(['photo'], 'pietra.jpg', { type: 'image/jpeg' })] },
     });
@@ -1089,13 +1122,18 @@ describe('RoomStudio', () => {
   it('makes the product target and geometry recovery controls explicit', () => {
     render(<RoomStudio />);
     loadDemoAndContinue();
+    expect(screen.getByRole('button', { name: '＋ Porta' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '＋ Arco' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '＋ Finestra' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '↔ Sposta linee' })).toBeInTheDocument();
+    continueToProducts();
 
     expect(screen.getByText('Dove vuoi applicarlo?')).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Scegli superficie da modificare' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Pavimento' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '＋ Porta' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '＋ Arco' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '＋ Finestra' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '＋ Porta' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '＋ Arco' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '＋ Finestra' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '↶ Annulla ultima modifica' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '◎ Nascondi linee' }));
     expect(document.querySelector('.surface-overlay')).toHaveClass('hide-product-guides');
@@ -1103,12 +1141,11 @@ describe('RoomStudio', () => {
     expect(document.querySelector('.surface-overlay')).not.toHaveClass('hide-product-guides');
   });
 
-  it('moves a complete shared edge with Apple Pencil in Products and restores it with undo', () => {
+  it('moves a complete shared edge with Apple Pencil in Controlla and restores it with undo', () => {
     render(<RoomStudio />);
     loadDemoAndContinue();
 
-    const guideActions = document.querySelector('.surface-guide-actions') as HTMLDivElement;
-    fireEvent.click(within(guideActions).getByRole('button', { name: '↔ Sposta linee' }));
+    clickStatusBar('↔ Sposta linee');
 
     expect(screen.getByLabelText('Sposta linea 3 di Muro 1')).toBeInTheDocument();
     expect(document.querySelectorAll('.surface-correction-controls .surface-edge-hit')).toHaveLength(4);
@@ -1149,7 +1186,7 @@ describe('RoomStudio', () => {
       expect(adjacentWallPoints).toContainEqual(endpoint);
     }
 
-    fireEvent.click(within(guideActions).getByRole('button', { name: '↶ Annulla ultima modifica' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Annulla ultima modifica' }));
     expect(selectedPolygon).toHaveAttribute('points', selectedBefore);
     expect(floorPolygon).toHaveAttribute('points', floorBefore);
   });
@@ -1157,10 +1194,8 @@ describe('RoomStudio', () => {
   it('creates a floor vertex from its small midpoint handle with Apple Pencil', () => {
     render(<RoomStudio />);
     loadDemoAndContinue();
-    fireEvent.click(screen.getByRole('button', { name: 'Pavimento' }));
-
-    const guideActions = document.querySelector('.surface-guide-actions') as HTMLDivElement;
-    fireEvent.click(within(guideActions).getByRole('button', { name: '↔ Sposta linee' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Pavimento/ }));
+    clickStatusBar('↔ Sposta linee');
     const midpoint = screen.getByLabelText('Crea e sposta un nuovo punto sulla linea 1 di Pavimento') as HTMLButtonElement;
     expect(midpoint).toHaveClass('surface-edge-grip-hit');
     expect(midpoint).toHaveStyle({ touchAction: 'none' });
@@ -1198,14 +1233,14 @@ describe('RoomStudio', () => {
     expect(sharedWallPoints).toContainEqual(floorAfter[0]);
     expect(sharedWallPoints).toContainEqual(floorAfter[1]);
 
-    fireEvent.click(within(guideActions).getByRole('button', { name: '↶ Annulla ultima modifica' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Annulla ultima modifica' }));
     expect(floorPolygon).toHaveAttribute('points', floorBefore);
     wallPolygons.forEach((polygon, index) => expect(polygon).toHaveAttribute('points', wallsBefore[index] as string));
   });
 
   it('shows automatic room measurements and accepts one real reference', () => {
     render(<RoomStudio />);
-    loadDemoAndContinue();
+    loadDemoAndOpenProducts();
 
     expect(screen.getByText('Misure della stanza')).toBeInTheDocument();
     expect(screen.getByText('Automatiche')).toBeInTheDocument();
@@ -1236,7 +1271,7 @@ describe('RoomStudio', () => {
     });
 
     render(<RoomStudio />);
-    loadDemoAndContinue();
+    loadDemoAndOpenProducts();
     fireEvent.change(screen.getByLabelText('Link prodotto'), { target: { value: 'https://example.com/limestone' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Cerca con Grok' }));
     fireEvent.click(await screen.findByRole('button', { name: /Impronta · Impronta Limestone Beige/ }));
@@ -1267,7 +1302,7 @@ describe('RoomStudio', () => {
     });
 
     render(<RoomStudio />);
-    loadDemoAndContinue();
+    loadDemoAndOpenProducts();
     fireEvent.change(screen.getByLabelText('Tipo prodotto'), { target: { value: 'Arredi' } });
     fireEvent.change(screen.getByLabelText('Cerca materiali, colori o mobili'), { target: { value: 'divano beige' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Cerca con Grok' }));
@@ -1278,9 +1313,9 @@ describe('RoomStudio', () => {
     expect(document.querySelector('.placed-furniture-placeholder')).not.toBeInTheDocument();
   });
 
-  it('starts with a four-step workflow and only exposes the simple mode', () => {
+  it('starts with a five-step workflow and only exposes the simple mode', () => {
     render(<RoomStudio />);
-    expect(screen.getByRole('navigation', { name: 'Passaggi del progetto' })).toHaveTextContent('1Foto2Prepara3Prodotti4Render');
+    expect(screen.getByRole('navigation', { name: 'Passaggi del progetto' })).toHaveTextContent('1Foto2Prepara3Controlla4Prodotti5Render');
     expect(screen.queryByText(/Modalità (semplice|avanzata)/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Strumenti avanzati' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Prepara/ })).toBeDisabled();

@@ -31,7 +31,7 @@ export function ProjectsList() {
       <article className="new-project-card">
         <div className="new-project-icon" aria-hidden="true">+</div>
         <h2>Nessun progetto salvato</h2>
-        <p>I contorni approvati restano in questo browser dopo Foto → Prepara.</p>
+        <p>I contorni approvati restano in questo browser dopo Foto → Prepara → Controlla.</p>
         <a href="/">Apri l’editor <span aria-hidden="true">→</span></a>
       </article>
     );
