@@ -8,8 +8,8 @@ const detectedSurfaces = {
 };
 
 async function holdDetectSurfaces(page: Page) {
-  let releaseDetect = () => undefined;
-  const detectReleased = new Promise<void>((resolve) => { releaseDetect = resolve; });
+  let releaseDetect = () => {};
+  const detectReleased = new Promise<void>((resolve) => { releaseDetect = () => resolve(); });
   await page.route('**/api/capabilities', async (route) => {
     await route.fulfill({
       status: 200,
