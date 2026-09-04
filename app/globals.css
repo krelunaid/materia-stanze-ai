@@ -530,6 +530,9 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .simple-mode.step-2.source-floorplan .surface-panel { display:block; }
 .simple-mode.step-2 .detect-button,.simple-mode.step-2 .panel-note { display:none; }
 .simple-mode.step-2 .surface-overlay:not(.is-cleanup-picking) { pointer-events:none; }
+.simple-mode.step-2:not(.source-floorplan) .surface-overlay:not(.is-cleanup-picking) { display:none; }
+.simple-mode.step-2 .status-bar .empty-room-button,
+.simple-mode.step-2 .status-bar .skip-empty-room { min-height:38px; font-size:10px; font-weight:800; }
 .simple-mode.step-3 .workspace { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) auto; }
 .simple-mode.step-3 .stage { grid-column:1; grid-row:1; }
 .simple-mode.step-3 .surface-panel { display:block; grid-column:1; grid-row:2; padding:14px 16px 16px; border-right:0; border-top:1px solid var(--line); }

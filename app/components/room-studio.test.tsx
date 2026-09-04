@@ -390,12 +390,16 @@ describe('RoomStudio', () => {
     expect(screen.queryByRole('button', { name: '＋ Arco' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Continua ai prodotti' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Correggi i bordi' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '↔ Sposta linee' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '✓ Fine correzione' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Correzione attiva/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Superfici della stanza')).not.toBeInTheDocument();
     continueWithOriginalPhoto();
     expect(screen.getByRole('button', { name: /Controlla/ })).toHaveClass('is-active');
     expect(screen.getByLabelText('Superfici della stanza')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Continua ai prodotti' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '＋ Porta' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '↔ Sposta linee' })).toBeInTheDocument();
     expect(screen.queryByLabelText('Modalità inserimento prodotto')).not.toBeInTheDocument();
     continueToProducts();
     expect(screen.getByRole('button', { name: /Prodotti/ })).toHaveClass('is-active');
