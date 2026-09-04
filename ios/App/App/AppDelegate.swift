@@ -1,5 +1,40 @@
 import UIKit
 import Capacitor
+import Photos
+
+class MateriaBridgeViewController: CAPBridgeViewController {
+    override func capacitorDidLoad() {
+        bridge?.registerPluginInstance(MateriaPhotosPlugin())
+    }
+}
+
+@objc(MateriaPhotosPlugin)
+class MateriaPhotosPlugin: CAPPlugin, CAPBridgedPlugin {
+    let identifier = "MateriaPhotosPlugin"
+    let jsName = "MateriaPhotos"
+    let pluginMethods: [CAPPluginMethod] = [CAPPluginMethod(name: "saveImage", returnType: CAPPluginReturnPromise)]
+
+    @objc func saveImage(_ call: CAPPluginCall) {
+        guard let encoded = call.getString("base64"),
+              let data = Data(base64Encoded: encoded),
+              let image = UIImage(data: data) else {
+            call.reject("Il render non contiene un’immagine valida.")
+            return
+        }
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            guard status == .authorized || status == .limited else {
+                call.reject("Per salvare il render, consenti a Materia di aggiungere immagini in Foto dalle Impostazioni di iOS.")
+                return
+            }
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }) { success, error in
+                if success { call.resolve() }
+                else { call.reject(error?.localizedDescription ?? "Non è stato possibile salvare il render in Foto.") }
+            }
+        }
+    }
+}
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {

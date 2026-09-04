@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 import type { Surface } from '../domain/editor';
-import { buildStoredProject, listProjects, loadProject, resetMemoryProjectStore, saveProject } from './project-store';
+import { buildStoredProject, listProjects, loadProject, saveProject } from './project-store';
 
 const floor: Surface = {
   id: 'floor',
@@ -12,7 +13,6 @@ const floor: Surface = {
 
 describe('project store', () => {
   it('saves approved geometry without rewriting it', async () => {
-    resetMemoryProjectStore();
     const project = buildStoredProject({
       id: 'room-1',
       title: 'Soggiorno',
@@ -26,6 +26,7 @@ describe('project store', () => {
       originalSurfaces: [floor],
       processedSurfaces: null,
       source: 'manual',
+      approved: true,
     });
     await saveProject(project);
     const loaded = await loadProject('room-1');
@@ -33,5 +34,17 @@ describe('project store', () => {
     expect(loaded?.geometry.surfaces[0].points).toEqual(floor.points);
     const listed = await listProjects();
     expect(listed[0]).toMatchObject({ id: 'room-1', title: 'Soggiorno' });
+  });
+
+  it('never silently reports success without durable storage', async () => {
+    vi.stubGlobal('indexedDB', undefined);
+    try { await expect(saveProject({} as Parameters<typeof saveProject>[0])).rejects.toThrow('non è disponibile'); }
+    finally { vi.unstubAllGlobals(); }
+  });
+
+  it('does not mark a draft geometry as approved merely because it was saved', () => {
+    const project = buildStoredProject({ id: 'draft', title: 'Draft', sourceType: 'photo', fileName: 'photo.jpg', mime: 'image/jpeg', original: new Blob(), processed: null, processedLabel: '', surfaces: [floor], originalSurfaces: [floor], processedSurfaces: null });
+    expect(project.geometry.status).toBe('proposed');
+    expect(project.geometry.approvedAt).toBeNull();
   });
 });

@@ -15,12 +15,18 @@ function formatWhen(stamp: number) {
 
 export function ProjectsList() {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
     void listProjects()
-      .then(setProjects)
-      .catch(() => setProjects([]));
-  }, []);
+      .then((items) => { if (!cancelled) { setProjects(items); setFailed(false); } })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => { cancelled = true; };
+  }, [retry]);
+
+  if (failed) return <div role="alert"><p>Non riesco a leggere i progetti su questo dispositivo. Non significa che siano stati cancellati.</p><button onClick={() => setRetry((value) => value + 1)}>Riprova</button></div>;
 
   if (projects === null) {
     return <p className="projects-empty">Carico i progetti salvati in questo browser…</p>;
@@ -31,7 +37,7 @@ export function ProjectsList() {
       <article className="new-project-card">
         <div className="new-project-icon" aria-hidden="true">+</div>
         <h2>Nessun progetto salvato</h2>
-        <p>I contorni approvati restano in questo browser dopo Foto → Prepara → Controlla.</p>
+        <p>Foto, contorni, prodotti e misure vengono salvati automaticamente su questo dispositivo.</p>
         <a href="/">Apri l’editor <span aria-hidden="true">→</span></a>
       </article>
     );

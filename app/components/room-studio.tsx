@@ -15,6 +15,9 @@ import {
   useState,
 } from 'react';
 import { drawImageCover } from '../lib/canvas-draw';
+import { navigateApp } from '../lib/app-navigation';
+import { saveNativePhoto } from '../lib/native-photo-save';
+import { planRenderPasses } from '../lib/render-passes';
 import {
   cleanupGenerationFrame,
   cleanupTileBoundsFromRect,
@@ -42,6 +45,7 @@ import { assessVisibleSurfaceEdit } from '../lib/surface-edit-difference';
 import { geometryForDerivedImage, geometrySnapshotsAfterEdit } from '../geometry/model';
 import { inferRoomMeasurement, measuredFurnitureScale, productWidthMeters, RoomMeasurement } from '../geometry/measurement';
 import { buildStoredProject, loadProject, saveProject } from '../geometry/project-store';
+import { archiveProjectAssets, restoreProjectAssets } from '../geometry/project-assets';
 import { openingCoverageInWall, validateRoomGeometry } from '../geometry/validate';
 import {
   isValidPolygon,
@@ -55,7 +59,7 @@ import {
 
 type SourceType = 'photo' | 'floorplan';
 type ImportedRoom = AcceptedRoomFile & { previewUrl?: string; sourceType: SourceType };
-type StudioMaterial = {
+export type StudioMaterial = {
   id: string;
   name: string;
   category: 'Pavimenti' | 'Rivestimenti' | 'Colori' | 'Arredi';
@@ -78,7 +82,7 @@ type DragEdgeEndpoint = { origin: Point; linked: LinkedVertex[] };
 type DragEdge = { kind: 'edge'; surfaceId: string; edgeIndex: number; pointerId: number; start: Point; endpoints: [DragEdgeEndpoint, DragEdgeEndpoint] };
 type GeometryDrag = DragVertex | DragEdge;
 type FurnitureFacing = 'front-wall' | 'left-wall' | 'right-wall';
-type PlacedFurniture = {
+export type PlacedFurniture = {
   id: string;
   name: string;
   x: number;
@@ -94,7 +98,7 @@ type PlacedFurniture = {
   preparedViews?: Partial<Record<FurnitureFacing, string>>;
   description?: string;
 };
-type PendingFurniture = { name: string; previewUrl?: string; sidePreviewUrl?: string; cutoutUrl?: string; preparedViews?: Partial<Record<FurnitureFacing, string>>; description?: string; file?: File };
+export type PendingFurniture = { name: string; previewUrl?: string; sidePreviewUrl?: string; cutoutUrl?: string; preparedViews?: Partial<Record<FurnitureFacing, string>>; description?: string; file?: File };
 type DragFurniture = { id: string; pointerId: number; offsetX: number; offsetY: number; previous: PlacedFurniture[] };
 type CleanupRegion = { label: string; points: Point[]; confidence: number; internalEdges?: CleanupTileSplitEdge[] };
 type CleanupTileResult = {
@@ -107,7 +111,7 @@ type CleanupTileResult = {
   image: string;
 };
 type AiStatus = 'checking' | 'ready' | 'missing' | 'unreachable';
-type GeometryDetectionStatus = 'ai' | 'fallback' | 'opening-invalid' | 'shell-invalid' | 'opening-shell-invalid' | null;
+export type GeometryDetectionStatus = 'ai' | 'fallback' | 'opening-invalid' | 'shell-invalid' | 'opening-shell-invalid' | null;
 type ManualOpeningMode = 'rectangle' | 'arch' | null;
 type DetectedSurface = {
   id?: string;
@@ -676,67 +680,6 @@ async function cropMaterialSample(source: string, bounds: NormalizedProductBound
   return blob;
 }
 
-async function createCombinedRenderReference(
-  materialSample: Blob,
-  furnitureReference: Blob,
-  materialName: string,
-  furnitureName: string,
-) {
-  const materialUrl = URL.createObjectURL(materialSample);
-  const furnitureUrl = URL.createObjectURL(furnitureReference);
-  try {
-    const [materialImage, furnitureImage] = await Promise.all([
-      loadImageSource(materialUrl),
-      loadImageSource(furnitureUrl),
-    ]);
-    const canvas = document.createElement('canvas');
-    canvas.width = 1200;
-    canvas.height = 700;
-    const context = canvas.getContext('2d');
-    if (!context) throw new Error('Non posso preparare i riferimenti del render.');
-
-    context.fillStyle = '#ffffff';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = '#d8f3ea';
-    context.fillRect(0, 0, canvas.width / 2, 86);
-    context.fillStyle = '#f5ead2';
-    context.fillRect(canvas.width / 2, 0, canvas.width / 2, 86);
-    context.fillStyle = '#10211e';
-    context.font = '700 28px system-ui, sans-serif';
-    context.textAlign = 'center';
-    context.textBaseline = 'middle';
-    context.fillText(`MATERIALE · ${materialName.slice(0, 28)}`, canvas.width / 4, 43);
-    context.fillText(`MOBILE · ${furnitureName.slice(0, 28)}`, canvas.width * .75, 43);
-
-    const drawContained = (image: HTMLImageElement, left: number, top: number, width: number, height: number, cover = false) => {
-      const scale = cover
-        ? Math.max(width / image.naturalWidth, height / image.naturalHeight)
-        : Math.min(width / image.naturalWidth, height / image.naturalHeight);
-      const drawWidth = image.naturalWidth * scale;
-      const drawHeight = image.naturalHeight * scale;
-      context.save();
-      context.beginPath();
-      context.rect(left, top, width, height);
-      context.clip();
-      context.drawImage(image, left + (width - drawWidth) / 2, top + (height - drawHeight) / 2, drawWidth, drawHeight);
-      context.restore();
-    };
-
-    drawContained(materialImage, 18, 104, 564, 578, true);
-    drawContained(furnitureImage, 618, 104, 564, 578);
-    context.strokeStyle = '#9eb7af';
-    context.lineWidth = 3;
-    context.strokeRect(18, 104, 564, 578);
-    context.strokeRect(618, 104, 564, 578);
-
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
-    if (!blob) throw new Error('Non posso preparare i riferimenti del render.');
-    return blob;
-  } finally {
-    URL.revokeObjectURL(materialUrl);
-    URL.revokeObjectURL(furnitureUrl);
-  }
-}
 
 export function friendlyRequestError(caught: unknown) {
   const message = caught instanceof Error ? caught.message : String(caught ?? '');
@@ -925,9 +868,12 @@ export function RoomStudio() {
   const [isCorrectingEdges, setIsCorrectingEdges] = useState(false);
   const [geometrySaved, setGeometrySaved] = useState(false);
   const [geometryDetectionStatus, setGeometryDetectionStatus] = useState<GeometryDetectionStatus>(null);
+  const [isVerifyingGeometry, setIsVerifyingGeometry] = useState(false);
+  const latestGeometryRef = useRef('');
+  useEffect(() => { latestGeometryRef.current = JSON.stringify(surfaces); }, [surfaces]);
   const geometryHasOpeningIssue = geometryDetectionStatus === 'opening-invalid' || geometryDetectionStatus === 'opening-shell-invalid';
   const geometryHasShellIssue = geometryDetectionStatus === 'shell-invalid' || geometryDetectionStatus === 'opening-shell-invalid';
-  const geometryDetectionBlocked = geometryHasOpeningIssue || geometryHasShellIssue;
+  const geometryDetectionBlocked = geometryHasOpeningIssue || geometryHasShellIssue || isVerifyingGeometry;
   const showGeometryTools = activeStep === STEP_REVIEW;
   const showPrepareFloorplanTools = activeStep === STEP_PREPARE && room?.sourceType === 'floorplan';
   const showProductTools = activeStep === STEP_PRODUCTS;
@@ -958,6 +904,13 @@ export function RoomStudio() {
   const roomBlobRef = useRef<string | null>(null);
   const materialBlobRef = useRef<string | null>(null);
   const materialSampleRef = useRef<Blob | null>(null);
+  const materialSamplesRef = useRef(new Map<string, Blob>());
+  const retainedMaterialsRef = useRef(new Map<string, StudioMaterial>());
+  const savedAssetUrlsRef = useRef<string[]>([]);
+  const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const saveRevisionRef = useRef(0);
+  const saveNowRef = useRef<() => Promise<boolean>>(async () => true);
+  const [projectSaveStatus, setProjectSaveStatus] = useState('');
   const materialIdRef = useRef(0);
   const furnitureBlobUrlsRef = useRef<string[]>([]);
   const furnitureFilesRef = useRef<Map<string, File>>(new Map());
@@ -1054,10 +1007,13 @@ export function RoomStudio() {
     const id = params.get('project');
     if (!id) return;
     let cancelled = false;
+    let loadedSuccessfully = false;
     skipAutosaveRef.current = true;
     void loadProject(id)
       .then((project) => {
-        if (cancelled || !project) return;
+        if (cancelled) return;
+        if (!project) throw new Error('Progetto non trovato su questo dispositivo.');
+        const restoredEditor = project.editor ? restoreProjectAssets(project.editor, project.assets ?? {}) : null;
         projectIdRef.current = project.id;
         const previewUrl = URL.createObjectURL(project.original);
         if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
@@ -1077,6 +1033,30 @@ export function RoomStudio() {
         setSurfaces(project.geometry.surfaces);
         setPastSurfaces([]);
         setFutureSurfaces([]);
+        if (restoredEditor) {
+          const restored = restoredEditor;
+          savedAssetUrlsRef.current.push(...restored.urls);
+          const state = restored.value;
+          setMaterial(state.material);
+          setOnlineMaterials(state.materials);
+          retainedMaterialsRef.current = new Map(state.materials.map((item) => [item.id, item]));
+          setPlacedFurniture(state.furniture);
+          setPendingFurniture(state.pendingFurniture);
+          furnitureFilesRef.current = new Map(state.furnitureFiles);
+          materialSamplesRef.current = new Map(state.materialSamples);
+          materialSampleRef.current = state.material ? materialSamplesRef.current.get(state.material.id) ?? null : null;
+          materialIdRef.current = Math.max(0, ...state.materials.map((item) => Number(item.id.replace('material-', '')) || 0));
+          furnitureIdRef.current = Math.max(0, ...state.furniture.map((item) => Number(item.id.replace(/\D/g, '')) || 0));
+          setCustomRequests(state.customRequests);
+          setCustomColor(state.customColor);
+          setManualRoomWidth(state.manualRoomWidth);
+          setRoomRatio(state.roomRatio);
+          setGeometrySaved(state.geometrySaved);
+          setGeometryDetectionStatus(state.detectionStatus);
+        } else {
+          setGeometrySaved(false);
+          setGeometryDetectionStatus('fallback');
+        }
         const preferred = project.geometry.surfaces.find((surface) => surface.kind === 'floor')
           ?? project.geometry.surfaces[0]
           ?? null;
@@ -1088,37 +1068,54 @@ export function RoomStudio() {
           processedBlobRef.current = processedUrl;
           setProcessedPreview(processedUrl);
           setProcessedLabel(project.processedLabel);
-          setShowProcessedPreview(Boolean(project.processedSurfaces?.length));
+          setShowProcessedPreview(project.editor?.showProcessedPreview ?? Boolean(project.processedSurfaces?.length));
         }
         autoFitPreviewRef.current = previewUrl;
-        setActiveStep(STEP_PREPARE);
-        setNotice('Progetto ripristinato. I contorni approvati non sono stati ricalcolati.');
+        setActiveStep(project.editor?.activeStep ?? STEP_REVIEW);
+        setNotice(project.editor ? 'Progetto ripristinato con foto, materiali, mobili, misure e contorni.' : 'Progetto precedente ripristinato. Controlla i contorni: questa copia non includeva mobili e materiali.');
+        setProjectSaveStatus('Salvato su questo dispositivo');
+        loadedSuccessfully = true;
       })
       .catch(() => {
         if (!cancelled) setError('Non sono riuscito a riaprire il progetto salvato in locale.');
       })
       .finally(() => {
-        skipAutosaveRef.current = false;
+        if (!cancelled && loadedSuccessfully) skipAutosaveRef.current = false;
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  useEffect(() => {
-    if (!room || skipAutosaveRef.current || surfaces.length === 0) return;
-    const handle = window.setTimeout(() => {
-      void (async () => {
+  const persistProject = useCallback(async (): Promise<boolean> => {
+    if (!room || skipAutosaveRef.current) return true;
+    if (projectIdRef.current === 'draft') projectIdRef.current = crypto.randomUUID();
+    const id = projectIdRef.current;
+    const revision = ++saveRevisionRef.current;
+    for (const item of [...onlineMaterials, ...(material ? [material] : [])]) retainedMaterialsRef.current.set(item.id, item);
+    const editor = {
+      version: 1 as const, material,
+      materials: [...retainedMaterialsRef.current.values()],
+      furniture: placedFurniture, pendingFurniture,
+      furnitureFiles: [...furnitureFilesRef.current.entries()],
+      materialSamples: [...materialSamplesRef.current.entries()],
+      customRequests, customColor, manualRoomWidth, roomRatio, geometrySaved,
+      detectionStatus: geometryDetectionStatus, activeStep, showProcessedPreview,
+    };
+    const originalSurfaces = showProcessedPreview ? originalSurfacesRef.current : surfaces;
+    const processedSurfaces = processedPreview ? (showProcessedPreview ? surfaces : processedSurfacesRef.current) : null;
+    setProjectSaveStatus('Salvataggio in corso…');
+    const pending = saveQueueRef.current.catch(() => undefined).then(async () => {
         try {
-          const original = room.file.size > 0
+          const original = room.previewUrl !== '/demo-room.jpg' && room.file.size > 0
             ? room.file
             : await (await fetch(room.previewUrl ?? '/demo-room.jpg')).blob();
           const processed = processedPreview
             ? await (await fetch(processedPreview)).blob()
             : null;
-          if (projectIdRef.current === 'draft') projectIdRef.current = crypto.randomUUID();
+          const archived = await archiveProjectAssets(editor);
           await saveProject(buildStoredProject({
-            id: projectIdRef.current,
+            id,
             title: room.projectName,
             sourceType: room.sourceType,
             fileName: room.file.name,
@@ -1127,17 +1124,38 @@ export function RoomStudio() {
             processed,
             processedLabel,
             surfaces,
-            originalSurfaces: originalSurfacesRef.current.length ? originalSurfacesRef.current : surfaces,
-            processedSurfaces: processedSurfacesRef.current,
+            originalSurfaces,
+            processedSurfaces,
             source: 'manual',
+            approved: geometrySaved && geometryDetectionStatus === 'ai',
+            editor: archived.value, assets: archived.assets,
           }));
+          if (projectIdRef.current === id && revision === saveRevisionRef.current) setProjectSaveStatus('Salvato su questo dispositivo');
+          return true;
         } catch {
-          // Local persistence is best-effort; the editor stays usable.
+          if (projectIdRef.current === id && revision === saveRevisionRef.current) setProjectSaveStatus('Salvataggio non riuscito. Non chiudere: premi Riprova.');
+          return false;
         }
-      })();
-    }, 500);
+    });
+    saveQueueRef.current = pending;
+    return pending;
+  }, [activeStep, customColor, customRequests, geometryDetectionStatus, geometrySaved, manualRoomWidth, material, onlineMaterials, pendingFurniture, placedFurniture, processedLabel, processedPreview, room, roomRatio, showProcessedPreview, surfaces]);
+
+  useEffect(() => { saveNowRef.current = persistProject; }, [persistProject]);
+  useEffect(() => {
+    if (!room || skipAutosaveRef.current) return;
+    const handle = window.setTimeout(() => { void persistProject(); }, 500);
     return () => window.clearTimeout(handle);
-  }, [processedLabel, processedPreview, room, surfaces]);
+  }, [persistProject, room]);
+  useEffect(() => {
+    const saveOnHide = () => { if (document.visibilityState === 'hidden') void saveNowRef.current(); };
+    const urls = savedAssetUrlsRef.current;
+    document.addEventListener('visibilitychange', saveOnHide);
+    return () => {
+      document.removeEventListener('visibilitychange', saveOnHide);
+      urls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, []);
 
   useEffect(() => {
     if (!room || room.sourceType !== 'photo') return;
@@ -1163,7 +1181,7 @@ export function RoomStudio() {
     if (!query) return [];
     return furnitureCatalog.filter((item) => `${item.name} ${item.description}`.toLocaleLowerCase('it').includes(query));
   }, [materialQuery, searchBrand, searchModel, searchColor, searchCategory]);
-  const materialMap = useMemo(() => new Map(catalogMaterials.concat(onlineMaterials, material ? [material] : []).map((item) => [item.id, item])), [material, onlineMaterials]);
+  const materialMap = useMemo(() => new Map(catalogMaterials.concat([...retainedMaterialsRef.current.values()], onlineMaterials, material ? [material] : []).map((item) => [item.id, item])), [material, onlineMaterials]);
 
   useEffect(() => {
     const floor = surfaces.find((surface) => surface.kind === 'floor');
@@ -1258,9 +1276,8 @@ export function RoomStudio() {
     dragStartRef.current = null;
     setDragVertex(null);
     setDragEdge(null);
-    setGeometryDetectionStatus((current) => current === 'shell-invalid'
-      ? 'ai'
-      : current === 'opening-shell-invalid' ? 'opening-invalid' : current);
+    // A completed drag is not evidence that an unsafe architectural boundary is now correct.
+    setGeometrySaved(false);
     shellRef.current?.classList.remove('is-moving-vertex');
   }, []);
 
@@ -1336,6 +1353,7 @@ export function RoomStudio() {
     const result = validateRoomFile(file);
     if (!result.ok) { setError(result.message); return; }
     const finishImport = (previewUrl: string) => {
+      skipAutosaveRef.current = false;
       if (roomBlobRef.current) URL.revokeObjectURL(roomBlobRef.current);
       if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
       roomBlobRef.current = previewUrl;
@@ -1651,8 +1669,9 @@ export function RoomStudio() {
       setDragVertex(null);
       setDragEdge(null);
       shellRef.current?.classList.remove('is-moving-vertex');
-      if (activeStep === STEP_REVIEW) setGeometrySaved(true);
-      setNotice('Contorno salvato. Puoi continuare ai prodotti o scegliere un’altra superficie.');
+      if (activeStep === STEP_REVIEW) setGeometrySaved(!geometryDetectionBlocked);
+      setNotice(geometryDetectionBlocked ? 'Modifiche conservate. La geometria resta da verificare: riprova il riconoscimento prima del render.' : 'Contorno salvato. Puoi continuare ai prodotti o scegliere un’altra superficie.');
+      if (geometryHasShellIssue) void verifyCorrectedContours();
       return;
     }
     if (!selected || selected.frozen) {
@@ -1696,12 +1715,14 @@ export function RoomStudio() {
     if (!file) return;
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { setError('Il campione materiale deve essere JPG, PNG o WEBP.'); return; }
     if (file.size > 12 * 1024 * 1024) { setError('Il campione materiale supera il limite di 12 MB.'); return; }
-    if (materialBlobRef.current) URL.revokeObjectURL(materialBlobRef.current);
     const previewUrl = URL.createObjectURL(file);
+    savedAssetUrlsRef.current.push(previewUrl);
     materialBlobRef.current = previewUrl;
     materialSampleRef.current = file;
     materialIdRef.current += 1;
     const next: StudioMaterial = { id: `material-${materialIdRef.current}`, name: file.name.replace(/\.[^.]+$/, ''), category: 'Rivestimenti', description: 'Campione fotografico personale', previewUrl, textureUrl: previewUrl, referenceKind: 'uploaded-sample' };
+    materialSamplesRef.current.set(next.id, file);
+    setOnlineMaterials((current) => [...current, next]);
     setMaterial(next); setError(null); setNotice(`Campione “${next.name}” pronto. Seleziona una superficie e applicalo.`);
   }
 
@@ -2644,8 +2665,8 @@ export function RoomStudio() {
       // Only a verified flat texture (or an uploaded sample, stored as
       // textureUrl) may be sent as the visual surface reference.
       const referenceUrl = chosenMaterial.textureUrl;
-      if (chosenMaterial.referenceKind === 'uploaded-sample' && materialSampleRef.current) {
-        form.append('materialReference', materialSampleRef.current, 'campione-materiale.png');
+      if (chosenMaterial.referenceKind === 'uploaded-sample' && materialSamplesRef.current.has(chosenMaterial.id)) {
+        form.append('materialReference', materialSamplesRef.current.get(chosenMaterial.id)!, 'campione-materiale.png');
       } else if (referenceUrl) {
         form.append('imageUrl', referenceUrl);
       }
@@ -2751,8 +2772,8 @@ export function RoomStudio() {
         } finally {
           URL.revokeObjectURL(sourceUrl);
         }
-        if (materialBlobRef.current) URL.revokeObjectURL(materialBlobRef.current);
         const previewUrl = URL.createObjectURL(sample);
+        savedAssetUrlsRef.current.push(previewUrl);
         materialBlobRef.current = previewUrl;
         materialSampleRef.current = sample;
         materialIdRef.current += 1;
@@ -2766,6 +2787,8 @@ export function RoomStudio() {
           referenceKind: 'uploaded-sample',
           confidence: result.confidence,
         };
+        materialSamplesRef.current.set(next.id, sample);
+        setOnlineMaterials((current) => [...current, next]);
         setMaterial(next);
         const targetKind: SurfaceKind = result.category === 'Pavimenti' ? 'floor' : 'wall';
         const target = surfaces.find((surface) => !surface.frozen && surface.kind === targetKind);
@@ -3081,6 +3104,32 @@ export function RoomStudio() {
       openingAuditStatus: result.openingAuditStatus,
       shellGeometryStatus: result.shellGeometryStatus,
     };
+  }
+
+  async function verifyCorrectedContours() {
+    if (!room?.previewUrl || isVerifyingGeometry || isAutoFitting) return;
+    const signature = JSON.stringify(surfaces);
+    const projectId = projectIdRef.current;
+    setIsVerifyingGeometry(true); setGeometrySaved(false); setError(null);
+    setNotice('Controllo le linee corrette sulla foto originale, senza spostarle.');
+    try {
+      const form = new FormData();
+      form.append('image', await createGeometryInput(room.previewUrl), 'originale.jpg');
+      form.append('verifyOnly', 'true');
+      form.append('surfaces', signature);
+      const { response, result } = await requestJson<{ accepted?: boolean; reason?: string; message?: string }>(
+        endpoint('/api/detect-surfaces'), { method: 'POST', body: form }, 70000,
+      );
+      if (projectIdRef.current !== projectId || latestGeometryRef.current !== signature) return;
+      if (!response.ok) throw new Error(result.message ?? 'Verifica dei contorni non disponibile.');
+      if (result.accepted === true) {
+        setGeometryDetectionStatus((current) => current === 'opening-shell-invalid' ? 'opening-invalid' : current === 'shell-invalid' ? 'ai' : current);
+        setGeometrySaved(!geometryHasOpeningIssue);
+        setNotice(geometryHasOpeningIssue ? 'Confini della stanza verificati. Resta da controllare l’apertura.' : 'Confini della stanza verificati e salvati. Ora puoi continuare.');
+      } else setError(result.reason ?? 'I contorni non coincidono ancora con la struttura della stanza.');
+    } catch (caught) {
+      if (projectIdRef.current === projectId) setError(friendlyRequestError(caught).message);
+    } finally { setIsVerifyingGeometry(false); }
   }
 
   async function autoFitSurfaces() {
@@ -3562,10 +3611,6 @@ export function RoomStudio() {
     const protectedSurfaces = renderSurfaces.filter((surface) => surface.frozen
       || ((surface.kind === 'door' || surface.kind === 'window') && !surface.materialId)
       || (surface.kind === 'ceiling' && !surface.materialId));
-    const materialAssignments = renderSurfaces.filter((surface) => surface.materialId).map((surface) => {
-      const assigned = surface.materialId === renderMaterial?.id ? renderMaterial : materialMap.get(surface.materialId!);
-      return `${surface.name}: ${assigned?.brand ? `${assigned.brand} ` : ''}${assigned?.name ?? 'materiale scelto'} (${assigned?.description ?? 'mantieni il campione selezionato'}; ${assigned ? materialReferenceLabel(assigned) : 'riferimento non disponibile'})`;
-    });
     const furnitureAssignments = placedFurniture.map((item) => [
       item.name,
       item.description ? `exact product data: ${item.description}` : 'product dimensions not supplied; do not claim exact physical scale',
@@ -3578,6 +3623,7 @@ export function RoomStudio() {
 
     setIsRendering(true); setError(null); setRenderSummaryOpen(false);
     setNotice('Grok modifica solo prodotti e mobili. Geometria, aperture e resto della foto sono bloccati pixel per pixel.');
+    const temporaryRenderUrls: string[] = [];
     try {
       if (!editableMaterialSurfaces.length && !placedFurniture.length) {
         processedSurfacesRef.current = renderSurfaces;
@@ -3585,83 +3631,70 @@ export function RoomStudio() {
         setNotice('Nessuna modifica visiva richiesta: la fotografia è rimasta identica e non è stata inviata all’IA.');
         return;
       }
-      const { inputImage, mask, maskReference } = await createMaskedInput({
-        editableSurfaces: editableMaterialSurfaces,
-        editableFurniture: placedFurniture,
-        protectedSurfaces,
-        sourceUrl,
-      });
-      const form = new FormData();
-      form.append('image', inputImage, 'render-input.jpg');
-      form.append('mask', mask, 'controlled-edit-mask.png');
-      form.append('maskReference', maskReference, 'controlled-edit-mask-reference.png');
-      form.append('materials', materialAssignments.join('\n'));
-      form.append('furniture', furnitureAssignments.join('\n'));
-      form.append('requests', customRequests.join(', '));
-      form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
-      form.append('roomMeasurements', `width ${roomMeasurement.widthMeters} m; depth ${roomMeasurement.depthMeters} m; height ${roomMeasurement.heightMeters} m; confidence ${Math.round(roomMeasurement.confidence * 100)}%; reference ${roomMeasurement.referenceLabel}`);
-
-      const furnitureWithPhoto = placedFurniture.find((item) => furnitureFilesRef.current.has(item.id));
-      const originalFurnitureReference = furnitureWithPhoto ? furnitureFilesRef.current.get(furnitureWithPhoto.id) : null;
-      const furnitureWithCutout = placedFurniture.find((item) => item.cutoutUrl);
-      let furnitureReference: Blob | null = null;
-      let furnitureReferenceName = '';
-      let furnitureReferenceFilename = 'furniture-reference.png';
-      if (furnitureWithCutout?.cutoutUrl) {
-        const cutoutResponse = await fetch(furnitureWithCutout.cutoutUrl);
-        if (!cutoutResponse.ok) throw new Error('Non riesco a rileggere il ritaglio del mobile. Ricarica la foto prodotto e riprova.');
-        furnitureReference = await cutoutResponse.blob();
-        furnitureReferenceName = furnitureWithCutout.name;
-        furnitureReferenceFilename = 'furniture-cutout.png';
-      } else if (originalFurnitureReference && furnitureWithPhoto) {
-        furnitureReference = originalFurnitureReference;
-        furnitureReferenceName = furnitureWithPhoto.name;
-        furnitureReferenceFilename = originalFurnitureReference.name;
-      }
-
-      const referenceUrl = renderMaterial?.textureUrl;
-      const uploadedMaterialReference = materialAssignments.length
-        && renderMaterial?.referenceKind === 'uploaded-sample'
-        && materialSampleRef.current
-        ? materialSampleRef.current
-        : null;
-      if (uploadedMaterialReference) {
-        form.append('materialReference', uploadedMaterialReference, 'campione-materiale.png');
-      } else if (referenceUrl && materialAssignments.length) {
-        form.append('imageUrl', referenceUrl);
-      }
-      if (materialAssignments.length) form.append('referenceType', renderMaterial?.referenceKind ?? 'metadata-only');
-      if (furnitureReference) {
-        form.append('furnitureReference', furnitureReference, furnitureReferenceFilename);
-        form.append('furnitureReferenceName', furnitureReferenceName);
-      }
-      if (uploadedMaterialReference && furnitureReference) {
-        const combinedReference = await createCombinedRenderReference(
-          uploadedMaterialReference,
-          furnitureReference,
-          renderMaterial?.name ?? 'campione scelto',
-          furnitureReferenceName || 'mobile scelto',
+      // Each pass has its own exact product reference. Never describe several
+      // furniture items while supplying only the first item's photograph.
+      const references = new Map(materialMap);
+      if (renderMaterial) references.set(renderMaterial.id, renderMaterial);
+      const passes = planRenderPasses(renderSurfaces, placedFurniture, references);
+      let workingUrl = sourceUrl;
+      for (const [index, pass] of passes.entries()) {
+        const label = pass.material?.name ?? pass.furniture[0]?.name ?? 'materiale';
+        if (pass.surfaces.length && !pass.material) throw new Error('Un materiale applicato non è più disponibile. Selezionalo di nuovo.');
+        setNotice(`Creo il render: ${index + 1} di ${passes.length} — ${label}.`);
+        const { inputImage, mask, maskReference } = await createMaskedInput({
+          editableSurfaces: pass.surfaces,
+          editableFurniture: pass.furniture,
+          protectedSurfaces,
+          sourceUrl: workingUrl,
+        });
+        const form = new FormData();
+        form.append('image', inputImage, 'render-input.jpg');
+        form.append('mask', mask, 'controlled-edit-mask.png');
+        form.append('maskReference', maskReference, 'controlled-edit-mask-reference.png');
+        form.append('materials', pass.surfaces.map((surface) =>
+          `${surface.name}: ${pass.material?.brand ?? ''} ${pass.material?.name} (${pass.material?.description}; ${materialReferenceLabel(pass.material!)})`
+        ).join('\n'));
+        form.append('furniture', pass.furniture.map((item) => furnitureAssignments[placedFurniture.indexOf(item)]).join('\n'));
+        form.append('requests', index === passes.length - 1 ? customRequests.join(', ') : '');
+        form.append('protectedAreas', frozenSurfaces.map((surface) => surface.name).join(', '));
+        form.append('roomMeasurements', `width ${roomMeasurement.widthMeters} m; depth ${roomMeasurement.depthMeters} m; height ${roomMeasurement.heightMeters} m; confidence ${Math.round(roomMeasurement.confidence * 100)}%; reference ${roomMeasurement.referenceLabel}`);
+        if (pass.material) {
+          form.append('referenceType', pass.material.referenceKind ?? 'metadata-only');
+          const sample = materialSamplesRef.current.get(pass.material.id);
+          if (pass.material.referenceKind === 'uploaded-sample') {
+            if (!sample) throw new Error(`Ricarica il campione di “${pass.material.name}”: manca il riferimento fotografico.`);
+            form.append('materialReference', sample, 'campione-materiale.png');
+          } else if (pass.material.textureUrl) form.append('imageUrl', pass.material.textureUrl);
+        }
+        const furniture = pass.furniture[0];
+        if (furniture) {
+          form.append('furnitureReferenceName', furniture.name);
+          const original = furnitureFilesRef.current.get(furniture.id);
+          if (furniture.cutoutUrl) {
+            const response = await fetch(furniture.cutoutUrl);
+            if (!response.ok) throw new Error(`Ricarica la foto di “${furniture.name}”.`);
+            form.append('furnitureReference', await response.blob(), 'furniture-cutout.png');
+          } else if (original) form.append('furnitureReference', original, original.name);
+          else if (furniture.previewUrl?.startsWith('http')) form.append('furnitureReferenceUrl', furniture.previewUrl);
+          else if (furniture.previewUrl?.startsWith('blob:')) {
+            const response = await fetch(furniture.previewUrl);
+            if (!response.ok) throw new Error(`Ricarica la foto di “${furniture.name}”.`);
+            form.append('furnitureReference', await response.blob(), 'furniture-reference.png');
+          }
+        }
+        const { response, result } = await requestJson<{ image?: string; message?: string }>(
+          endpoint('/api/render-room'), { method: 'POST', body: form }, 240000,
         );
-        form.append('combinedReference', combinedReference, 'riferimenti-materiale-mobile.png');
-        form.append('combinedReferenceMaterialName', renderMaterial?.name ?? 'campione scelto');
+        if (!response.ok || !result.image) throw new Error(result.message ?? 'Render non disponibile.');
+        workingUrl = await protectAiResult(result.image, {
+          editableSurfaces: pass.surfaces, editableFurniture: pass.furniture, protectedSurfaces, sourceUrl: workingUrl,
+          deferCommit: true,
+        });
+        temporaryRenderUrls.push(workingUrl);
       }
-      const furnitureWithRemotePhoto = placedFurniture.find((item) => item.previewUrl?.startsWith('http'));
-      if (!furnitureReference && furnitureWithRemotePhoto?.previewUrl) {
-        form.append('furnitureReferenceUrl', furnitureWithRemotePhoto.previewUrl);
-        form.append('furnitureReferenceName', furnitureWithRemotePhoto.name);
-      }
-      const { response, result } = await requestJson<{
-        image?: string;
-        message?: string;
-        verification?: { visible: boolean; atRequestedAnchor: boolean; resemblesReference: boolean; confidence: number } | null;
-      }>(endpoint('/api/render-room'), { method: 'POST', body: form }, 240000);
-      if (!response.ok || !result.image) throw new Error(result.message ?? 'Render non disponibile.');
-      const protectedPreview = await protectAiResult(result.image, {
-        editableSurfaces: editableMaterialSurfaces,
-        editableFurniture: placedFurniture,
-        protectedSurfaces,
-        sourceUrl,
-      });
+      const protectedPreview = workingUrl;
+      temporaryRenderUrls.pop(); // The final image is owned by the editor, not this operation.
+      savedAssetUrlsRef.current.push(protectedPreview);
       processedSurfacesRef.current = renderSurfaces;
       setProcessedPreview(protectedPreview); setProcessedLabel('Render controllato'); setShowProcessedPreview(true);
       setActiveStep(STEP_RENDER);
@@ -3672,6 +3705,7 @@ export function RoomStudio() {
       setError(friendlyRequestError(caught).message);
       setNotice(null);
     } finally {
+      temporaryRenderUrls.forEach((url) => URL.revokeObjectURL(url));
       setIsRendering(false);
     }
   }
@@ -3690,6 +3724,10 @@ export function RoomStudio() {
       const response = await fetch(processedPreview);
       if (!response.ok) throw new Error('Non riesco a preparare il file del render.');
       const blob = await response.blob();
+      if (await saveNativePhoto(blob)) {
+        setNotice('Render salvato nell’app Foto.');
+        return;
+      }
       const extension = blob.type.includes('png') ? 'png' : 'jpg';
       const file = new File([blob], `materia-render-${new Date().toISOString().slice(0, 10)}.${extension}`, { type: blob.type || 'image/jpeg' });
       const canShareFile = typeof navigator.share === 'function'
@@ -3703,7 +3741,7 @@ export function RoomStudio() {
         anchor.href = downloadUrl; anchor.download = file.name;
         document.body.appendChild(anchor); anchor.click(); anchor.remove();
         window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
-        setNotice('Render salvato nei download.');
+        setNotice('Download avviato. Controlla i download del browser per trovare il render.');
       }
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === 'AbortError') {
@@ -3718,6 +3756,8 @@ export function RoomStudio() {
   }
 
   function loadDemoRoom() {
+    skipAutosaveRef.current = false;
+    projectIdRef.current = crypto.randomUUID();
     if (processedBlobRef.current) URL.revokeObjectURL(processedBlobRef.current);
     processedBlobRef.current = null;
     const file = new File(['demo'], 'stanza-vuota-con-finestra.jpg', { type: 'image/jpeg' });
@@ -3861,7 +3901,9 @@ export function RoomStudio() {
     recognizedArches ? `${recognizedArches} ${recognizedArches === 1 ? 'arco' : 'archi'}` : '',
     recognizedWindows ? `${recognizedWindows} ${recognizedWindows === 1 ? 'finestra' : 'finestre'}` : '',
   ].filter(Boolean).join(', ');
-  const assistantActivity = isImportingRoom
+  const assistantActivity = isVerifyingGeometry
+    ? { working: true, title: 'Verifico le correzioni', detail: 'Confronto le linee con la foto originale. Non le modifico.' }
+    : isImportingRoom
     ? { working: true, title: 'Preparo la foto', detail: 'La ottimizzo senza modificare l’originale.' }
     : isCreatingFloorplanRoom
       ? { working: true, title: 'Leggo la planimetria', detail: 'Cerco pareti, porte e finestre.' }
@@ -3882,7 +3924,7 @@ export function RoomStudio() {
                     : isApplyingProduct
                       ? { working: true, title: 'Applico il materiale', detail: 'Seguo la superficie che hai scelto.' }
                       : isRendering
-                        ? { working: true, title: 'Creo il render', detail: 'Controllo posizione, scala e zone protette.' }
+                        ? { working: true, title: 'Creo il render', detail: notice ?? 'Controllo posizione, scala e zone protette.' }
                         : isSavingRender
                           ? { working: true, title: 'Preparo il salvataggio', detail: 'Creo il file del render senza modificare l’originale.' }
                         : activeStep === STEP_PHOTO
@@ -3900,10 +3942,12 @@ export function RoomStudio() {
   return (
     <main ref={shellRef} className={`app-shell simple-mode step-${activeStep} ${room?.sourceType === 'floorplan' ? 'source-floorplan' : ''} ${(showPrepareFloorplanTools && (drawKind || selected)) || (showGeometryTools && (drawKind || (isCorrectingEdges && selected))) ? 'has-mobile-surface-actions' : ''}`}>
       <header className="topbar">
-        <a href="/projects" className="brand-lockup" aria-label="Vai ai progetti"><div className="brand-mark" aria-hidden="true"><span /><span /></div><div><p className="eyebrow">Studio materiali</p><p className="brand-name">Materia</p></div></a>
+        <a href="/projects" className="brand-lockup" aria-label="Vai ai progetti" onClick={(event) => { event.preventDefault(); void persistProject().then((saved) => { if (saved) navigateApp('/projects'); }); }}><div className="brand-mark" aria-hidden="true"><span /><span /></div><div><p className="eyebrow">Studio materiali</p><p className="brand-name">Materia</p></div></a>
         <div className="project-heading"><span className="status-dot" /><div><p>{projectName}</p><span>{room ? `${room.sourceType === 'floorplan' ? 'Planimetria' : 'Foto'} · originale protetto` : 'Nuovo progetto locale'}</span></div></div>
         <div className="top-actions"><span className={`ai-status ${aiStatus}`} title={aiServicesDescription} aria-label={`${aiStatusLabel}: ${aiServicesDescription}`}><i />{aiStatusLabel}</span><button className="avatar" type="button" aria-label="Profilo locale">AG</button></div>
       </header>
+
+      {room && <div className="project-save-status" aria-live="polite"><span>{projectSaveStatus || 'Modifiche da salvare'}</span><button type="button" onClick={() => void persistProject()}>{projectSaveStatus.startsWith('Salvataggio non') ? 'Riprova salvataggio' : 'Salva progetto'}</button></div>}
 
       <nav className="simple-steps" aria-label="Passaggi del progetto">{[
         ['1', 'Foto'], ['2', 'Prepara'], ['3', 'Controlla'], ['4', 'Prodotti'], ['5', 'Render'],
@@ -4030,7 +4074,7 @@ export function RoomStudio() {
           {room?.sourceType === 'photo' && activeStep === STEP_PREPARE && <section className="empty-room-choice" aria-label="Svuota la stanza oppure continua"><div><strong>{isPickingCleanup || cleanupRegion ? 'Indica cosa rimuovere' : isAutoFitting ? RECOGNITION_WAITING_TITLE : 'Vuoi svuotare la stanza?'}</strong><span>{isPickingCleanup || cleanupRegion ? 'Tocca il centro dell’oggetto, oppure continua con la foto originale.' : isAutoFitting ? `${RECOGNITION_WAITING_DETAIL} ${recognitionElapsedLabel(autoFitElapsedSeconds)}` : surfaces.length ? `Riconosciuto: ${recognizedStructure}. Scegli se svuotare la stanza o usare la foto originale.` : 'Scegli una sola cosa: svuota, oppure usa la foto originale.'}</span></div>{(isPickingCleanup || processedPreview || cleanupRegion) && <div className="empty-room-actions">{(isPickingCleanup || processedPreview) && !cleanupRegion && <button type="button" className={isPickingCleanup ? 'is-active' : ''} onClick={() => { setIsPickingCleanup((current) => !current); setError(null); setNotice(isPickingCleanup ? 'Selezione annullata.' : processedPreview ? 'Tocca il centro dell’oggetto rimasto nella foto.' : 'Tocca il centro di un mobile nella foto: lo delimito e lo rimuovo.'); }} disabled={isDetectingCleanup || isCleaningRegion}>{isDetectingCleanup ? 'Riconosco…' : isPickingCleanup ? 'Annulla selezione' : '◎ Pulisci un residuo'}</button>}{cleanupRegion && <><button type="button" className="cleanup-confirm" onClick={() => void cleanResidualRegion()} disabled={isCleaningRegion}>{isCleaningRegion ? 'Pulisco…' : 'Pulisci selezione'}</button><button type="button" onClick={() => setCleanupRegion(null)} disabled={isCleaningRegion}>Annulla</button></>}</div>}</section>}
           {geometryDetectionStatus === 'fallback' && room?.sourceType === 'photo' && activeStep === STEP_REVIEW && <div className="geometry-fallback-warning" role="status"><div><strong>Contorni provvisori</strong><span>Il riconoscimento IA di questa foto non è riuscito. Correggi i contorni trascinando linee o pallini prima di applicare un prodotto, oppure riprova.</span></div><button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview}>{isAutoFitting ? 'Riconosco…' : '✦ Riprova IA'}</button></div>}
           {geometryHasOpeningIssue && room?.sourceType === 'photo' && activeStep === STEP_REVIEW && <div className="geometry-fallback-warning opening-invalid-warning" role="status"><div><strong>Apertura da confermare</strong><span>La curva è visibile, ma soglia o stipiti sono stimati dietro i mobili: le parti arancioni tratteggiate richiedono conferma prima di applicare prodotti o creare il render. Puoi comunque cercare i prodotti.</span></div><button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview}>{isAutoFitting ? 'Riconosco…' : '✦ Riprova IA'}</button></div>}
-          {geometryHasShellIssue && room?.sourceType === 'photo' && activeStep === STEP_REVIEW && <div className="geometry-fallback-warning opening-invalid-warning" role="status"><div><strong>Contorni da rivedere</strong><span>I confini tra muri, soffitto e pavimento non coincidono ancora. Correggi le linee prima di applicare prodotti o creare il render. Puoi comunque cercare i prodotti.</span></div><button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview}>{isAutoFitting ? 'Riconosco…' : '✦ Riprova IA'}</button></div>}
+          {geometryHasShellIssue && room?.sourceType === 'photo' && activeStep === STEP_REVIEW && <div className="geometry-fallback-warning opening-invalid-warning" role="status"><div><strong>Contorni da rivedere</strong><span>Correggi le linee e premi Fine correzione: le confronterò con la foto originale senza spostarle. Puoi comunque cercare i prodotti.</span></div><button type="button" onClick={() => void verifyCorrectedContours()} disabled={isAutoFitting || isVerifyingGeometry}>{isVerifyingGeometry ? 'Verifico…' : 'Verifica correzioni'}</button><button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || isVerifyingGeometry || showProcessedPreview}>{isAutoFitting ? 'Riconosco…' : '✦ Riprova IA'}</button></div>}
           <div className={`status-bar ${activeStep === STEP_PREPARE || activeStep === STEP_REVIEW ? 'prepare-status' : ''}`}><span className="status-icon">{notice ? '✓' : 'i'}</span><p>{isAutoFitting ? `${RECOGNITION_WAITING_DETAIL} ${recognitionElapsedLabel(autoFitElapsedSeconds)}` : notice ?? (activeStep === STEP_PREPARE ? 'Riconoscimento in corso. Poi scegli se svuotare o usare la foto originale.' : activeStep === STEP_REVIEW ? 'Controlla i contorni. Poi continua ai prodotti.' : 'Carica la foto, scegli cosa mantenere e poi cerca il prodotto.')}</p>{(showGeometryTools || showPrepareFloorplanTools) && drawKind && <button className="opening-undo-inline" type="button" onClick={undoDraftPoint} disabled={draft.length === 0}>↶ Ultimo punto</button>}{(showGeometryTools || showPrepareFloorplanTools) && drawKind && !quickDraw && <button className="opening-confirm-inline" type="button" onClick={() => completeSurface(draft, drawKind)} disabled={draft.length < (manualOpeningMode === 'arch' ? 5 : 3)}>✓ Conferma {activeDrawingLabel.toLowerCase()}</button>}{room && (showGeometryTools || showPrepareFloorplanTools) && !drawKind && <button className={`edge-edit-button ${isCorrectingEdges ? 'is-active' : ''}`} type="button" onClick={toggleEdgeCorrection}>{isCorrectingEdges ? '✓ Fine correzione' : showGeometryTools ? '↔ Sposta linee' : 'Correggi il perimetro'}</button>}{room?.sourceType === 'photo' && showGeometryTools && <><button className={`opening-draw-button ${drawKind === 'door' && manualOpeningMode !== 'arch' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'door' && manualOpeningMode !== 'arch' ? cancelDrawing() : startDrawing('door', true, 'rectangle')}>{drawKind === 'door' && manualOpeningMode !== 'arch' ? '✕ Cancella porta' : '＋ Porta'}</button><button className={`opening-draw-button ${drawKind === 'door' && manualOpeningMode === 'arch' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'door' && manualOpeningMode === 'arch' ? cancelDrawing() : startDrawing('door', false, 'arch')}>{drawKind === 'door' && manualOpeningMode === 'arch' ? '✕ Cancella arco' : '＋ Arco'}</button><button className={`opening-draw-button ${drawKind === 'window' ? 'is-active' : ''}`} type="button" onClick={() => drawKind === 'window' ? cancelDrawing() : startDrawing('window', true, 'rectangle')}>{drawKind === 'window' ? '✕ Cancella finestra' : '＋ Finestra'}</button></>}{showGeometryTools && !drawKind && selected?.kind === 'door' && selected.thresholdInferred && <button className="opening-confirm-inline" type="button" onClick={confirmInferredOpeningThreshold}>✓ Conferma soglia stimata</button>}{showGeometryTools && !drawKind && selected && (selected.kind === 'door' || selected.kind === 'window') && <button className="opening-delete-inline" type="button" onClick={deleteSelected} disabled={selected.frozen}>⌫ Elimina {selected.name}</button>}{showPrepareFloorplanTools && !drawKind && <button type="button" onClick={startFloorplanWall}>Aggiungi parete interna</button>}{room && surfaces.length > 0 && activeStep === STEP_RENDER && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => setRenderSummaryOpen(true)} disabled={geometryDetectionBlocked}>Controlla e crea render</button>}{showProductTools && <button className="render-flow-button" type="button" aria-label="Prova flusso render" onClick={() => goToStep(STEP_RENDER)} disabled={geometryDetectionBlocked}>Continua: crea render</button>}{showGeometryTools && !drawKind && <button className="continue-products-button" type="button" onClick={() => goToStep(STEP_PRODUCTS)}>Continua ai prodotti</button>}{room?.sourceType === 'photo' && activeStep === STEP_PREPARE && <button className="skip-empty-room continue-products-button" type="button" onClick={skipEmptyRoom} disabled={isEmptyingRoom || isCleaningRegion}>Usa foto originale →</button>}{room?.sourceType === 'photo' && activeStep === STEP_PREPARE && !isPickingCleanup && !cleanupRegion && <button className="empty-room-button" type="button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom || isCleaningRegion}>{isEmptyingRoom ? 'Svuoto la stanza…' : processedLabel === 'Stanza vuota' && processedPreview ? '↻ Rigenera stanza vuota' : '⌂ Svuota la stanza'}</button>}</div>
         </section>
 

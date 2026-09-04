@@ -28,6 +28,8 @@
 	<string>Materia usa la fotocamera solo quando scegli di fotografare una stanza.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Materia accede alle foto solo per importare la stanza o un prodotto scelto da te.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Materia aggiunge il render alle tue foto solo quando premi Salva render.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>UIApplicationSceneManifest</key>

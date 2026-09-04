@@ -693,6 +693,10 @@ html,body { height:100%; overflow:hidden; overscroll-behavior:none; }
   .prepare-status .empty-room-button,.prepare-status .empty-room-unavailable { grid-column:1 / -1; grid-row:3; width:auto; }
 }
 
+.project-save-status { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; padding:8px 18px; background:#fff; border-bottom:1px solid #dce5e1; font-size:14px; }
+.project-save-status button { min-height:44px; padding:8px 14px; border:1px solid #b9d0c9; border-radius:10px; background:#edf5f2; color:#205f55; font-weight:700; }
+.native-app .projects-page { padding-top:env(safe-area-inset-top); }
+
 /* In iOS la barra di stato occupa spazio reale: i comandi iniziano sempre sotto l'ora e la batteria. */
 @supports (padding:env(safe-area-inset-top)) {
   .topbar { min-height:calc(72px + env(safe-area-inset-top)); padding-top:env(safe-area-inset-top); padding-left:max(24px,env(safe-area-inset-left)); padding-right:max(24px,env(safe-area-inset-right)); }

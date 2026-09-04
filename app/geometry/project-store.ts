@@ -1,5 +1,24 @@
 import { approveGeometry, cloneSurfaces, type RoomGeometryV1 } from './model';
 import type { Surface } from '../domain/editor';
+import type { StudioMaterial, PlacedFurniture, PendingFurniture, GeometryDetectionStatus } from '../components/room-studio';
+
+export type EditorSnapshot = {
+  version: 1;
+  material: StudioMaterial | null;
+  materials: StudioMaterial[];
+  furniture: PlacedFurniture[];
+  pendingFurniture: PendingFurniture | null;
+  furnitureFiles: [string, File][];
+  materialSamples: [string, Blob][];
+  customRequests: string[];
+  customColor: string;
+  manualRoomWidth: number | null;
+  roomRatio: number;
+  geometrySaved: boolean;
+  detectionStatus: GeometryDetectionStatus;
+  activeStep: number;
+  showProcessedPreview: boolean;
+};
 
 const DB_NAME = 'materia-projects';
 const DB_VERSION = 1;
@@ -18,6 +37,8 @@ export type StoredProject = {
   originalSurfaces: Surface[];
   processedSurfaces: Surface[] | null;
   updatedAt: number;
+  editor?: EditorSnapshot;
+  assets?: Record<string, Blob>;
 };
 
 export type ProjectSummary = {
@@ -26,8 +47,6 @@ export type ProjectSummary = {
   fileName: string;
   updatedAt: number;
 };
-
-const memory = new Map<string, StoredProject>();
 
 function canUseIdb() {
   return typeof indexedDB !== 'undefined';
@@ -42,7 +61,7 @@ function openDb(): Promise<IDBDatabase> {
         db.createObjectStore(STORE, { keyPath: 'id' });
       }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => { request.result.onversionchange = () => request.result.close(); resolve(request.result); };
     request.onerror = () => reject(request.error ?? new Error('IndexedDB unavailable'));
   });
 }
@@ -60,6 +79,9 @@ export function buildStoredProject(input: {
   originalSurfaces: Surface[];
   processedSurfaces: Surface[] | null;
   source?: RoomGeometryV1['source'];
+  approved?: boolean;
+  editor?: EditorSnapshot;
+  assets?: Record<string, Blob>;
 }): StoredProject {
   return {
     id: input.id,
@@ -70,7 +92,11 @@ export function buildStoredProject(input: {
     original: input.original,
     processed: input.processed,
     processedLabel: input.processedLabel,
-    geometry: approveGeometry(input.surfaces, input.source ?? 'manual'),
+    geometry: { ...approveGeometry(input.surfaces, input.source ?? 'manual'),
+      status: input.approved ? 'approved' : 'proposed',
+      approvedAt: input.approved ? new Date().toISOString() : null },
+    editor: input.editor,
+    assets: input.assets,
     originalSurfaces: cloneSurfaces(input.originalSurfaces),
     processedSurfaces: input.processedSurfaces ? cloneSurfaces(input.processedSurfaces) : null,
     updatedAt: Date.now(),
@@ -78,56 +104,43 @@ export function buildStoredProject(input: {
 }
 
 export async function saveProject(project: StoredProject): Promise<void> {
-  memory.set(project.id, project);
-  if (!canUseIdb()) return;
+  if (!canUseIdb()) throw new Error('Il salvataggio locale non è disponibile su questo dispositivo.');
   const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
+  try { await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error ?? new Error('save failed'));
+    tx.onabort = () => reject(tx.error ?? new Error('Salvataggio interrotto.'));
     tx.objectStore(STORE).put(project);
-  });
-  db.close();
+  }); } finally { db.close(); }
 }
 
 export async function loadProject(id: string): Promise<StoredProject | null> {
-  if (!canUseIdb()) return memory.get(id) ?? null;
+  if (!canUseIdb()) throw new Error('Archivio locale non disponibile.');
   const db = await openDb();
-  const project = await new Promise<StoredProject | null>((resolve, reject) => {
+  try { return await new Promise<StoredProject | null>((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly');
     const request = tx.objectStore(STORE).get(id);
     request.onsuccess = () => resolve((request.result as StoredProject | undefined) ?? null);
     request.onerror = () => reject(request.error ?? new Error('load failed'));
-  });
-  db.close();
-  return project;
+  }); } finally { db.close(); }
 }
 
 export async function listProjects(): Promise<ProjectSummary[]> {
-  const records = await listStoredProjects();
-  return records
-    .map((project) => ({
-      id: project.id,
-      title: project.title,
-      fileName: project.fileName,
-      updatedAt: project.updatedAt,
-    }))
-    .sort((left, right) => right.updatedAt - left.updatedAt);
-}
-
-async function listStoredProjects(): Promise<StoredProject[]> {
-  if (!canUseIdb()) return [...memory.values()];
+  if (!canUseIdb()) throw new Error('Archivio locale non disponibile.');
   const db = await openDb();
-  const records = await new Promise<StoredProject[]>((resolve, reject) => {
+  try { return await new Promise<ProjectSummary[]>((resolve, reject) => {
+    const records: ProjectSummary[] = [];
     const tx = db.transaction(STORE, 'readonly');
-    const request = tx.objectStore(STORE).getAll();
-    request.onsuccess = () => resolve((request.result as StoredProject[]) ?? []);
+    const request = tx.objectStore(STORE).openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) { resolve(records.sort((a, b) => b.updatedAt - a.updatedAt)); return; }
+      const project = cursor.value as StoredProject;
+      records.push({ id: project.id, title: project.title, fileName: project.fileName, updatedAt: project.updatedAt });
+      cursor.continue();
+    };
     request.onerror = () => reject(request.error ?? new Error('list failed'));
-  });
-  db.close();
-  return records;
-}
-
-export function resetMemoryProjectStore() {
-  memory.clear();
+    tx.onabort = () => reject(tx.error ?? new Error('Lettura interrotta.'));
+  }); } finally { db.close(); }
 }

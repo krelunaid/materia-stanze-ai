@@ -5,8 +5,11 @@ import {
   getVisionAuditor,
   mergeArchitecturalOpeningAudit,
   roomShellTopologyStatus,
+  verifyEditedRoomShell,
+  type DetectedRoomSurface,
 } from '../../server/ai-provider';
 import { guardAiRequest, handleAiOptions } from '../../server/ai-api-guard';
+import { isValidPolygon } from '../../domain/editor';
 
 function json(body: unknown, headers: Headers, status = 200) {
   return Response.json(body, { status, headers });
@@ -39,6 +42,22 @@ export async function POST(request: Request) {
     }
     if (image.size > 20 * 1024 * 1024) return json({ message: 'La fotografia supera il limite di 20 MB.' }, headers, 413);
     const auditor = getVisionAuditor(process.env, provider);
+    if (incoming.get('verifyOnly') === 'true') {
+      const encoded = String(incoming.get('surfaces') ?? '');
+      if (encoded.length > 64000) return json({ message: 'Troppi punti da verificare.' }, headers, 400);
+      let candidates: unknown;
+      try { candidates = JSON.parse(encoded); } catch { return json({ message: 'Contorni non validi.' }, headers, 400); }
+      if (!Array.isArray(candidates) || candidates.length > 30 || !candidates.length || !candidates.every((surface) => (
+        surface && ['wall', 'floor', 'ceiling', 'door', 'window'].includes(surface.kind)
+        && Array.isArray(surface.points) && surface.points.length >= 3 && surface.points.length <= 128
+        && surface.points.every((point: { x?: unknown; y?: unknown }) => point && typeof point.x === 'number' && typeof point.y === 'number'
+          && Number.isFinite(point.x) && Number.isFinite(point.y) && point.x >= 0 && point.x <= 1 && point.y >= 0 && point.y <= 1)
+      ))) return json({ message: 'Contorni non validi.' }, headers, 400);
+      const edited = candidates as DetectedRoomSurface[];
+      if (edited.some((surface) => !isValidPolygon(surface.points))) return json({ accepted: false, reason: 'Un contorno si incrocia o non delimita una superficie valida.' }, headers);
+      if (roomShellTopologyStatus(edited) !== 'verified') return json({ accepted: false, reason: 'Muri, pavimento e soffitto non condividono ancora gli stessi angoli.' }, headers);
+      return json(await verifyEditedRoomShell(auditor ?? provider, image, edited), headers);
+    }
     const detectPrimaryGeometry = async () => {
       try {
         return await detectRoomSurfaces(provider, image, { openingAudit: true, source: 'photo', retainOpeningSeeds: true });
