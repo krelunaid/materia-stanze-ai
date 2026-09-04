@@ -9,6 +9,7 @@ test('opens the editor and freezes a recognised wall', async ({ page }) => {
   await expect(page.getByText('Originale intatto', { exact: true }).filter({ visible: true })).toBeVisible();
 
   await page.getByRole('button', { name: 'Usa foto originale →' }).click();
+  await expect(page.getByRole('button', { name: /Controlla/ })).toHaveClass('is-active');
   await page.getByRole('button', { name: /Muro 1.*Modificabile/ }).filter({ visible: true }).click();
   await page.getByRole('button', { name: 'Mantieni identico Muro 1' }).filter({ visible: true }).click();
   await expect(page.getByRole('button', { name: 'Consenti modifiche a Muro 1' }).filter({ visible: true })).toBeVisible();
@@ -26,6 +27,7 @@ test('keeps iPhone form controls at a non-zooming size', async ({ page }) => {
   await expect(page.locator('main')).toHaveAttribute('data-hydrated', 'true');
   await page.getByRole('button', { name: 'Prova con la stanza esempio' }).click();
   await page.getByRole('button', { name: 'Usa foto originale →' }).click();
+  await page.getByRole('button', { name: 'Continua ai prodotti' }).click();
 
   const search = page.getByRole('textbox', { name: 'Cerca materiali, colori o mobili' });
   await expect(search).toBeVisible();
@@ -41,6 +43,7 @@ test('places, resizes and locks furniture at a chosen room point', async ({ page
   await expect(page.locator('main')).toHaveAttribute('data-hydrated', 'true');
   await page.getByRole('button', { name: 'Prova con la stanza esempio' }).click();
   await page.getByRole('button', { name: 'Usa foto originale →' }).click();
+  await page.getByRole('button', { name: 'Continua ai prodotti' }).click();
   const search = page.getByRole('textbox', { name: 'Cerca materiali, colori o mobili' });
   await search.fill('divano');
   await page.getByRole('button', { name: /Divano chiaro/ }).click();
