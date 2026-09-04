@@ -3864,7 +3864,7 @@ export function RoomStudio() {
                         : activeStep === 1
                           ? { working: false, title: 'Iniziamo dalla foto', detail: 'Scattala oppure sceglila dalla libreria.' }
                           : activeStep === 2
-                            ? { working: false, title: isAutoFitting ? 'Riconosco la stanza' : surfaces.length ? 'Riconoscimento completato' : 'Controllo la foto', detail: isAutoFitting ? 'Controllo muri, soffitto, pavimento e aperture.' : surfaces.length ? `Ho trovato: ${recognizedStructure}. Scegli se svuotare o usare la foto originale.` : 'Se i bordi sono giusti, puoi continuare con la foto originale.' }
+                            ? { working: false, title: isAutoFitting ? 'Riconosco la stanza' : geometrySaved ? 'Linee salvate' : surfaces.length ? 'Riconoscimento completato' : 'Controllo la foto', detail: isAutoFitting ? 'Controllo muri, soffitto, pavimento e aperture.' : geometrySaved ? `Ho salvato: ${recognizedStructure}.` : surfaces.length ? `Ho trovato: ${recognizedStructure}. Scegli se svuotare o usare la foto originale.` : 'Se i bordi sono giusti, puoi continuare con la foto originale.' }
                             : activeStep === 3
                               ? { working: false, title: 'Scegli un prodotto', detail: 'Poi tocca la superficie dove applicarlo.' }
                               : processedPreview && processedLabel === 'Render controllato'

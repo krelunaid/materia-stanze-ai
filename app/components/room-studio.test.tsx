@@ -204,7 +204,7 @@ describe('RoomStudio', () => {
     });
     fireEvent.load(image);
 
-    expect(await screen.findByText(/Riconoscimento completato|soglia o stipiti/)).toBeInTheDocument();
+    expect(await screen.findAllByText(/Riconoscimento completato|soglia o stipiti/)).not.toHaveLength(0);
     expect(screen.queryByText('Apertura da confermare')).not.toBeInTheDocument();
     expect(screen.queryByText('Apertura non sicura')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '＋ Porta' })).not.toBeInTheDocument();
@@ -270,7 +270,7 @@ describe('RoomStudio', () => {
     });
     fireEvent.load(image);
 
-    expect(await screen.findByText(/Riconoscimento completato|soglia o stipiti/)).toBeInTheDocument();
+    expect(await screen.findAllByText(/Riconoscimento completato|soglia o stipiti/)).not.toHaveLength(0);
     expect(screen.queryByText('Apertura da confermare')).not.toBeInTheDocument();
     expect(screen.queryByText('Apertura non sicura')).not.toBeInTheDocument();
     expect(screen.queryByText('Geometria stanza non sicura')).not.toBeInTheDocument();
@@ -733,7 +733,7 @@ describe('RoomStudio', () => {
     render(<RoomStudio />);
     loadDemoAndContinue();
     fireEvent.click(screen.getByRole('button', { name: 'Mantieni tutto tranne questa' }));
-    fireEvent.click(screen.getByRole('button', { name: /Muro 2 Freeze attivo/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Muro 2Freeze attivo/ }));
     expect(screen.getByText('Frozen')).toBeInTheDocument();
   });
 
