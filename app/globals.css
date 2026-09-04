@@ -418,7 +418,8 @@ button,input { font:inherit; } button { color:inherit; } button:disabled { curso
 .render-modal { position:fixed; z-index:100; inset:0; display:grid; place-items:center; padding:20px; background:rgba(13,23,21,.66); backdrop-filter:blur(9px); }
 .processing-overlay { position:absolute; z-index:25; inset:0; display:grid; place-content:center; justify-items:center; gap:8px; padding:24px; background:rgba(240,246,243,.94); color:var(--ink); text-align:center; }
 .processing-overlay strong { font-size:16px; }
-.processing-overlay small { max-width:270px; color:#68736f; font-size:10px; line-height:1.45; }
+.processing-overlay small { max-width:340px; color:#68736f; font-size:10px; line-height:1.45; }
+.processing-overlay .processing-elapsed { color:var(--accent); font-size:12px; font-weight:800; font-variant-numeric:tabular-nums; }
 .processing-mascot { width:104px; height:112px; object-fit:contain; filter:drop-shadow(0 12px 16px rgba(16,37,34,.18)); animation:materia-bob 1.8s ease-in-out infinite; }
 .processing-spinner { width:34px; height:34px; border:3px solid #c9ddd7; border-top-color:var(--accent); border-radius:50%; animation:processing-spin .8s linear infinite; }
 @keyframes processing-spin { to { transform:rotate(360deg); } }
