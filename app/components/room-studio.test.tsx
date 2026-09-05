@@ -225,10 +225,9 @@ describe('RoomStudio', () => {
 
     fireEvent.click(empty);
     expect(screen.getByRole('alert')).toHaveTextContent(/apertura più sicura/);
-    expect(original).toBeEnabled();
-
-    fireEvent.click(original);
     expect(screen.getByRole('button', { name: /Controlla/ })).toHaveClass('is-active');
+    expect(screen.getByRole('button', { name: '⌂ Svuota la stanza' })).toBeDisabled();
+    expect(screen.getByText('Pulizia in attesa dei contorni')).toBeInTheDocument();
     expect(screen.getByText('Apertura da confermare')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '＋ Arco' }));
@@ -240,9 +239,10 @@ describe('RoomStudio', () => {
     fireEvent.click(screen.getByRole('button', { name: '✓ Conferma arco' }));
 
     expect(screen.queryByText('Apertura da confermare')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Prepara/ }));
+    expect(screen.getByRole('button', { name: '⌂ Svuota la stanza' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: '⌂ Svuota la stanza' }));
     expect(screen.queryByText(/apertura più sicura/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Prepara/ })).toHaveClass('is-active'));
   });
 
   it('shows inferred arch edges separately and keeps shell blocking after a manual arch correction', async () => {

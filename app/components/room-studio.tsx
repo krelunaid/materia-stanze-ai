@@ -3269,11 +3269,14 @@ export function RoomStudio() {
 
   async function emptyRoom() {
     if (!room?.previewUrl || room.sourceType !== 'photo' || isEmptyingRoom) return;
-    if (geometryDetectionBlocked) {
+    if (isAutoFitting || geometryDetectionBlocked) {
+      setActiveStep(STEP_REVIEW);
+      setIsCorrectingEdges(false);
       setError(geometryUnsafeActionMessage('empty'));
-      setNotice(null);
+      setNotice('Pulizia non avviata. Controlla i contorni qui sotto; il pulsante Svuota la stanza resta disponibile in questa schermata.');
       return;
     }
+    setIsCorrectingEdges(false);
     const baselineSurfaces = processedLabel === 'Stanza vuota' && processedPreview && originalSurfacesRef.current.length
       ? originalSurfacesRef.current
       : surfaces;
@@ -3308,9 +3311,10 @@ export function RoomStudio() {
           endpoint('/api/detect-object'), { method: 'POST', body: detectionForm }, 90000,
         );
         if (!detected.response.ok) throw new Error(detected.result.message ?? 'Non riesco a delimitare i mobili.');
-      } catch {
+      } catch (caught) {
         setIsPickingCleanup(true);
-        setError(null);
+        setActiveStep(STEP_PREPARE);
+        setError(friendlyRequestError(caught).message);
         setNotice('Il riconoscimento automatico non si è concluso. Tocca il centro di un mobile: lo delimito e rimuovo senza cambiare la stanza. Puoi anche continuare con la foto originale.');
         return;
       }
@@ -3324,6 +3328,7 @@ export function RoomStudio() {
       }
       if (!regions.length) {
         setIsPickingCleanup(true);
+        setActiveStep(STEP_PREPARE);
         setNotice(roomAudit?.needsEmptying
           ? `Terra vede elementi da rimuovere${categories ? ` (${categories})` : ''}, ma Grok non è riuscito a delimitarli con precisione. Tocca il centro di un mobile per indicarlo; la stanza non verrà modificata automaticamente.`
           : 'Il controllo non ha individuato con sufficiente certezza zone da rimuovere. Se la stanza è già vuota puoi continuare; altrimenti tocca il centro di un mobile per indicarlo.');
@@ -4072,6 +4077,10 @@ export function RoomStudio() {
           </div>{error && <div className="file-error" role="alert"><strong>Operazione non completata</strong><span>{error}</span>{activeStep === STEP_RENDER && <button className="file-error-retry" type="button" onClick={() => void createFinalRender()} disabled={isRendering}>{isRendering ? 'Riprovo…' : 'Riprova render'}</button>}<button className="file-error-close" type="button" onClick={() => setError(null)} aria-label="Chiudi errore">×</button></div>}</div>
           <input ref={roomInputRef} id="room-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif,.webp" onChange={onRoomInput} /><input ref={cameraInputRef} id="camera-file" className="visually-hidden" type="file" accept="image/jpeg,image/png" capture="environment" onChange={onRoomInput} /><input ref={floorplanInputRef} id="floorplan-file" className="visually-hidden" type="file" accept="image/*,.heic,.heif,.webp" onChange={onFloorplanInput} /><input ref={materialInputRef} id="material-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onMaterialInput} /><input ref={furnitureInputRef} id="furniture-file" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={onFurnitureInput} />
           {room?.sourceType === 'photo' && activeStep === STEP_PREPARE && <section className="empty-room-choice" aria-label="Svuota la stanza oppure continua"><div><strong>{isPickingCleanup || cleanupRegion ? 'Indica cosa rimuovere' : isAutoFitting ? RECOGNITION_WAITING_TITLE : 'Vuoi svuotare la stanza?'}</strong><span>{isPickingCleanup || cleanupRegion ? 'Tocca il centro dell’oggetto, oppure continua con la foto originale.' : isAutoFitting ? `${RECOGNITION_WAITING_DETAIL} ${recognitionElapsedLabel(autoFitElapsedSeconds)}` : surfaces.length ? `Riconosciuto: ${recognizedStructure}. Scegli se svuotare la stanza o usare la foto originale.` : 'Scegli una sola cosa: svuota, oppure usa la foto originale.'}</span></div>{(isPickingCleanup || processedPreview || cleanupRegion) && <div className="empty-room-actions">{(isPickingCleanup || processedPreview) && !cleanupRegion && <button type="button" className={isPickingCleanup ? 'is-active' : ''} onClick={() => { setIsPickingCleanup((current) => !current); setError(null); setNotice(isPickingCleanup ? 'Selezione annullata.' : processedPreview ? 'Tocca il centro dell’oggetto rimasto nella foto.' : 'Tocca il centro di un mobile nella foto: lo delimito e lo rimuovo.'); }} disabled={isDetectingCleanup || isCleaningRegion}>{isDetectingCleanup ? 'Riconosco…' : isPickingCleanup ? 'Annulla selezione' : '◎ Pulisci un residuo'}</button>}{cleanupRegion && <><button type="button" className="cleanup-confirm" onClick={() => void cleanResidualRegion()} disabled={isCleaningRegion}>{isCleaningRegion ? 'Pulisco…' : 'Pulisci selezione'}</button><button type="button" onClick={() => setCleanupRegion(null)} disabled={isCleaningRegion}>Annulla</button></>}</div>}</section>}
+          {room?.sourceType === 'photo' && activeStep === STEP_REVIEW && <section className="empty-room-choice" aria-label="Pulizia della stanza">
+            <div><strong>{isEmptyingRoom ? 'Pulizia in corso' : geometryDetectionBlocked || isAutoFitting ? 'Pulizia in attesa dei contorni' : 'Svuota la stanza'}</strong><span>{isEmptyingRoom ? notice : geometryDetectionBlocked || isAutoFitting ? 'La pulizia non è partita: verifica le linee e le aperture. Quando sono corrette puoi svuotare direttamente da qui.' : 'Rimuovi gli arredi mantenendo la foto originale sempre disponibile.'}</span></div>
+            <button type="button" className="empty-room-button" onClick={() => void emptyRoom()} disabled={isEmptyingRoom || isCleaningRegion || isAutoFitting || geometryDetectionBlocked}>{isEmptyingRoom ? 'Svuoto la stanza…' : '⌂ Svuota la stanza'}</button>
+          </section>}
           {geometryDetectionStatus === 'fallback' && room?.sourceType === 'photo' && activeStep === STEP_REVIEW && <div className="geometry-fallback-warning" role="status"><div><strong>Contorni provvisori</strong><span>Il riconoscimento IA di questa foto non è riuscito. Correggi i contorni trascinando linee o pallini prima di applicare un prodotto, oppure riprova.</span></div><button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview}>{isAutoFitting ? 'Riconosco…' : '✦ Riprova IA'}</button></div>}
           {geometryHasOpeningIssue && room?.sourceType === 'photo' && activeStep === STEP_REVIEW && <div className="geometry-fallback-warning opening-invalid-warning" role="status"><div><strong>Apertura da confermare</strong><span>La curva è visibile, ma soglia o stipiti sono stimati dietro i mobili: le parti arancioni tratteggiate richiedono conferma prima di applicare prodotti o creare il render. Puoi comunque cercare i prodotti.</span></div><button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || showProcessedPreview}>{isAutoFitting ? 'Riconosco…' : '✦ Riprova IA'}</button></div>}
           {geometryHasShellIssue && room?.sourceType === 'photo' && activeStep === STEP_REVIEW && <div className="geometry-fallback-warning opening-invalid-warning" role="status"><div><strong>Contorni da rivedere</strong><span>Correggi le linee e premi Fine correzione: le confronterò con la foto originale senza spostarle. Puoi comunque cercare i prodotti.</span></div><button type="button" onClick={() => void verifyCorrectedContours()} disabled={isAutoFitting || isVerifyingGeometry}>{isVerifyingGeometry ? 'Verifico…' : 'Verifica correzioni'}</button><button type="button" onClick={() => void autoFitSurfaces()} disabled={isAutoFitting || isVerifyingGeometry || showProcessedPreview}>{isAutoFitting ? 'Riconosco…' : '✦ Riprova IA'}</button></div>}
